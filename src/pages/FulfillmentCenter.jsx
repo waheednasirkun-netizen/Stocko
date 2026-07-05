@@ -4,7 +4,14 @@ import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum, userCan } from '../lib/constants'
 
 export default function FulfillmentCenter() {
-  const { demands, inventory, theme, user, handleFulfillDemand, showToast } = useApp()
+  const {
+  demands = [],
+  inventory = [],
+  theme,
+  user,
+  handleFulfillDemand,
+  showToast,
+} = useApp()
 
   const [fulfillModal, setFulfillModal] = useState(null)
   const [fulfillQty,   setFulfillQty]   = useState('')
@@ -14,24 +21,44 @@ export default function FulfillmentCenter() {
 
   const canFulfill = userCan('fulfillDemand', user?.role)
 
-  const pending = useMemo(() =>
-    demands
-      .filter(d => d.status === 'Pending' || d.status === 'Approved')
-      .filter(d => {
-        const name = d.item_name || d.name || ''
-        return !search || name.toLowerCase().includes(search.toLowerCase())
-      })
-      .sort((a,b) => {
-        const pOrder = { Critical:0, High:1, Medium:2, Low:3 }
-        return (pOrder[a.priority]||2) - (pOrder[b.priority]||2)
-      }),
-    [demands, search]
-  )
+  const pending = useMemo(() => {
+  return (demands || [])
+    .filter(
+      d =>
+        d?.status === "Pending" ||
+        d?.status === "Approved"
+    )
+    .filter(d => {
+      const name = d?.item_name || d?.name || "";
+      return (
+        !search ||
+        name.toLowerCase().includes(search.toLowerCase())
+      );
+    })
+    .sort((a, b) => {
+      const pOrder = {
+        Critical: 0,
+        High: 1,
+        Medium: 2,
+        Low: 3,
+      };
+
+      return (
+        (pOrder[a?.priority] ?? 2) -
+        (pOrder[b?.priority] ?? 2)
+      );
+    });
+}, [demands, search]);
 
   const getInvItem = (demand) => {
-    const name = demand.item_name || demand.name || ''
-    return inventory.find(i => i.name.toLowerCase() === name.toLowerCase())
-  }
+  const name = demand?.item_name || demand?.name || "";
+
+  return (inventory || []).find(
+    i =>
+      i?.name &&
+      i.name.toLowerCase() === name.toLowerCase()
+  );
+};
 
   const openFulfill = (demand) => {
     const inv = getInvItem(demand)

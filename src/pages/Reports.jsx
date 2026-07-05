@@ -23,11 +23,11 @@ const COLORS = [
 export default function Reports() {
 
   const {
-    transactions,
-    demands,
-    financialTransactions,
-    theme,
-  } = useApp();
+  transactions = [],
+  demands = [],
+  financialTransactions = [],
+  theme,
+} = useApp();
 
   /* ============================
       DATE FILTER
@@ -45,22 +45,18 @@ export default function Reports() {
       FILTER TRANSACTIONS
   ============================ */
 
-  const filteredTransactions = useMemo(() => {
+ const filteredTransactions = useMemo(() => {
+  return (transactions ?? []).filter((t) => {
+    if (!t?.date) return false;
 
-    return transactions.filter((t) => {
+    const txDate = new Date(t.date);
 
-      if (!t.date) return false;
-
-      const txDate = new Date(t.date);
-
-      return (
-        txDate >= startDate &&
-        txDate <= endDate
-      );
-
-    });
-
-  }, [transactions, startDate, endDate]);
+    return (
+      txDate >= startDate &&
+      txDate <= endDate
+    );
+  });
+}, [transactions, startDate, endDate]);
 
   /* ============================
       SUMMARY
@@ -157,21 +153,7 @@ export default function Reports() {
       color: "#d97706",
     },
 
-    {
-      label: "Spend",
-      value: fmtPKR(totalSpend),
-      icon: "DollarSign",
-      bg: "#ecfeff",
-      color: "#0891b2",
-    },
-
-    {
-      label: "Outstanding",
-      value: fmtPKR(unpaid),
-      icon: "CreditCard",
-      bg: "#fee2e2",
-      color: "#dc2626",
-    },
+  
 
   ];
 
