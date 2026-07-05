@@ -2,31 +2,24 @@ import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
 import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum, fmtPKR, userCan } from '../lib/constants'
-import { transactionsApi, templatesApi } from '../lib/api'
+import { transactionsApi } from '../lib/api'
 
 const TXN_TYPES = ['Stock IN', 'Wastage']
 
-const CATEGORIES = [
-  'Frozen Food', 'Vegetables', 'Dairy', 'Meat', 'Grocery',
-  'Packaging', 'Sauces', 'Beverages', 'Cleaning Supplies',
-  'Disposable Items', 'Spices', 'Other',
-]
-
 /* ─── Searchable Dropdown for Templates / Inventory ─────────────────────── */
 function SearchableDropdown({
-  items,                  // array of { id, name, category?, unit?, ... }
-  value,                  // current input value
-  onChange,               // (value) => void  — raw text change
-  onSelect,               // (item) => void   — when user selects an item
+  items,
+  value,
+  onChange,
+  onSelect,
   placeholder,
   label,
   error,
   theme,
-  renderItem,             // optional custom render
-  showCreateOption,       // boolean — show "Create new" at bottom
-  onCreate,               // () => void
-  createLabel = "Can't find this item?",
-  createButtonText = "Create New Template",
+  renderItem,
+  emptyMessage,
+  emptyAction,
+  emptyActionLabel,
 }) {
   const [isOpen, setIsOpen]     = useState(false)
   const [focusedIdx, setFocusedIdx] = useState(-1)
@@ -40,8 +33,6 @@ function SearchableDropdown({
     const q = value.toLowerCase()
     return items.filter(i => i.name.toLowerCase().includes(q)).slice(0, 8)
   }, [items, value])
-
-  const totalItems = filtered.length + (showCreateOption ? 1 : 0)
 
   // Scroll focused item into view
   useEffect(() => {
@@ -76,20 +67,16 @@ function SearchableDropdown({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
-        setFocusedIdx(prev => (prev + 1) % totalItems)
+        setFocusedIdx(prev => (prev + 1) % filtered.length)
         break
       case 'ArrowUp':
         e.preventDefault()
-        setFocusedIdx(prev => (prev - 1 + totalItems) % totalItems)
+        setFocusedIdx(prev => (prev - 1 + filtered.length) % filtered.length)
         break
       case 'Enter':
         e.preventDefault()
         if (focusedIdx >= 0 && focusedIdx < filtered.length) {
           onSelect(filtered[focusedIdx])
-          setIsOpen(false)
-          setFocusedIdx(-1)
-        } else if (showCreateOption && focusedIdx === filtered.length) {
-          onCreate?.()
           setIsOpen(false)
           setFocusedIdx(-1)
         }
@@ -106,7 +93,7 @@ function SearchableDropdown({
     }
   }
 
-  const handleSelect = (item, idx) => {
+  const handleSelect = (item) => {
     onSelect(item)
     setIsOpen(false)
     setFocusedIdx(-1)
@@ -125,6 +112,8 @@ function SearchableDropdown({
       )}
     </div>
   )
+
+  const showEmpty = value.trim().length > 0 && filtered.length === 0
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
@@ -173,9 +162,32 @@ function SearchableDropdown({
             padding: '6px 0',
           }}
         >
-          {filtered.length === 0 && !showCreateOption ? (
+          {showEmpty ? (
+            <div style={{ padding: '16px 14px', textAlign: 'center' }}>
+              <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 10 }}>
+                {emptyMessage || 'No items found'}
+              </div>
+              {emptyAction && (
+                <button
+                  onClick={() => { emptyAction(); setIsOpen(false) }}
+                  style={{
+                    padding: '6px 14px',
+                    background: '#eff6ff',
+                    color: '#2563eb',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {emptyActionLabel || 'Go to Templates'}
+                </button>
+              )}
+            </div>
+          ) : filtered.length === 0 ? (
             <div style={{ padding: '12px 14px', fontSize: 13, color: '#9ca3af', textAlign: 'center' }}>
-              No items found
+              Start typing to search…
             </div>
           ) : (
             <>
@@ -185,7 +197,7 @@ function SearchableDropdown({
                   <div
                     key={item.id || idx}
                     ref={el => itemRefs.current[idx] = el}
-                    onClick={() => handleSelect(item, idx)}
+                    onClick={() => handleSelect(item)}
                     onMouseEnter={() => setFocusedIdx(idx)}
                     style={{
                       padding: '10px 14px',
@@ -199,27 +211,6 @@ function SearchableDropdown({
                   </div>
                 )
               })}
-              {showCreateOption && (
-                <div
-                  ref={el => itemRefs.current[filtered.length] = el}
-                  onClick={() => { onCreate?.(); setIsOpen(false); setFocusedIdx(-1) }}
-                  onMouseEnter={() => setFocusedIdx(filtered.length)}
-                  style={{
-                    padding: '10px 14px',
-                    cursor: 'pointer',
-                    background: focusedIdx === filtered.length ? '#f0fdf4' : 'transparent',
-                    borderLeft: focusedIdx === filtered.length ? '3px solid #16a34a' : '3px solid transparent',
-                    borderTop: `1px solid ${theme.border}`,
-                    marginTop: 4,
-                    transition: 'background 0.1s',
-                  }}
-                >
-                  <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 2 }}>{createLabel}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#16a34a' }}>
-                    + {createButtonText}
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>
@@ -228,132 +219,10 @@ function SearchableDropdown({
   )
 }
 
-/* ─── Quick Template Creation Modal ──────────────────────────────────────── */
-function QuickTemplateModal({ open, onClose, theme, onCreated, branchId, userId }) {
-  const [form, setForm] = useState({ name: '', category: '', unit: 'pcs', low_stock_threshold: '', notes: '' })
-  const [errors, setErrors] = useState({})
-  const [saving, setSaving] = useState(false)
-
-  const setField = (k, v) => setForm(p => ({ ...p, [k]: v }))
-
-  const validate = () => {
-    const e = {}
-    if (!form.name.trim()) e.name = 'Template name is required'
-    if (!form.category) e.category = 'Category is required'
-    if (!form.unit) e.unit = 'Unit is required'
-    setErrors(e)
-    return Object.keys(e).length === 0
-  }
-
-  const handleSave = async () => {
-    if (!validate() || saving) return
-    setSaving(true)
-    const payload = {
-      name: form.name.trim(),
-      category: form.category,
-      unit: form.unit,
-      low_stock_threshold: Number(form.low_stock_threshold) || 0,
-      default_price: 0,
-      enabled: true,
-      branch_id: branchId,
-      created_by: userId,
-    }
-    const { data, error } = await templatesApi.create(payload)
-    setSaving(false)
-    if (error) {
-      // Try to show error, but still close if it's a duplicate
-      if (error.message?.includes('duplicate') || error.message?.includes('already exists')) {
-        // Silently close and let user search again
-        onClose()
-        return
-      }
-      return
-    }
-    onCreated(data)
-    onClose()
-    setForm({ name: '', category: '', unit: 'pcs', low_stock_threshold: '', notes: '' })
-    setErrors({})
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title="Create New Template">
-      <div style={{ marginBottom: 14 }}>
-        <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
-          Item Name <span style={{ color: '#ef4444' }}>*</span>
-        </label>
-        <input
-          value={form.name}
-          onChange={e => setField('name', e.target.value)}
-          placeholder="e.g., Chicken Breast"
-          style={{ width: '100%', padding: '10px 12px', border: `1px solid ${errors.name ? '#ef4444' : theme.inputBorder}`,
-            borderRadius: 8, fontSize: 14, background: theme.inputBg, color: theme.text }}
-        />
-        {errors.name && <div className="field-error">{errors.name}</div>}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <div>
-          <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
-            Category <span style={{ color: '#ef4444' }}>*</span>
-          </label>
-          <select
-            value={form.category}
-            onChange={e => setField('category', e.target.value)}
-            style={{ width: '100%', padding: '10px 12px', border: `1px solid ${errors.category ? '#ef4444' : theme.inputBorder}`,
-              borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
-          >
-            <option value="">Select…</option>
-            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          {errors.category && <div className="field-error">{errors.category}</div>}
-        </div>
-        <div>
-          <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
-            Unit <span style={{ color: '#ef4444' }}>*</span>
-          </label>
-          <select
-            value={form.unit}
-            onChange={e => setField('unit', e.target.value)}
-            style={{ width: '100%', padding: '10px 12px', border: `1px solid ${errors.unit ? '#ef4444' : theme.inputBorder}`,
-              borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
-          >
-            {['pcs', 'kg', 'g', 'L', 'ml', 'box', 'carton', 'bag', 'bottle', 'pack', 'tray'].map(u => (
-              <option key={u} value={u}>{u}</option>
-            ))}
-          </select>
-          {errors.unit && <div className="field-error">{errors.unit}</div>}
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 18 }}>
-        <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
-          Minimum Threshold
-        </label>
-        <input
-          type="number"
-          min="0"
-          value={form.low_stock_threshold}
-          onChange={e => setField('low_stock_threshold', e.target.value)}
-          placeholder="0"
-          style={{ width: '100%', padding: '10px 12px', border: `1px solid ${theme.inputBorder}`,
-            borderRadius: 8, fontSize: 14, background: theme.inputBg, color: theme.text }}
-        />
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        <Btn variant="outline" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Creating…' : 'Create Template'}
-        </Btn>
-      </div>
-    </Modal>
-  )
-}
-
 /* ─── Main StockMovement Component ─────────────────────────────────────── */
 export default function StockMovement() {
   const { transactions, setTransactions, inventory, templates, suppliers, theme,
-    user, allUnits, showToast, withActionLock, addNotification } = useApp()
+    user, allUnits, showToast, withActionLock, addNotification, setTab } = useApp()
 
   const [showModal, setShowModal]   = useState(false)
   const [txnType,   setTxnType]     = useState('Stock IN')
@@ -372,14 +241,9 @@ export default function StockMovement() {
 
   // Supplier search
   const [supplierSearch, setSupplierSearch] = useState('')
-  const [selectedSupplier, setSelectedSupplier] = useState('')
-
-  // Quick template modal
-  const [showTemplateModal, setShowTemplateModal] = useState(false)
 
   const [form, setForm] = useState({
-    item:'', category:'', unit:'pcs', qty:'', price:'',
-    source:'', notes:'', department:'',
+    item:'', category:'', unit:'pcs', qty:'', source:'', notes:'',
   })
   const [errors, setErrors] = useState({})
 
@@ -396,14 +260,13 @@ export default function StockMovement() {
 
   // Reset form when modal opens or type changes
   const resetForm = useCallback(() => {
-    setForm({ item:'', category:'', unit:'pcs', qty:'', price:'', source:'', notes:'', department:'' })
+    setForm({ item:'', category:'', unit:'pcs', qty:'', source:'', notes:'' })
     setErrors({})
     setTemplateSearch('')
     setSelectedTemplate(null)
     setInvSearch('')
     setSelectedInv(null)
     setSupplierSearch('')
-    setSelectedSupplier('')
   }, [])
 
   const openModal = (type) => {
@@ -416,7 +279,6 @@ export default function StockMovement() {
     const e = {}
     if (!form.item.trim()) e.item = 'Item name required'
     if (!form.qty || Number(form.qty) <= 0) e.qty = 'Quantity must be > 0'
-    if (txnType === 'Stock IN' && (!form.price || Number(form.price) < 0)) e.price = 'Valid price required'
     if (txnType === 'Wastage') {
       const inv = inventory.find(i => i.name.toLowerCase() === form.item.toLowerCase())
       if (!inv) e.item = `"${form.item}" not found in inventory`
@@ -435,19 +297,34 @@ export default function StockMovement() {
         let result
         if (txnType === 'Stock IN') {
           result = await transactionsApi.stockIn({
-            item: form.item.trim(), qty: Number(form.qty), unit: form.unit,
-            price: Number(form.price)||0, source: form.source, category: form.category,
-            notes: form.notes, branchId: user?.branch_id, userId: user?.id, userName: user?.name,
+            item: form.item.trim(),
+            qty: Number(form.qty),
+            unit: form.unit,
+            price: 0, // Price no longer collected from user, template has it if needed
+            source: form.source,
+            category: form.category,
+            notes: form.notes,
+            branchId: user?.branch_id,
+            userId: user?.id,
+            userName: user?.name,
           })
         } else {
           result = await transactionsApi.stockOut({
-            item: form.item.trim(), qty: Number(form.qty), unit: form.unit,
-            type: 'Wastage', notes: form.notes,
-            branchId: user?.branch_id, userId: user?.id, userName: user?.name,
+            item: form.item.trim(),
+            qty: Number(form.qty),
+            unit: form.unit,
+            type: 'Wastage',
+            notes: form.notes,
+            branchId: user?.branch_id,
+            userId: user?.id,
+            userName: user?.name,
           })
         }
         if (result.error) { showToast('error', 'Failed', result.error.message); return }
+
+        // Update transactions in state immediately for UI
         setTransactions(prev => [result.data, ...prev])
+
         showToast('success', `${txnType} Recorded`, `${form.item} — ${fmtNum(form.qty)} ${form.unit}`)
         addNotification({ title: txnType, msg: `${form.qty} ${form.unit} of ${form.item}`, type:'success' })
         setShowModal(false)
@@ -477,16 +354,10 @@ export default function StockMovement() {
     set('unit', inv.unit || 'pcs')
   }
 
-  // Handle supplier selection
-  const handleSupplierSelect = (supplier) => {
-    setSelectedSupplier(supplier.name)
-    setSupplierSearch(supplier.name)
-    set('source', supplier.name)
-  }
-
-  // Handle quick template creation
-  const handleTemplateCreated = (template) => {
-    handleTemplateSelect(template)
+  // Navigate to templates page when no template found
+  const handleGoToTemplates = () => {
+    setShowModal(false)
+    setTab('templates') // or use your router navigation
   }
 
   const typeColor = (t) => ({
@@ -546,7 +417,7 @@ export default function StockMovement() {
               <table style={{ width:'100%', borderCollapse:'collapse' }}>
                 <thead>
                   <tr style={{ background:theme.bg }}>
-                    {['Type','Item','Qty','Unit','Price/Unit','Source','Notes','Recorded By','Date'].map(h => (
+                    {['Type','Item','Qty','Unit','Source','Notes','Recorded By','Date'].map(h => (
                       <th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:12,
                         fontWeight:600, color:theme.textMuted, borderBottom:`1px solid ${theme.border}`,
                         whiteSpace:'nowrap' }}>{h}</th>
@@ -558,7 +429,6 @@ export default function StockMovement() {
                     const { bg, color } = typeColor(t.type)
                     const itemName = t.item_name || t.item || '—'
                     const qty = t.quantity ?? t.qty
-                    const price = t.price_per_unit || t.price
                     const recordedBy = t.recorded_by_name || t.user || '—'
                     const dateStr = t.created_at || t.date
                     return (
@@ -577,9 +447,6 @@ export default function StockMovement() {
                           {t.type==='Stock IN' ? '+' : '-'}{fmtNum(qty)}
                         </td>
                         <td style={{ padding:'10px 14px', fontSize:13, color:theme.textMuted }}>{t.unit||'—'}</td>
-                        <td style={{ padding:'10px 14px', fontSize:13, color:theme.textMuted }}>
-                          {price > 0 ? fmtPKR(price) : '—'}
-                        </td>
                         <td style={{ padding:'10px 14px', fontSize:13, color:theme.textMuted }}>
                           {t.source || '—'}
                         </td>
@@ -629,11 +496,12 @@ export default function StockMovement() {
               onChange={setTemplateSearch}
               onSelect={handleTemplateSelect}
               placeholder="Search templates…"
-              label={`Item Name ${selectedTemplate ? '(from template)' : ''}`}
+              label="Item Template"
               error={errors.item}
               theme={theme}
-              showCreateOption={templateSearch.trim().length > 0 && !templates?.some(t => t.name.toLowerCase() === templateSearch.toLowerCase())}
-              onCreate={() => setShowTemplateModal(true)}
+              emptyMessage="No template found. Create this item first from the Item Templates page."
+              emptyAction={handleGoToTemplates}
+              emptyActionLabel="Go to Item Templates"
             />
           </div>
         ) : (
@@ -644,63 +512,23 @@ export default function StockMovement() {
               onChange={setInvSearch}
               onSelect={handleInvSelect}
               placeholder="Search existing inventory…"
-              label="Select Inventory Item"
+              label="Inventory Item"
               error={errors.item}
               theme={theme}
             />
           </div>
         )}
 
-        {/* Category + Unit row */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:14 }}>
-          <div>
-            <label style={{ display:'block', fontSize:13, fontWeight:500, color:'#374151', marginBottom:5 }}>
-              Category
-            </label>
-            <select
-              value={form.category}
-              onChange={e => set('category', e.target.value)}
-              style={{ width:'100%', padding:'10px 12px', border:`1px solid ${theme.inputBorder}`,
-                borderRadius:8, fontSize:13, background:theme.inputBg, color:theme.text }}
-            >
-              <option value="">Select…</option>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ display:'block', fontSize:13, fontWeight:500, color:'#374151', marginBottom:5 }}>Unit</label>
-            <select value={form.unit} onChange={e => set('unit', e.target.value)}
-              style={{ width:'100%', padding:'10px 12px', border:`1px solid ${theme.inputBorder}`,
-                borderRadius:8, fontSize:13, background:theme.inputBg, color:theme.text }}>
-              {allUnits.map(u => <option key={u}>{u}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {/* Qty + Price row */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:14 }}>
-          <div>
-            <label style={{ display:'block', fontSize:13, fontWeight:500, color:'#374151', marginBottom:5 }}>
-              Quantity <span style={{ color:'#ef4444' }}>*</span>
-            </label>
-            <input type="number" value={form.qty} onChange={e => set('qty', e.target.value)}
-              min="0.01" step="0.01" placeholder="0"
-              style={{ width:'100%', padding:'10px 12px', border:`1px solid ${errors.qty?'#ef4444':theme.inputBorder}`,
-                borderRadius:8, fontSize:14, fontWeight:600, background:theme.inputBg, color:theme.text }}/>
-            {errors.qty && <div className="field-error">{errors.qty}</div>}
-          </div>
-          {txnType === 'Stock IN' && (
-            <div>
-              <label style={{ display:'block', fontSize:13, fontWeight:500, color:'#374151', marginBottom:5 }}>
-                Price / Unit (PKR) <span style={{ color:'#ef4444' }}>*</span>
-              </label>
-              <input type="number" value={form.price} onChange={e => set('price', e.target.value)}
-                min="0" step="0.01" placeholder="0.00"
-                style={{ width:'100%', padding:'10px 12px', border:`1px solid ${errors.price?'#ef4444':theme.inputBorder}`,
-                  borderRadius:8, fontSize:14, background:theme.inputBg, color:theme.text }}/>
-              {errors.price && <div className="field-error">{errors.price}</div>}
-            </div>
-          )}
+        {/* Quantity */}
+        <div style={{ marginBottom:14 }}>
+          <label style={{ display:'block', fontSize:13, fontWeight:500, color:'#374151', marginBottom:5 }}>
+            Quantity <span style={{ color:'#ef4444' }}>*</span>
+          </label>
+          <input type="number" value={form.qty} onChange={e => set('qty', e.target.value)}
+            min="0.01" step="0.01" placeholder="0"
+            style={{ width:'100%', padding:'10px 12px', border:`1px solid ${errors.qty?'#ef4444':theme.inputBorder}`,
+              borderRadius:8, fontSize:14, fontWeight:600, background:theme.inputBg, color:theme.text }}/>
+          {errors.qty && <div className="field-error">{errors.qty}</div>}
         </div>
 
         {/* Supplier (Stock IN only) */}
@@ -710,14 +538,10 @@ export default function StockMovement() {
               items={(suppliers || []).map(s => ({ id: s.id, name: s.name }))}
               value={supplierSearch}
               onChange={v => { setSupplierSearch(v); set('source', v) }}
-              onSelect={handleSupplierSelect}
+              onSelect={(supplier) => { setSupplierSearch(supplier.name); set('source', supplier.name) }}
               placeholder="Search or type supplier…"
               label="Supplier"
               theme={theme}
-              createLabel="New supplier?"
-              createButtonText="Use this name"
-              showCreateOption={supplierSearch.trim().length > 0 && !(suppliers || []).some(s => s.name.toLowerCase() === supplierSearch.toLowerCase())}
-              onCreate={() => { set('source', supplierSearch); setSelectedSupplier(supplierSearch) }}
             />
           </div>
         )}
@@ -731,14 +555,6 @@ export default function StockMovement() {
               borderRadius:8, fontSize:13, resize:'vertical', background:theme.inputBg, color:theme.text }}/>
         </div>
 
-        {/* Total preview (Stock IN) */}
-        {txnType === 'Stock IN' && form.qty && form.price && (
-          <div style={{ padding:'10px 14px', background:'#f0f9ff', border:'1px solid #bae6fd',
-            borderRadius:8, marginBottom:16, fontSize:13, color:'#0369a1' }}>
-            Total Amount: <strong>{fmtPKR(Number(form.qty) * Number(form.price))}</strong>
-          </div>
-        )}
-
         <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
           <Btn variant="outline" onClick={() => { setShowModal(false); resetForm() }}>Cancel</Btn>
           <Btn
@@ -750,16 +566,6 @@ export default function StockMovement() {
           </Btn>
         </div>
       </Modal>
-
-      {/* Quick Template Creation Modal */}
-      <QuickTemplateModal
-        open={showTemplateModal}
-        onClose={() => setShowTemplateModal(false)}
-        theme={theme}
-        onCreated={handleTemplateCreated}
-        branchId={user?.branch_id}
-        userId={user?.id}
-      />
     </div>
   )
 }
