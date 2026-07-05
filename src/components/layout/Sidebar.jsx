@@ -9,12 +9,9 @@ const navItems = [
   { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight' },
   { key: 'demands',              label: 'Demands',             icon: 'ClipboardList' },
   { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle' },
-  { key: 'procurement-requests', label: 'Procurement',         icon: 'ShoppingCart' },
-  { key: 'purchase-orders',      label: 'Purchase Orders',     icon: 'Truck' },
   { key: 'suppliers',            label: 'Suppliers',           icon: 'Users' },
-  { key: 'reports',              label: 'Reports',             icon: 'BarChart2' },
-  { key: 'expenses',             label: 'Expenses',            icon: 'DollarSign' },
-  { key: 'user-management',      label: 'Users',               icon: 'UserPlus',   perm: 'manageUsers' },
+  { key: 'reports',              label: 'Reports',             icon: 'BarChart2' }
+  ,{ key: 'user-management',      label: 'Users',               icon: 'UserPlus',   perm: 'manageUsers' },
   { key: 'activity-log',         label: 'Activity Log',        icon: 'Activity' },
   { key: 'settings',             label: 'Settings',            icon: 'Settings' },
 ]
