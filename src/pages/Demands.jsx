@@ -102,49 +102,51 @@ export default function Demands() {
   }, [items])
 
   const handleSubmit = async () => {
-    const errs = {}
-    if (!department) errs.department = 'Department required'
+  const errs = {}
+  if (!department) errs.department = 'Department required'
 
-    items.forEach(item => {
-      if (!item.name.trim()) errs[`item_${item.id}`] = 'Item required'
-      if (!item.qty || Number(item.qty) <= 0) errs[`qty_${item.id}`] = 'Quantity must be > 0'
+  items.forEach(item => {
+    if (!item.name.trim()) errs[`item_${item.id}`] = 'Item required'
+    if (!item.qty || Number(item.qty) <= 0) errs[`qty_${item.id}`] = 'Quantity must be > 0'
+  })
+
+  if (Object.keys(errs).length) { setErrors(errs); return }
+  if (processingRef.current) return
+
+  setLoading(true)
+  processingRef.current = true
+  try {
+    // Pass the correct shape: { department, notes, items }
+    const result = await createRequest({
+      department: department,
+      notes: items[0]?.notes || '',
+      items: items.map(item => ({
+        name: item.name.trim(),
+        category: item.category || 'Other',
+        unit: item.unit || 'pcs',
+        qty: Number(item.qty),
+        notes: item.notes || '',
+      }))
     })
 
-    if (Object.keys(errs).length) { setErrors(errs); return }
-    if (processingRef.current) return
-
-    setLoading(true)
-    processingRef.current = true
-    try {
-      for (const item of items) {
-        const result = await createRequest({
-          name: item.name.trim(),
-          category: item.category,
-          unit: item.unit,
-          qty: Number(item.qty),
-          priority: 'Medium',
-          department: department,
-          notes: item.notes,
-        })
-        if (result?.blocked || !result?.success) {
-          showToast('error', 'Create Failed', result?.error?.message || 'Failed to create request')
-          return
-        }
-      }
-
-      showToast('success', 'Request Created', `${items.length} item${items.length > 1 ? 's' : ''} submitted`)
-      setShowModal(false)
-      setItems([{ id: 1, itemId: null, name: '', category: '', unit: '', qty: '', notes: '', search: '', showDrop: false, activeIndex: -1 }])
-      setDepartment('')
-      setErrors({})
-    } catch (error) {
-      console.error('Submit error:', error)
-      showToast('error', 'Error', error.message || 'Something went wrong')
-    } finally {
-      setLoading(false)
-      processingRef.current = false
+    if (result?.success === false) {
+      showToast('error', 'Create Failed', result.error?.message || 'Failed to create request')
+      return
     }
+
+    showToast('success', 'Request Created', `${items.length} item${items.length > 1 ? 's' : ''} submitted`)
+    setShowModal(false)
+    setItems([{ id: 1, itemId: null, name: '', category: '', unit: '', qty: '', notes: '', search: '', showDrop: false, activeIndex: -1 }])
+    setDepartment('')
+    setErrors({})
+  } catch (error) {
+    console.error('Submit error:', error)
+    showToast('error', 'Error', error.message || 'Something went wrong')
+  } finally {
+    setLoading(false)
+    processingRef.current = false
   }
+}
 
   const canCreate = user?.role !== undefined
 

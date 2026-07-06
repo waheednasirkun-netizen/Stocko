@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
+import { supabase } from '../lib/supabase'
 import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum } from '../lib/constants'
 
@@ -23,16 +24,13 @@ const statusColors = {
 
 export default function FulfillmentCenter() {
   const {
-    demands = [],
+    requests = [],
     inventory = [],
     theme,
     user,
-    handleFulfillDemand,
     showToast,
-    supabase,
-    refreshData,
+    fetchRequests,
     addNotification,
-    logActivity,
   } = useApp()
 
   // ── Tabs ─────────────────────────────────────────────
@@ -44,8 +42,8 @@ export default function FulfillmentCenter() {
   const [filterPriority, setFilterPriority] = useState('All')
 
   // ── Modals ───────────────────────────────────────────
-  const [dispatchModal, setDispatchModal] = useState(null)   // { demand, inv }
-  const [rejectModal, setRejectModal] = useState(null)        // { demand }
+  const [dispatchModal, setDispatchModal] = useState(null)
+  const [rejectModal, setRejectModal] = useState(null)
   const [dispatchQty, setDispatchQty] = useState('')
   const [dispatchNotes, setDispatchNotes] = useState('')
   const [rejectReason, setRejectReason] = useState('')
@@ -56,12 +54,12 @@ export default function FulfillmentCenter() {
   useEffect(() => {
     if (!supabase) return
     const channel = supabase
-      .channel('fulfillment-demands')
+      .channel('fulfillment-requests')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'demands' },
+        { event: '*', schema: 'public', table: 'requests' },
         () => {
-          refreshData?.()
+          fetchRequests?.()
         }
       )
       .subscribe()
@@ -69,52 +67,82 @@ export default function FulfillmentCenter() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [supabase, refreshData])
+  }, [supabase, fetchRequests])
 
   // ── Derived data ───────────────────────────────────
   const departments = useMemo(() => {
-    const set = new Set(demands.map(d => d.department).filter(Boolean))
+    const set = new Set(requests.map(r => r.department).filter(Boolean))
     return ['All', ...Array.from(set).sort()]
-  }, [demands])
+  }, [requests])
 
   const pendingStatuses = ['Pending', 'Approved', 'Partially Fulfilled']
   const completedStatuses = ['Completed', 'Rejected']
 
-  const filteredDemands = useMemo(() => {
-    let list = [...demands].sort((a, b) => {
+  // Flatten requests + request_items for display
+  const flattenedItems = useMemo(() => {
+    const items = []
+    for (const req of requests) {
+      const reqItems = req.request_items || []
+      if (reqItems.length === 0) {
+        items.push({
+          ...req,
+          _displayName: req.item_name || req.name || '—',
+          _qty: Number(req.quantity || req.qty || 0),
+          _unit: req.unit || 'pcs',
+          _fulfilledQty: Number(req.fulfilled_qty || 0),
+          _requestId: req.id,
+          _itemIndex: 0,
+          _itemId: null,
+        })
+      } else {
+        for (let i = 0; i < reqItems.length; i++) {
+          const ri = reqItems[i]
+          items.push({
+            ...req,
+            _displayName: ri.name || '—',
+            _qty: Number(ri.qty || 0),
+            _unit: ri.unit || 'pcs',
+            _fulfilledQty: Number(ri.fulfilled_qty || 0),
+            _requestId: req.id,
+            _itemId: ri.id,
+            _itemIndex: i,
+            _itemNotes: ri.notes,
+          })
+        }
+      }
+    }
+    return items
+  }, [requests])
+
+  const filteredItems = useMemo(() => {
+    let list = [...flattenedItems].sort((a, b) => {
       const pOrder = { Critical: 0, High: 1, Medium: 2, Low: 3 }
       return (pOrder[a?.priority] ?? 2) - (pOrder[b?.priority] ?? 2)
     })
 
-    // Tab filter
     const allowed = activeTab === TAB_PENDING ? pendingStatuses : completedStatuses
     list = list.filter(d => allowed.includes(d.status))
 
-    // Search
     if (search) {
       const q = search.toLowerCase()
-      list = list.filter(d => (d.item_name || d.name || '').toLowerCase().includes(q))
+      list = list.filter(d => (d._displayName || '').toLowerCase().includes(q))
     }
 
-    // Department filter
     if (filterDept !== 'All') {
       list = list.filter(d => d.department === filterDept)
     }
 
-    // Priority filter
     if (filterPriority !== 'All') {
       list = list.filter(d => d.priority === filterPriority)
     }
 
     return list
-  }, [demands, activeTab, search, filterDept, filterPriority])
+  }, [flattenedItems, activeTab, search, filterDept, filterPriority])
 
-  const getInvItem = useCallback((demand) => {
-    const name = demand?.item_name || demand?.name || ''
-    return (inventory || []).find(i => i?.name && i.name.toLowerCase() === name.toLowerCase())
+  const getInvItem = useCallback((itemName) => {
+    return (inventory || []).find(i => i?.name && i.name.toLowerCase() === (itemName || '').toLowerCase())
   }, [inventory])
 
-  // ── Helpers ──────────────────────────────────────────
   const getStockStatus = (inv, requestedQty) => {
     if (!inv) return { color: '#dc2626', bg: '#fee2e2', label: 'Out of Stock', icon: '🔴' }
     if (inv.quantity <= 0) return { color: '#dc2626', bg: '#fee2e2', label: 'Out of Stock', icon: '🔴' }
@@ -136,8 +164,8 @@ export default function FulfillmentCenter() {
   // ── Dispatch Full ────────────────────────────────────
   const handleDispatchFull = async () => {
     if (!dispatchModal || processingRef.current) return
-    const { demand, inv } = dispatchModal
-    const requested = Number(demand.quantity || demand.qty || 0)
+    const { request, item, inv } = dispatchModal
+    const requested = Number(item._qty || 0)
     const available = inv?.quantity || 0
     const qty = Math.min(requested, available)
 
@@ -146,7 +174,7 @@ export default function FulfillmentCenter() {
       return
     }
 
-    await executeDispatch(demand, inv, qty, dispatchNotes)
+    await executeDispatch(request, item, inv, qty, dispatchNotes)
   }
 
   // ── Partial Dispatch ─────────────────────────────────
@@ -157,106 +185,119 @@ export default function FulfillmentCenter() {
       showToast('error', 'Invalid Quantity', 'Enter a positive number')
       return
     }
-    const { demand, inv } = dispatchModal
+    const { request, item, inv } = dispatchModal
     const available = inv?.quantity || 0
     if (qty > available) {
       showToast('error', 'Insufficient Stock', `Only ${fmtNum(available)} ${inv?.unit} available`)
       return
     }
-    await executeDispatch(demand, inv, qty, dispatchNotes)
+    await executeDispatch(request, item, inv, qty, dispatchNotes)
   }
 
-  // ── Execute Dispatch (deducts inventory, updates status) ─
-  const executeDispatch = async (demand, inv, qty, notes) => {
+  // ── Execute Dispatch ─────────────────────────────────
+  const executeDispatch = async (request, item, inv, qty, notes) => {
     if (processingRef.current) return
     processingRef.current = true
     setLoading(true)
 
     try {
-      const requested = Number(demand.quantity || demand.qty || 0)
-      const alreadyFulfilled = Number(demand.fulfilled_qty || demand.fulfilledQty || 0)
+      const requested = Number(item._qty || 0)
+      const alreadyFulfilled = Number(item._fulfilledQty || 0)
       const newFulfilled = alreadyFulfilled + qty
       const remaining = Math.max(0, requested - newFulfilled)
 
       // Determine new status
-      let newStatus = demand.status
+      let newStatus = request.status
       if (remaining <= 0) {
-        newStatus = 'Completed'
+        const allItems = request.request_items || []
+        const thisItemFulfilled = newFulfilled >= requested
+        const otherItemsFulfilled = allItems.every((ri, idx) => {
+          if (idx === item._itemIndex) return thisItemFulfilled
+          return Number(ri.fulfilled_qty || 0) >= Number(ri.qty || 0)
+        })
+        newStatus = otherItemsFulfilled ? 'Completed' : 'Partially Fulfilled'
       } else if (newFulfilled > 0) {
         newStatus = 'Partially Fulfilled'
       }
 
-      // Build payload for handleFulfillDemand
-      const result = await handleFulfillDemand({
-        demandId: demand.id,
-        item: demand.item_name || demand.name,
-        qty,
-        unit: demand.unit,
-        notes: notes || undefined,
-        newStatus,
-        fulfilledQty: newFulfilled,
-        remainingQty: remaining,
-      })
+      // 1. Update request_items fulfilled_qty
+      if (item._itemId) {
+        const { error: itemError } = await supabase
+          .from('request_items')
+          .update({ fulfilled_qty: newFulfilled })
+          .eq('id', item._itemId)
 
-      if (result !== false) {
-        // Deduct inventory
-        if (inv && qty > 0) {
-          const newQty = Math.max(0, (inv.quantity || 0) - qty)
-          await supabase
-            .from('inventory')
-            .update({ quantity: newQty, updated_at: new Date().toISOString() })
-            .eq('id', inv.id)
+        if (itemError) {
+          console.error('Update request_items error:', itemError)
+          throw new Error(`Failed to update item: ${itemError.message}`)
+        }
+      }
 
-          // Check low stock threshold
-          const threshold = inv.threshold || inv.min_stock || 0
-          if (newQty <= threshold && threshold > 0) {
-            showToast('warning', 'Low Stock Alert', `${inv.name} reached minimum threshold (${fmtNum(newQty)} ${inv.unit})`)
-            addNotification?.({
-              type: 'warning',
-              title: 'Low Stock Alert',
-              message: `${inv.name} reached minimum threshold (${fmtNum(newQty)} ${inv.unit})`,
-            })
-          }
+      // 2. Update request status
+      const { error: reqError } = await supabase
+        .from('requests')
+        .update({
+          status: newStatus,
+          fulfilled_at: newStatus === 'Completed' ? new Date().toISOString() : request.fulfilled_at,
+        })
+        .eq('id', request.id)
 
-          // Create transaction log
-          await supabase.from('transactions').insert({
-            item_id: inv.id,
-            item_name: inv.name,
-            type: 'OUT',
-            quantity: qty,
-            unit: inv.unit,
-            reference_type: 'fulfillment',
-            reference_id: demand.id,
-            notes: notes || `Fulfilled request from ${demand.department}`,
-            created_by: user?.id,
-            created_by_name: user?.name || user?.email,
+      if (reqError) {
+        console.error('Update requests error:', reqError)
+        throw new Error(`Failed to update request: ${reqError.message}`)
+      }
+
+      // 3. Deduct inventory
+      if (inv && qty > 0) {
+        const newQty = Math.max(0, (inv.quantity || 0) - qty)
+        const { error: invError } = await supabase
+          .from('inventory')
+          .update({ quantity: newQty, updated_at: new Date().toISOString() })
+          .eq('id', inv.id)
+
+        if (invError) {
+          console.error('Update inventory error:', invError)
+          throw new Error(`Failed to update inventory: ${invError.message}`)
+        }
+
+        // Check low stock threshold
+        const threshold = inv.threshold || inv.min_stock || 0
+        if (newQty <= threshold && threshold > 0) {
+          showToast('warning', 'Low Stock Alert', `${inv.name} reached minimum threshold (${fmtNum(newQty)} ${inv.unit})`)
+          addNotification?.({
+            type: 'warning',
+            title: 'Low Stock Alert',
+            message: `${inv.name} reached minimum threshold (${fmtNum(newQty)} ${inv.unit})`,
           })
         }
 
-        // Activity log
-        const actionLabel = newStatus === 'Completed' ? 'fulfilled' : 'partially fulfilled'
-        logActivity?.({
-          action: `${user?.name || 'Inventory Officer'} ${actionLabel} ${fmtNum(qty)} ${demand.unit} ${demand.item_name || demand.name} for ${demand.department}`,
-          type: 'fulfillment',
-          reference_id: demand.id,
+        // Create transaction log
+        const { error: txnError } = await supabase.from('transactions').insert({
+          item_id: inv.id,
+          item_name: inv.name,
+          type: 'OUT',
+          quantity: qty,
+          unit: inv.unit,
+          reference_type: 'fulfillment',
+          reference_id: request.id,
+          notes: notes || `Fulfilled request from ${request.department}`,
+          created_by: user?.id,
+          created_by_name: user?.name || user?.email,
         })
 
-        // Notification
-        const notifTitle = newStatus === 'Completed'
-          ? `${demand.department} request fulfilled`
-          : `${demand.department} request partially fulfilled`
-        addNotification?.({
-          type: newStatus === 'Completed' ? 'success' : 'info',
-          title: notifTitle,
-          message: `${demand.item_name || demand.name} — ${fmtNum(qty)} ${demand.unit} dispatched`,
-        })
-
-        // Refresh everything
-        refreshData?.()
-
-        showToast('success', 'Dispatched', `${fmtNum(qty)} ${demand.unit} of ${demand.item_name || demand.name}`)
-        resetDispatch()
+        if (txnError) {
+          console.error('Insert transaction error:', txnError)
+          // Don't throw here — transaction log is non-critical
+        }
       }
+
+      // 4. Refresh data
+      if (fetchRequests) {
+        await fetchRequests()
+      }
+
+      showToast('success', 'Dispatched', `${fmtNum(qty)} ${item._unit} of ${item._displayName}`)
+      resetDispatch()
     } catch (err) {
       console.error('Dispatch error:', err)
       showToast('error', 'Dispatch Failed', err?.message || 'Something went wrong')
@@ -278,10 +319,10 @@ export default function FulfillmentCenter() {
     setLoading(true)
 
     try {
-      const { demand } = rejectModal
+      const { request } = rejectModal
 
-      await supabase
-        .from('demands')
+      const { error } = await supabase
+        .from('requests')
         .update({
           status: 'Rejected',
           rejection_reason: rejectReason.trim(),
@@ -289,24 +330,19 @@ export default function FulfillmentCenter() {
           rejected_by: user?.id,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', demand.id)
+        .eq('id', request.id)
 
-      // Activity log
-      logActivity?.({
-        action: `${user?.name || 'Inventory Officer'} rejected ${demand.item_name || demand.name} request from ${demand.department}. Reason: ${rejectReason.trim()}`,
-        type: 'rejection',
-        reference_id: demand.id,
-      })
+      if (error) {
+        console.error('Reject update error:', error)
+        throw new Error(`Failed to reject: ${error.message}`)
+      }
 
-      // Notification
-      addNotification?.({
-        type: 'error',
-        title: `${demand.department} request rejected`,
-        message: `${demand.item_name || demand.name} — ${rejectReason.trim()}`,
-      })
+      // Refresh data
+      if (fetchRequests) {
+        await fetchRequests()
+      }
 
-      refreshData?.()
-      showToast('info', 'Request Rejected', `${demand.item_name || demand.name}`)
+      showToast('info', 'Request Rejected', `${request.department}`)
       resetReject()
     } catch (err) {
       console.error('Reject error:', err)
@@ -342,11 +378,10 @@ export default function FulfillmentCenter() {
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: theme.text }}>Fulfillment Center</h2>
           <p style={{ fontSize: 12, color: theme.textMuted }}>
-            {demands.filter(d => pendingStatuses.includes(d.status)).length} pending · {demands.filter(d => completedStatuses.includes(d.status)).length} completed
+            {requests.filter(r => pendingStatuses.includes(r.status)).length} pending · {requests.filter(r => completedStatuses.includes(r.status)).length} completed
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {/* Search */}
           <div style={{ position: 'relative' }}>
             <Ic n="Search" size={14} color="#9ca3af"
               style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)' }} />
@@ -388,8 +423,8 @@ export default function FulfillmentCenter() {
               color: activeTab === tab ? '#1e40af' : theme.textMuted,
             }}>
               {tab === TAB_PENDING
-                ? demands.filter(d => pendingStatuses.includes(d.status)).length
-                : demands.filter(d => completedStatuses.includes(d.status)).length}
+                ? requests.filter(r => pendingStatuses.includes(r.status)).length
+                : requests.filter(r => completedStatuses.includes(r.status)).length}
             </span>
           </button>
         ))}
@@ -429,7 +464,7 @@ export default function FulfillmentCenter() {
       </Card>
 
       {/* Cards Grid */}
-      {filteredDemands.length === 0 ? (
+      {filteredItems.length === 0 ? (
         <EmptyState
           icon={activeTab === TAB_PENDING ? 'Inbox' : 'CheckCircle'}
           title={activeTab === TAB_PENDING ? 'No pending requests' : 'No completed requests'}
@@ -437,23 +472,22 @@ export default function FulfillmentCenter() {
         />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
-          {filteredDemands.map(d => {
-            const inv = getInvItem(d)
-            const name = d.item_name || d.name || '—'
-            const requested = Number(d.quantity || d.qty || 0)
-            const fulfilled = Number(d.fulfilled_qty || d.fulfilledQty || 0)
+          {filteredItems.map(item => {
+            const inv = getInvItem(item._displayName)
+            const name = item._displayName
+            const requested = Number(item._qty || 0)
+            const fulfilled = Number(item._fulfilledQty || 0)
             const remaining = Math.max(0, requested - fulfilled)
-            const [pbg, pc] = (pColors[d.priority] || '#f3f4f6,#374151').split(',')
-            const [sbg, sc] = (statusColors[d.status] || '#f3f4f6,#374151').split(',')
+            const [pbg, pc] = (pColors[item.priority] || '#f3f4f6,#374151').split(',')
+            const [sbg, sc] = (statusColors[item.status] || '#f3f4f6,#374151').split(',')
             const stock = getStockStatus(inv, requested)
-            const isPending = pendingStatuses.includes(d.status)
+            const isPending = pendingStatuses.includes(item.status)
 
             return (
-              <Card key={d.id} style={{
-                border: d.priority === 'Critical' ? '2px solid #ef4444' : `1px solid ${theme.border}`,
+              <Card key={`${item.id}-${item._itemIndex}`} style={{
+                border: item.priority === 'Critical' ? '2px solid #ef4444' : `1px solid ${theme.border}`,
                 overflow: 'hidden',
               }}>
-                {/* Card header */}
                 <div style={{ padding: '14px 16px', borderBottom: `1px solid ${theme.border}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                     <h3 style={{ fontSize: 15, fontWeight: 700, color: theme.text, flex: 1, lineHeight: 1.3 }}>{name}</h3>
@@ -461,44 +495,42 @@ export default function FulfillmentCenter() {
                       padding: '3px 9px', borderRadius: 6, fontSize: 11,
                       fontWeight: 600, background: pbg, color: pc, marginLeft: 8, flexShrink: 0
                     }}>
-                      {d.priority}
+                      {item.priority}
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 11, color: theme.textMuted, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <Ic n="Building" size={11} /> {d.department || '—'}
+                      <Ic n="Building" size={11} /> {item.department || '—'}
                     </span>
                     <span style={{ fontSize: 11, color: theme.textMuted }}>·</span>
                     <span style={{ fontSize: 11, color: theme.textMuted }}>
-                      by {d.created_by_name || d.createdBy || '—'}
+                      by {item.created_by_name || item.createdBy || '—'}
                     </span>
                     <span style={{ fontSize: 11, color: theme.textMuted }}>·</span>
                     <span style={{ fontSize: 11, color: theme.textMuted }}>
-                      {fmtDate(d.created_at || d.createdAt)}
+                      {fmtDate(item.created_at || item.createdAt)}
                     </span>
                   </div>
                 </div>
 
-                {/* Quantities */}
                 <div style={{ padding: '14px 16px' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
                     <div style={{ padding: '10px 12px', background: theme.bg, borderRadius: 8, textAlign: 'center' }}>
                       <div style={{ fontSize: 10, color: theme.textMuted, marginBottom: 3, fontWeight: 600, letterSpacing: 0.5 }}>REQUESTED</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{fmtNum(requested)} <span style={{ fontSize: 11, fontWeight: 500 }}>{d.unit}</span></div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{fmtNum(requested)} <span style={{ fontSize: 11, fontWeight: 500 }}>{item._unit}</span></div>
                     </div>
                     <div style={{ padding: '10px 12px', background: theme.bg, borderRadius: 8, textAlign: 'center' }}>
                       <div style={{ fontSize: 10, color: theme.textMuted, marginBottom: 3, fontWeight: 600, letterSpacing: 0.5 }}>FULFILLED</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{fmtNum(fulfilled)} <span style={{ fontSize: 11, fontWeight: 500 }}>{d.unit}</span></div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{fmtNum(fulfilled)} <span style={{ fontSize: 11, fontWeight: 500 }}>{item._unit}</span></div>
                     </div>
                     <div style={{ padding: '10px 12px', background: theme.bg, borderRadius: 8, textAlign: 'center' }}>
                       <div style={{ fontSize: 10, color: theme.textMuted, marginBottom: 3, fontWeight: 600, letterSpacing: 0.5 }}>REMAINING</div>
                       <div style={{ fontSize: 15, fontWeight: 700, color: remaining > 0 ? '#dc2626' : '#16a34a' }}>
-                        {fmtNum(remaining)} <span style={{ fontSize: 11, fontWeight: 500 }}>{d.unit}</span>
+                        {fmtNum(remaining)} <span style={{ fontSize: 11, fontWeight: 500 }}>{item._unit}</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Available stock */}
                   <div style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '10px 12px', borderRadius: 8, background: stock.bg, marginBottom: 12
@@ -512,39 +544,36 @@ export default function FulfillmentCenter() {
                     <div style={{ fontSize: 18 }}>{stock.icon}</div>
                   </div>
 
-                  {/* Status badge */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <span style={{
                       padding: '3px 10px', borderRadius: 6, fontSize: 11,
                       fontWeight: 600, background: sbg, color: sc
                     }}>
-                      {d.status}
+                      {item.status}
                     </span>
-                    {d.rejection_reason && (
+                    {item.rejection_reason && (
                       <span style={{ fontSize: 11, color: '#dc2626', fontStyle: 'italic' }}>
-                        Reason: {d.rejection_reason}
+                        Reason: {item.rejection_reason}
                       </span>
                     )}
                   </div>
 
-                  {/* Notes */}
-                  {d.notes && (
+                  {item.notes && (
                     <div style={{
                       fontSize: 12, color: theme.textMuted, padding: '8px 10px',
                       background: theme.bg, borderRadius: 6, marginBottom: 12
                     }}>
-                      <span style={{ fontWeight: 600 }}>Notes:</span> {d.notes}
+                      <span style={{ fontWeight: 600 }}>Notes:</span> {item.notes}
                     </div>
                   )}
 
-                  {/* Action buttons */}
                   {isPending && canFulfill && (
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <Btn variant="success" onClick={() => setDispatchModal({ demand: d, inv })}
+                      <Btn variant="success" onClick={() => setDispatchModal({ request: { ...item, id: item._requestId }, item, inv })}
                         style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}>
                         <Ic n="Package" size={13} color="white" /> Dispatch
                       </Btn>
-                      <Btn variant="outline" onClick={() => setRejectModal({ demand: d })}
+                      <Btn variant="outline" onClick={() => setRejectModal({ request: { ...item, id: item._requestId } })}
                         style={{ fontSize: 12 }}>
                         <Ic n="XCircle" size={13} /> Reject
                       </Btn>
@@ -557,14 +586,14 @@ export default function FulfillmentCenter() {
         </div>
       )}
 
-      {/* ── Dispatch Modal ─────────────────────────────── */}
+      {/* Dispatch Modal */}
       {dispatchModal && (
         <Modal open onClose={resetDispatch} title="📦 Dispatch Items">
           {(() => {
-            const { demand, inv } = dispatchModal
-            const name = demand.item_name || demand.name
-            const requested = Number(demand.quantity || demand.qty || 0)
-            const alreadyFulfilled = Number(demand.fulfilled_qty || demand.fulfilledQty || 0)
+            const { request, item, inv } = dispatchModal
+            const name = item._displayName
+            const requested = Number(item._qty || 0)
+            const alreadyFulfilled = Number(item._fulfilledQty || 0)
             const remaining = Math.max(0, requested - alreadyFulfilled)
             const available = inv?.quantity || 0
             const qty = Number(dispatchQty)
@@ -574,7 +603,6 @@ export default function FulfillmentCenter() {
 
             return (
               <>
-                {/* Item summary */}
                 <div style={{
                   padding: '14px 16px', background: theme.bg, borderRadius: 10, marginBottom: 16,
                   border: `1px solid ${theme.border}`
@@ -583,19 +611,19 @@ export default function FulfillmentCenter() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                     <div>
                       <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 600 }}>DEPARTMENT</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{demand.department}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{request.department}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 600 }}>REQUESTED</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{fmtNum(requested)} {demand.unit}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{fmtNum(requested)} {item._unit}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 600 }}>ALREADY FULFILLED</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{fmtNum(alreadyFulfilled)} {demand.unit}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>{fmtNum(alreadyFulfilled)} {item._unit}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 600 }}>REMAINING</div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>{fmtNum(remaining)} {demand.unit}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#dc2626' }}>{fmtNum(remaining)} {item._unit}</div>
                     </div>
                     <div style={{ gridColumn: '1 / -1' }}>
                       <div style={{ fontSize: 10, color: theme.textMuted, fontWeight: 600 }}>AVAILABLE</div>
@@ -603,25 +631,23 @@ export default function FulfillmentCenter() {
                         fontSize: 13, fontWeight: 700,
                         color: available >= remaining ? '#16a34a' : available > 0 ? '#ca8a04' : '#dc2626'
                       }}>
-                        {fmtNum(available)} {demand.unit}
+                        {fmtNum(available)} {item._unit}
                         {available >= remaining ? ' 🟢' : available > 0 ? ' 🟡' : ' 🔴'}
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Dispatch Full button */}
                 {canFull && (
                   <Btn variant="success" onClick={handleDispatchFull} disabled={loading || processingRef.current}
                     style={{ width: '100%', justifyContent: 'center', marginBottom: 14, padding: '12px' }}>
                     <Ic n="CheckCircle" size={15} color="white" />
                     <span style={{ marginLeft: 6 }}>
-                      Dispatch Full ({fmtNum(Math.min(remaining, available))} {demand.unit})
+                      Dispatch Full ({fmtNum(Math.min(remaining, available))} {item._unit})
                     </span>
                   </Btn>
                 )}
 
-                {/* Divider */}
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14
                 }}>
@@ -630,7 +656,6 @@ export default function FulfillmentCenter() {
                   <div style={{ flex: 1, height: 1, background: theme.border }} />
                 </div>
 
-                {/* Partial quantity */}
                 <div style={{ marginBottom: 14 }}>
                   <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 6 }}>
                     Dispatch Quantity <span style={{ color: '#ef4444' }}>*</span>
@@ -656,11 +681,11 @@ export default function FulfillmentCenter() {
                         borderRadius: 8, background: theme.inputBg, color: theme.text
                       }}
                     />
-                    <span style={{ fontSize: 14, color: theme.textMuted, fontWeight: 500 }}>{demand.unit}</span>
+                    <span style={{ fontSize: 14, color: theme.textMuted, fontWeight: 500 }}>{item._unit}</span>
                   </div>
                   {overLimit && (
                     <p style={{ fontSize: 12, color: '#dc2626', marginTop: 5 }}>
-                      ⚠️ Exceeds available stock ({fmtNum(available)} {demand.unit})
+                      ⚠️ Exceeds available stock ({fmtNum(available)} {item._unit})
                     </p>
                   )}
                   {canPartial && (
@@ -670,7 +695,6 @@ export default function FulfillmentCenter() {
                   )}
                 </div>
 
-                {/* Notes */}
                 <div style={{ marginBottom: 16 }}>
                   <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 6 }}>
                     Notes <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 400 }}>(optional)</span>
@@ -688,7 +712,6 @@ export default function FulfillmentCenter() {
                   />
                 </div>
 
-                {/* Modal actions */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                   <Btn variant="outline" onClick={resetDispatch}>Cancel</Btn>
                   <Btn variant="success" onClick={handlePartialDispatch}
@@ -702,21 +725,20 @@ export default function FulfillmentCenter() {
         </Modal>
       )}
 
-      {/* ── Reject Modal ───────────────────────────────── */}
+      {/* Reject Modal */}
       {rejectModal && (
         <Modal open onClose={resetReject} title="❌ Reject Request">
           {(() => {
-            const { demand } = rejectModal
-            const name = demand.item_name || demand.name
+            const { request } = rejectModal
             return (
               <>
                 <div style={{
                   padding: '14px 16px', background: '#fee2e2', borderRadius: 10, marginBottom: 16,
                   border: '1px solid #fecaca'
                 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>{name}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>{request.department}</div>
                   <div style={{ fontSize: 12, color: '#991b1b' }}>
-                    {demand.department} · Requested {fmtNum(demand.quantity || demand.qty)} {demand.unit}
+                    Request from {request.created_by_name || '—'} · {fmtDate(request.created_at)}
                   </div>
                 </div>
 
