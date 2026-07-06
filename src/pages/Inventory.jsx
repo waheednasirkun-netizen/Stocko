@@ -16,7 +16,8 @@ const STOCK_COLORS = {
 }
 
 export default function Inventory() {
-  const { user, theme, showToast, withActionLock } = useApp()
+  const { user, theme, showToast, withActionLock, transactions } = useApp()
+  //                                              ^^^^^^^^^^^^^ ADDED: listen to transactions changes
 
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
@@ -54,12 +55,12 @@ export default function Inventory() {
   const stats = useMemo(() => {
     const total = items.length
     const lowStock = items.filter(i => Number(i.quantity) <= Number(i.min_threshold) && Number(i.min_threshold) > 0)
-    const value = items.reduce((sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.purchase_price) || 0), 0)
+    // INVENTORY VALUE CARD REMOVED
     const categories = new Set(items.map(i => i.category).filter(Boolean)).size
     return [
       { label: 'Total Items',    value: fmtNum(total),         icon: 'Package',      bg: '#eff6ff',  color: '#2563eb' },
       { label: 'Low Stock',      value: fmtNum(lowStock.length), icon: 'AlertTriangle', bg: '#fef9c3',  color: '#d97706' },
-      { label: 'Inventory Value', value: `PKR ${fmtNum(value)}`, icon: 'DollarSign',   bg: '#ecfeff',  color: '#0891b2' },
+      // INVENTORY VALUE CARD REMOVED
       { label: 'Categories',     value: fmtNum(categories),    icon: 'Tag',          bg: '#f3e8ff',  color: '#7c3aed' },
     ]
   }, [items])
@@ -68,6 +69,13 @@ export default function Inventory() {
   useEffect(() => {
     if (user?.branch_id) loadItems()
   }, [user?.branch_id])
+
+  // AUTO-REFRESH when transactions change (fixes stock not updating after Stock IN)
+  useEffect(() => {
+    if (user?.branch_id && transactions) {
+      loadItems()
+    }
+  }, [transactions?.length, user?.branch_id])
 
   async function loadItems() {
     setLoading(true)
@@ -171,7 +179,7 @@ export default function Inventory() {
         </div>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats Cards — Inventory Value REMOVED */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 24 }} className="grid-mobile-2">
         {stats.map(s => (
           <Card key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -212,7 +220,7 @@ export default function Inventory() {
         </div>
       </Card>
 
-      {/* Table */}
+      {/* Table — Actions Column REMOVED */}
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
           <div style={{ padding: 60, textAlign: 'center', color: theme.textMuted, fontSize: 14 }}>
@@ -229,7 +237,8 @@ export default function Inventory() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: theme.bg }}>
-                  {['Item Name', 'Category', 'Stock', 'Unit', 'Threshold', 'Price', 'Supplier', 'Updated', 'Actions'].map(h => (
+                  {['Item Name', 'Category', 'Stock', 'Unit', 'Threshold', 'Price', 'Supplier', 'Updated'].map(h => (
+                    // ACTIONS HEADER REMOVED
                     <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 12,
                       fontWeight: 600, color: theme.textMuted, borderBottom: `1px solid ${theme.border}`,
                       whiteSpace: 'nowrap' }}>
@@ -274,28 +283,7 @@ export default function Inventory() {
                       <td style={{ padding: '10px 14px', fontSize: 12, color: theme.textMuted, whiteSpace: 'nowrap' }}>
                         {item.updated_at ? new Date(item.updated_at).toLocaleDateString() : '—'}
                       </td>
-                      <td style={{ padding: '10px 14px' }}>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button
-                            onClick={() => openEditModal(item)}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4,
-                              borderRadius: 6, opacity: 0.7, transition: 'opacity 0.2s' }}
-                            title="Edit"
-                          >
-                            <Ic n="Pencil" size={16} color={theme.text} />
-                          </button>
-                          {isAdmin && (
-                            <button
-                              onClick={() => setDeleteConfirm(item)}
-                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4,
-                                borderRadius: 6, opacity: 0.7, transition: 'opacity 0.2s' }}
-                              title="Delete"
-                            >
-                              <Ic n="Trash2" size={16} color="#ef4444" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
+                      {/* ACTIONS COLUMN (Edit/Delete buttons) REMOVED */}
                     </tr>
                   )
                 })}

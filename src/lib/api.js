@@ -353,75 +353,65 @@ export const transactionsApi = {
   },
 
   async stockIn({ item, qty, unit, price, source, category, notes, branchId, userId, userName }) {
-    const quantity     = Math.abs(Number(qty))
-    const pricePerUnit = Math.max(0, Number(price) || 0)
-    const totalAmount  = quantity * pricePerUnit
+  const quantity     = Math.abs(Number(qty))
+  const pricePerUnit = Math.max(0, Number(price) || 0)
+  const totalAmount  = quantity * pricePerUnit
+  const itemName     = String(item).trim()
 
-    const { data, error } = await supabase
-      .from('transactions')
-      .insert([{
-        branch_id:      branchId,
-        item_name:      String(item).trim(),
-        type:           'Stock IN',
-        quantity,
-        unit,
-        price_per_unit: pricePerUnit,
-        total_amount:   totalAmount,
-        source:         source ?? null,
-        category:       category ?? null,
-        notes:          notes ?? null,
-        recorded_by:    userId,
-        created_at:     now(),
-      }])
-      .select().single()
+  // 1. Insert transaction
+  const { data, error } = await supabase
+    .from('transactions')
+    .insert([{
+      branch_id:      branchId,
+      item_name:      itemName,
+      type:           'Stock IN',
+      quantity,
+      unit,
+      price_per_unit: pricePerUnit,
+      total_amount:   totalAmount,
+      source:         source ?? null,
+      category:       category ?? null,
+      notes:          notes ?? null,
+      recorded_by:    userId,
+      created_at:     now(),
+    }])
+    .select().single()
 
-    if (error) return wrap(null, error)
+  if (error) return wrap(null, error)
 
-    if (pricePerUnit > 0) {
-      supabase.from('financial_transactions').insert([{
-        branch_id:      branchId,
-        type:           'purchase',
-        item_name:      String(item).trim(),
-        category,
-        quantity,
-        unit,
-        price_per_unit: pricePerUnit,
-        total_amount:   totalAmount,
-        payment_status: 'unpaid',
-        supplier:       source ?? null,
-        recorded_by:    userId,
-        reference_id:   data.id,
-        created_at:     now(),
-      }]).then(({ error: fe }) => {
-        if (fe) console.warn('[api] financial insert failed:', fe.message)
+  // 2. UPDATE INVENTORY TABLE — Add stock to existing item or create new
+  const { data: existingItem } = await supabase
+    .from('inventory')
+    .select('id, quantity, unit')
+    .eq('branch_id', branchId)
+    .ilike('name', itemName)
+    .maybeSingle()
+
+  if (existingItem) {
+    const newQty = Number(existingItem.quantity || 0) + quantity
+    await supabase
+      .from('inventory')
+      .update({
+        quantity: newQty,
+        unit: unit || existingItem.unit,
+        updated_at: now(),
       })
-    }
-
-    logActivity({ branchId, userId, userName, action: 'stock_in', details: `Stock IN: ${quantity} ${unit} of ${item}` })
-    return wrap(data, null)
-  },
-
-  async stockOut({ item, qty, unit, type = 'Stock OUT', notes, branchId, userId, userName }) {
-    const quantity = Math.abs(Number(qty))
-    const { data, error } = await supabase
-      .from('transactions')
+      .eq('id', existingItem.id)
+  } else {
+    await supabase
+      .from('inventory')
       .insert([{
-        branch_id:   branchId,
-        item_name:   String(item).trim(),
-        type,
+        branch_id,
+        name: itemName,
         quantity,
         unit,
-        notes:       notes ?? null,
-        recorded_by: userId,
-        created_at:  now(),
+        created_at: now(),
+        updated_at: now(),
       }])
-      .select().single()
+  }
 
-    if (!error) {
-      logActivity({ branchId, userId, userName, action: 'stock_out', details: `${type}: ${quantity} ${unit} of ${item}` })
-    }
-    return wrap(data, error)
-  },
+  return wrap(data, error)
+},
 }
 
 // ─── DEMANDS ──────────────────────────────────────────────────────────────────
@@ -461,31 +451,48 @@ export const demandsApi = {
     return wrap(data, error)
   },
 
-  async fulfill({ demandId, item, qty, unit, branchId, userId, userName }) {
-    const { data: txnData, error: txnError } = await transactionsApi.stockOut({
-      item, qty, unit,
-      type:    'Fulfillment',
-      notes:   `Fulfilled demand #${demandId}`,
-      branchId, userId, userName,
-    })
-    if (txnError) return wrap(null, txnError)
+  async stockOut({ item, qty, unit, type = 'Stock OUT', notes, branchId, userId, userName }) {
+  const quantity = Math.abs(Number(qty))
+  const itemName = String(item).trim()
 
-    const { data, error } = await supabase
-      .from('demands')
+  // 1. Insert transaction
+  const { data, error } = await supabase
+    .from('transactions')
+    .insert([{
+      branch_id:   branchId,
+      item_name:   itemName,
+      type,
+      quantity,
+      unit,
+      notes:       notes ?? null,
+      recorded_by: userId,
+      created_at:  now(),
+    }])
+    .select().single()
+
+  if (error) return wrap(null, error)
+
+  // 2. UPDATE INVENTORY — Subtract quantity
+  const { data: existingItem } = await supabase
+    .from('inventory')
+    .select('id, quantity')
+    .eq('branch_id', branchId)
+    .ilike('name', itemName)
+    .maybeSingle()
+
+  if (existingItem) {
+    const newQty = Math.max(0, Number(existingItem.quantity || 0) - quantity)
+    await supabase
+      .from('inventory')
       .update({
-        status:        'Fulfilled',
-        fulfilled_by:  userId,
-        fulfilled_at:  now(),
-        fulfilled_qty: qty,
-        txn_id:        txnData.id,
+        quantity: newQty,
+        updated_at: now(),
       })
-      .eq('id', demandId).select().single()
-    return wrap(data, error)
-  },
+      .eq('id', existingItem.id)
+  }
 
-  async remove(id) {
-    const { error } = await supabase.from('demands').delete().eq('id', id)
-    return wrap(null, error)
+  logActivity({ branchId, userId, userName, action: 'stock_out', details: `${type}: ${quantity} ${unit} of ${item}` })
+  return wrap(data, error)
   },
 }
 

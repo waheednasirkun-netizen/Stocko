@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useApp } from '../context/AppContext'
 import { Ic, Card, StatusPill, EmptyState } from '../components/ui'
-import { fmtNum, fmtShort, fmtPKR } from '../lib/constants'
+import { fmtNum, fmtShort } from '../lib/constants'
 
 const StatCard = ({ icon, label, value, sub, color = '#2563eb', bg = '#eff6ff' }) => (
   <Card style={{ display:'flex', alignItems:'center', gap:16 }}>
@@ -18,7 +18,8 @@ const StatCard = ({ icon, label, value, sub, color = '#2563eb', bg = '#eff6ff' }
 )
 
 export default function Dashboard() {
-  const { requests, inventory, theme, user, stats, transactions } = useApp()
+  const { requests, inventory, theme, user, stats, transactions, setTab } = useApp()
+  //                                   ^^^^^^^^^ ADD THIS ^^^^^^^^^
 
   const recentTxns = useMemo(() =>
     [...transactions]
@@ -54,7 +55,6 @@ export default function Dashboard() {
         <StatCard icon="TrendingUp"   label="Stock IN (total)" value={fmtNum(stats.stockInTotal)}    color="#16a34a" bg="#dcfce7"/>
         <StatCard icon="TrendingDown" label="Stock OUT (total)"value={fmtNum(stats.stockOutTotal)}   color="#d97706" bg="#fef9c3"/>
         <StatCard icon="Truck"        label="Active Suppliers" value={fmtNum(stats.activeSuppliers)} color="#7c3aed" bg="#f3e8ff"/>
-        <StatCard icon="DollarSign"   label="Inventory Value"  value={fmtShort(stats.inventoryValue)} color="#0891b2" bg="#ecfeff"/>
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:16 }}
@@ -89,7 +89,6 @@ export default function Dashboard() {
                         </div>
                         <div style={{ fontSize:11, color:theme.textMuted }}>
                           {fmtNum(qty)} {unit}
-                          {t.price_per_unit > 0 && ` · ${fmtPKR(t.price_per_unit)}/unit`}
                         </div>
                       </div>
                       <div style={{ fontSize:11, color:theme.textMuted, flexShrink:0 }}>

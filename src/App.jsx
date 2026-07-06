@@ -10,7 +10,7 @@ import Login    from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Inventory from './pages/Inventory'
 import StockMovement from './pages/StockMovement'
-import RequestList from "./pages/Requests";
+import Demands from './pages/Demands' 
 import FulfillmentCenter from './pages/FulfillmentCenter'
 import ItemTemplates from './pages/ItemTemplates'
 import Suppliers from './pages/Suppliers'
@@ -28,7 +28,7 @@ const PAGES = {
   'inventory':            <Inventory/>,
   'item-templates':       <ItemTemplates/>,
   'stock-movement':       <StockMovement/>,
-  'demands': <RequestList/>,
+  'demands': <Demands/>,
   'fulfillment-center':   <FulfillmentCenter/>,
   'procurement-requests': <ProcurementRequests/>,
   'purchase-orders':      <PurchaseOrders/>,

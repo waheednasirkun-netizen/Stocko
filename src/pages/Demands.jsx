@@ -3,44 +3,38 @@ import { useApp } from '../context/AppContext'
 import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum, DEPARTMENTS } from '../lib/constants'
 
-export default function RequestList() {
-  const { demands, inventory, theme, user, createDemand, showToast } = useApp()
+export default function Demands() {
+  const { requests, inventory, theme, user, createRequest, showToast } = useApp()
 
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [filterSt, setFilterSt] = useState('All')
 
-  // Items being requested (support multiple)
   const [items, setItems] = useState([{ id: 1, itemId: null, name: '', category: '', unit: '', qty: '', notes: '', search: '', showDrop: false, activeIndex: -1 }])
   const [errors, setErrors] = useState({})
   const [department, setDepartment] = useState('')
   const processingRef = useRef(false)
   const dropRefs = useRef({})
 
-  // Inventory search suggestions
   const getSuggestions = useCallback((query) => {
     if (!query.trim()) return []
     const q = query.toLowerCase()
-    return inventory
-      .filter(i => i.name.toLowerCase().includes(q))
-      .slice(0, 8)
+    return (inventory || []).filter(i => i.name?.toLowerCase().includes(q)).slice(0, 8)
   }, [inventory])
 
   const filtered = useMemo(() => {
-    let list = [...demands].sort((a, b) => new Date(b.created_at || b.createdAt) - new Date(a.created_at || a.createdAt))
+    let list = [...(requests || [])].sort((a, b) => new Date(b.created_at || b.createdAt || 0) - new Date(a.created_at || a.createdAt || 0))
     if (search) list = list.filter(d => (d.item_name || d.name || '').toLowerCase().includes(search.toLowerCase()))
     if (filterSt !== 'All') list = list.filter(d => d.status === filterSt)
     return list
-  }, [demands, search, filterSt])
+  }, [requests, search, filterSt])
 
-  // Add a new item row
   const addItemRow = () => {
     const newId = items.length > 0 ? Math.max(...items.map(i => i.id)) + 1 : 1
     setItems(prev => [...prev, { id: newId, itemId: null, name: '', category: '', unit: '', qty: '', notes: '', search: '', showDrop: false, activeIndex: -1 }])
   }
 
-  // Remove an item row
   const removeItemRow = (id) => {
     if (items.length <= 1) return
     setItems(prev => prev.filter(i => i.id !== id))
@@ -52,12 +46,10 @@ export default function RequestList() {
     })
   }
 
-  // Update item field
   const updateItem = (id, field, value) => {
     setItems(prev => prev.map(i => i.id === id ? { ...i, [field]: value } : i))
   }
 
-  // Select inventory item
   const selectInventoryItem = (rowId, item) => {
     setItems(prev => prev.map(i => {
       if (i.id !== rowId) return i
@@ -70,7 +62,6 @@ export default function RequestList() {
     })
   }
 
-  // Handle keyboard navigation in dropdown
   const handleKeyDown = (e, rowId) => {
     const row = items.find(i => i.id === rowId)
     if (!row) return
@@ -96,7 +87,6 @@ export default function RequestList() {
     }
   }
 
-  // Close dropdowns on outside click
   useEffect(() => {
     const handleClickOutside = (e) => {
       items.forEach(item => {
@@ -126,10 +116,8 @@ export default function RequestList() {
     setLoading(true)
     processingRef.current = true
     try {
-      // Submit each item as a separate request (or batch if API supports it)
-      // Using the existing createDemand API for each item
       for (const item of items) {
-        const result = await createDemand({
+        const result = await createRequest({
           name: item.name.trim(),
           category: item.category,
           unit: item.unit,
@@ -138,11 +126,8 @@ export default function RequestList() {
           department: department,
           notes: item.notes,
         })
-        if (result?.blocked) {
-          showToast('error', 'Cannot Create Request', result.message)
-          if (result.reason === 'insufficient_stock') {
-            setErrors(prev => ({ ...prev, [`qty_${item.id}`]: `Max: ${fmtNum(result.available)} ${result.unit}` }))
-          }
+        if (result?.blocked || !result?.success) {
+          showToast('error', 'Create Failed', result?.error?.message || 'Failed to create request')
           return
         }
       }
@@ -152,13 +137,16 @@ export default function RequestList() {
       setItems([{ id: 1, itemId: null, name: '', category: '', unit: '', qty: '', notes: '', search: '', showDrop: false, activeIndex: -1 }])
       setDepartment('')
       setErrors({})
+    } catch (error) {
+      console.error('Submit error:', error)
+      showToast('error', 'Error', error.message || 'Something went wrong')
     } finally {
       setLoading(false)
       processingRef.current = false
     }
   }
 
-  const canCreate = user?.role !== undefined // All authenticated users can create
+  const canCreate = user?.role !== undefined
 
   const statusColors = {
     Pending: '#fef3c7,#92400e',
@@ -174,7 +162,7 @@ export default function RequestList() {
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: theme.text }}>Request List</h2>
           <p style={{ fontSize: 12, color: theme.textMuted }}>
-            {demands.filter(d => d.status === 'Pending').length} pending · {demands.length} total
+            {(requests || []).filter(d => d.status === 'Pending').length} pending · {(requests || []).length} total
           </p>
         </div>
         {canCreate && (
@@ -184,7 +172,6 @@ export default function RequestList() {
         )}
       </div>
 
-      {/* Filters */}
       <Card style={{ marginBottom: 16, padding: '12px 14px' }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: 1, minWidth: 160 }}>
@@ -208,7 +195,6 @@ export default function RequestList() {
         </div>
       </Card>
 
-      {/* Table */}
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         {filtered.length === 0
           ? <EmptyState icon="ClipboardList" title="No requests" message="Create a request to get started" />
@@ -261,10 +247,8 @@ export default function RequestList() {
         }
       </Card>
 
-      {/* Create Request Modal */}
       <Modal open={showModal} onClose={() => { setShowModal(false); setErrors({}); setItems([{ id: 1, itemId: null, name: '', category: '', unit: '', qty: '', notes: '', search: '', showDrop: false, activeIndex: -1 }]); setDepartment('') }} title="📋 New Request">
 
-        {/* Department selector */}
         <div style={{ marginBottom: 18 }}>
           <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
             Department <span style={{ color: '#ef4444' }}>*</span>
@@ -280,7 +264,6 @@ export default function RequestList() {
           {errors.department && <div className="field-error">{errors.department}</div>}
         </div>
 
-        {/* Item rows */}
         {items.map((item, idx) => {
           const suggestions = getSuggestions(item.search)
           const hasErrorItem = errors[`item_${item.id}`]
@@ -306,7 +289,6 @@ export default function RequestList() {
                 )}
               </div>
 
-              {/* Item Search */}
               <div style={{ marginBottom: 12, position: 'relative' }} ref={el => { dropRefs.current[item.id] = el }}>
                 <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
                   Item <span style={{ color: '#ef4444' }}>*</span>
@@ -336,7 +318,6 @@ export default function RequestList() {
                 />
                 {hasErrorItem && <div className="field-error">{hasErrorItem}</div>}
 
-                {/* Dropdown */}
                 {item.showDrop && suggestions.length > 0 && (
                   <div style={{
                     position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
@@ -370,7 +351,6 @@ export default function RequestList() {
                   </div>
                 )}
 
-                {/* Selected item display */}
                 {item.name && !item.showDrop && (
                   <div style={{ marginTop: 6, fontSize: 12, color: theme.textMuted }}>
                     Selected: <span style={{ fontWeight: 600, color: theme.text }}>{item.name}</span>
@@ -380,7 +360,6 @@ export default function RequestList() {
                 )}
               </div>
 
-              {/* Quantity */}
               <div style={{ marginBottom: 10 }}>
                 <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
                   Quantity <span style={{ color: '#ef4444' }}>*</span>
@@ -409,7 +388,6 @@ export default function RequestList() {
                 {hasErrorQty && <div className="field-error">{hasErrorQty}</div>}
               </div>
 
-              {/* Notes */}
               <div>
                 <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>Notes</label>
                 <textarea
@@ -428,7 +406,6 @@ export default function RequestList() {
           )
         })}
 
-        {/* Add another item */}
         <div style={{ marginBottom: 18 }}>
           <button onClick={addItemRow}
             style={{
