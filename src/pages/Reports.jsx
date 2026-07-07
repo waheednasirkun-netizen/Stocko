@@ -1,4 +1,3 @@
-
 import { useState, useMemo, useCallback, useEffect } from "react";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -20,10 +19,27 @@ const REPORT_TYPES = [
   { key: "inventory", label: "Inventory Summary", icon: "Boxes", color: "#7c3aed" },
 ];
 
+const DATE_PRESETS = [
+  { label: "Today", days: 0 },
+  { label: "Yesterday", days: 1 },
+  { label: "Last 7 Days", days: 7 },
+  { label: "Last 30 Days", days: 30 },
+  { label: "This Week", type: "week" },
+  { label: "This Month", type: "month" },
+  { label: "Last Month", type: "lastMonth" },
+  { label: "This Year", type: "year" },
+  { label: "Custom Range", type: "custom" },
+];
+
 const fmtDate = (str) => {
   if (!str) return "—";
   const d = new Date(str);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+
+const fmtDateShort = (date) => {
+  if (!date) return "—";
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
 
 const fmtDateTime = (str) => {
@@ -55,11 +71,11 @@ function downloadCSV(filename, rows) {
         .map((h) => {
           const val = row[h] ?? "";
           const s = String(val).replace(/"/g, '""');
-          return s.includes(",") || s.includes('"') || s.includes("\\n") ? `"${s}"` : s;
+          return s.includes(",") || s.includes('"') || s.includes("\n") ? `"${s}"` : s;
         })
         .join(",")
     ),
-  ].join("\\n");
+  ].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -69,6 +85,51 @@ function downloadCSV(filename, rows) {
   URL.revokeObjectURL(url);
 }
 
+/* ── Date Preset Helper ── */
+const getPresetDates = (preset) => {
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+
+  switch (preset.type || "days") {
+    case "days": {
+      const end = new Date(today);
+      const start = new Date(today);
+      start.setDate(start.getDate() - preset.days);
+      start.setHours(0, 0, 0, 0);
+      return { start, end };
+    }
+    case "week": {
+      const end = new Date(today);
+      const start = new Date(today);
+      const day = start.getDay();
+      start.setDate(start.getDate() - day);
+      start.setHours(0, 0, 0, 0);
+      return { start, end };
+    }
+    case "month": {
+      const end = new Date(today);
+      const start = new Date(today.getFullYear(), today.getMonth(), 1);
+      start.setHours(0, 0, 0, 0);
+      return { start, end };
+    }
+    case "lastMonth": {
+      const end = new Date(today.getFullYear(), today.getMonth(), 0);
+      end.setHours(23, 59, 59, 999);
+      const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      start.setHours(0, 0, 0, 0);
+      return { start, end };
+    }
+    case "year": {
+      const end = new Date(today);
+      const start = new Date(today.getFullYear(), 0, 1);
+      start.setHours(0, 0, 0, 0);
+      return { start, end };
+    }
+    default:
+      return { start: new Date(today.getTime() - 30 * 86400000), end: today };
+  }
+};
+
 export default function Reports() {
   const { transactions = [], requests = [], inventory = [], theme, showToast } = useApp();
 
@@ -76,6 +137,7 @@ export default function Reports() {
   const [reportType, setReportType] = useState("stock");
 
   /* ── Date range ── */
+  const [datePreset, setDatePreset] = useState("Last 30 Days");
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 30);
@@ -98,6 +160,17 @@ export default function Reports() {
     setDeptFilter("All");
     setSearch("");
   }, [reportType]);
+
+  /* ── Handle date preset change ── */
+  const handleDatePresetChange = useCallback((presetLabel) => {
+    setDatePreset(presetLabel);
+    const preset = DATE_PRESETS.find((p) => p.label === presetLabel);
+    if (preset && preset.type !== "custom") {
+      const { start, end } = getPresetDates(preset);
+      setStartDate(start);
+      setEndDate(end);
+    }
+  }, []);
 
   const inDateRange = useCallback(
     (dateStr) => {
@@ -129,26 +202,50 @@ export default function Reports() {
     return ["All", ...Array.from(set).sort()];
   }, [requests]);
 
+  /* ═════════════════════════════════════════════════════════════════
+     FILTERED TRANSACTIONS (for stock movement)
+  ═════════════════════════════════════════════════════════════════ */
+  const filteredTransactions = useMemo(() => {
+    return (transactions || [])
+      .filter((t) => inDateRange(t.created_at || t.date))
+      .filter((t) => itemFilter === "All" || (t.item_name || t.item) === itemFilter)
+      .filter((t) => typeFilter === "All" || t.type === typeFilter)
+      .filter((t) => !search || (t.item_name || t.item || "").toLowerCase().includes(search.toLowerCase()))
+      .filter((t) => t.type === "Stock IN" || t.type === "Stock OUT" || t.type === "Wastage");
+  }, [transactions, inDateRange, itemFilter, typeFilter, search]);
+
+  /* ═════════════════════════════════════════════════════════════════
+     STOCK IN / STOCK OUT CALCULATIONS
+  ═════════════════════════════════════════════════════════════════ */
+  const stockInTotal = useMemo(() => {
+    return filteredTransactions
+      .filter((t) => t.type === "Stock IN")
+      .reduce((sum, t) => sum + Math.abs(Number(t.quantity || t.qty || 0)), 0);
+  }, [filteredTransactions]);
+
+  const stockOutTotal = useMemo(() => {
+    return filteredTransactions
+      .filter((t) => t.type === "Stock OUT" || t.type === "Wastage")
+      .reduce((sum, t) => sum + Math.abs(Number(t.quantity || t.qty || 0)), 0);
+  }, [filteredTransactions]);
+
   /* ── Filtered data ── */
   const filteredData = useMemo(() => {
     let data = [];
 
     if (reportType === "stock") {
-      data = (transactions || [])
-        .filter((t) => inDateRange(t.created_at || t.date))
-        .filter((t) => itemFilter === "All" || (t.item_name || t.item) === itemFilter)
-        .filter((t) => typeFilter === "All" || t.type === typeFilter)
-        .filter((t) => !search || (t.item_name || t.item || "").toLowerCase().includes(search.toLowerCase()))
-        .map((t) => ({
-          Date: fmtDateTime(t.created_at || t.date),
-          Item: t.item_name || t.item || "—",
-          Type: t.type || "—",
-          Qty: fmtNum(Math.abs(Number(t.quantity || t.qty || 0))),
-          Unit: t.unit || "—",
-          Source: t.source || "—",
-          By: t.recorded_by_name || t.created_by_name || "—",
-          Notes: t.notes || "",
-        }));
+      data = filteredTransactions.map((t) => ({
+        Date: fmtDateTime(t.created_at || t.date),
+        "Movement Type": t.type || "—",
+        Item: t.item_name || t.item || "—",
+        Department: t.department || "—",
+        Quantity: fmtNum(Math.abs(Number(t.quantity || t.qty || 0))),
+        Unit: t.unit || "—",
+        User: t.recorded_by_name || t.created_by_name || "—",
+        Reference: t.reference || t.source || "—",
+        Status: t.status || "Completed",
+        Notes: t.notes || "",
+      }));
     }
 
     else if (reportType === "requests") {
@@ -211,23 +308,23 @@ export default function Reports() {
     }
 
     return data;
-  }, [reportType, transactions, requests, inventory, inDateRange, itemFilter, typeFilter, statusFilter, deptFilter, search]);
+  }, [reportType, filteredTransactions, requests, inventory, inDateRange, itemFilter, statusFilter, deptFilter, search]);
 
   /* ── Summary stats ── */
   const summary = useMemo(() => {
     if (reportType === "stock") {
       const stockInQty = filteredData
-        .filter((r) => r.Type === "Stock IN")
-        .reduce((s, r) => s + Number(r.Qty.replace(/,/g, "") || 0), 0);
+        .filter((r) => r["Movement Type"] === "Stock IN")
+        .reduce((s, r) => s + Number(r.Quantity.replace(/,/g, "") || 0), 0);
       const stockOutQty = filteredData
-        .filter((r) => r.Type === "Stock OUT")
-        .reduce((s, r) => s + Number(r.Qty.replace(/,/g, "") || 0), 0);
+        .filter((r) => r["Movement Type"] === "Stock OUT")
+        .reduce((s, r) => s + Number(r.Quantity.replace(/,/g, "") || 0), 0);
       const wastageQty = filteredData
-        .filter((r) => r.Type === "Wastage")
-        .reduce((s, r) => s + Number(r.Qty.replace(/,/g, "") || 0), 0);
+        .filter((r) => r["Movement Type"] === "Wastage")
+        .reduce((s, r) => s + Number(r.Quantity.replace(/,/g, "") || 0), 0);
       return [
-        { label: "Stock IN", value: fmtNum(stockInQty), color: "#16a34a", bg: "#dcfce7", icon: "TrendingUp" },
-        { label: "Stock OUT", value: fmtNum(stockOutQty), color: "#dc2626", bg: "#fee2e2", icon: "TrendingDown" },
+        { label: "Stock IN", value: fmtNum(stockInQty), color: "#22c55e", bg: "#dcfce7", icon: "PackagePlus" },
+        { label: "Stock OUT", value: fmtNum(stockOutQty), color: "#3b82f6", bg: "#dbeafe", icon: "PackageMinus" },
         { label: "Wastage", value: fmtNum(wastageQty), color: "#ca8a04", bg: "#fef9c3", icon: "AlertTriangle" },
         { label: "Records", value: filteredData.length, color: "#2563eb", bg: "#dbeafe", icon: "FileText" },
       ];
@@ -269,20 +366,18 @@ export default function Reports() {
       const key = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
       map.set(key, { date: key, in: 0, out: 0 });
     }
-    (transactions || [])
-      .filter((t) => inDateRange(t.created_at || t.date))
-      .forEach((t) => {
-        const d = new Date(t.created_at || t.date);
-        const key = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        if (map.has(key)) {
-          const entry = map.get(key);
-          const qty = Math.abs(Number(t.quantity || t.qty || 0));
-          if (t.type === "Stock IN") entry.in += qty;
-          else if (t.type === "Stock OUT" || t.type === "Wastage") entry.out += qty;
-        }
-      });
+    filteredTransactions.forEach((t) => {
+      const d = new Date(t.created_at || t.date);
+      const key = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      if (map.has(key)) {
+        const entry = map.get(key);
+        const qty = Math.abs(Number(t.quantity || t.qty || 0));
+        if (t.type === "Stock IN") entry.in += qty;
+        else if (t.type === "Stock OUT" || t.type === "Wastage") entry.out += qty;
+      }
+    });
     return Array.from(map.values());
-  }, [reportType, transactions, inDateRange]);
+  }, [reportType, filteredTransactions]);
 
   const requestStatusData = useMemo(() => {
     if (reportType !== "requests") return [];
@@ -294,17 +389,15 @@ export default function Reports() {
   const topItemsData = useMemo(() => {
     if (reportType !== "stock") return [];
     const map = {};
-    (transactions || [])
-      .filter((t) => inDateRange(t.created_at || t.date))
-      .forEach((t) => {
-        const name = t.item_name || t.item || "Unknown";
-        map[name] = (map[name] || 0) + Math.abs(Number(t.quantity || t.qty || 0));
-      });
+    filteredTransactions.forEach((t) => {
+      const name = t.item_name || t.item || "Unknown";
+      map[name] = (map[name] || 0) + Math.abs(Number(t.quantity || t.qty || 0));
+    });
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6)
       .map(([name, value]) => ({ name, value }));
-  }, [reportType, transactions, inDateRange]);
+  }, [reportType, filteredTransactions]);
 
   const categoryData = useMemo(() => {
     if (reportType !== "inventory") return [];
@@ -352,6 +445,52 @@ export default function Reports() {
       .slice(0, 6);
   }, [inventory]);
 
+  /* ═════════════════════════════════════════════════════════════════
+     STOCK IN ACTIVITY — Filtered & Sorted
+  ═════════════════════════════════════════════════════════════════ */
+  const stockInActivity = useMemo(() => {
+    return (transactions || [])
+      .filter((t) => inDateRange(t.created_at || t.date))
+      .filter((t) => t.type === "Stock IN")
+      .filter((t) => itemFilter === "All" || (t.item_name || t.item) === itemFilter)
+      .filter((t) => !search || (t.item_name || t.item || "").toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => new Date(b.created_at || b.date) - new Date(a.created_at || a.date))
+      .slice(0, 8)
+      .map((t) => ({
+        title: t.item_name || t.item || "Unknown",
+        desc: `Stock In — ${fmtNum(Math.abs(Number(t.quantity || t.qty || 0)))} ${t.unit || "pcs"}`,
+        detail: t.warehouse || t.location || "Main Store",
+        user: t.recorded_by_name || t.created_by_name || "—",
+        date: t.created_at || t.date,
+        icon: "ArrowDown",
+        color: "#16a34a",
+        bg: "#dcfce7",
+      }));
+  }, [transactions, inDateRange, itemFilter, search]);
+
+  /* ═════════════════════════════════════════════════════════════════
+     STOCK OUT ACTIVITY — Filtered & Sorted
+  ═════════════════════════════════════════════════════════════════ */
+  const stockOutActivity = useMemo(() => {
+    return (transactions || [])
+      .filter((t) => inDateRange(t.created_at || t.date))
+      .filter((t) => t.type === "Stock OUT" || t.type === "Wastage")
+      .filter((t) => itemFilter === "All" || (t.item_name || t.item) === itemFilter)
+      .filter((t) => !search || (t.item_name || t.item || "").toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => new Date(b.created_at || b.date) - new Date(a.created_at || a.date))
+      .slice(0, 8)
+      .map((t) => ({
+        title: t.item_name || t.item || "Unknown",
+        desc: `${t.type} — ${fmtNum(Math.abs(Number(t.quantity || t.qty || 0)))} ${t.unit || "pcs"}`,
+        detail: t.department || t.destination || "—",
+        user: t.recorded_by_name || t.created_by_name || "—",
+        date: t.created_at || t.date,
+        icon: "ArrowUp",
+        color: "#3b82f6",
+        bg: "#dbeafe",
+      }));
+  }, [transactions, inDateRange, itemFilter, search]);
+
   /* ── Export ── */
   const handleExportCSV = () => {
     if (!filteredData.length) {
@@ -359,14 +498,16 @@ export default function Reports() {
       return;
     }
     const typeLabel = REPORT_TYPES.find((r) => r.key === reportType)?.label || "Report";
-    const filename = `${typeLabel.replace(/\\s+/g, "_")}_${startDate.toISOString().split("T")[0]}_to_${endDate.toISOString().split("T")[0]}.csv`;
+    const filename = `${typeLabel.replace(/\s+/g, "_")}_${startDate.toISOString().split("T")[0]}_to_${endDate.toISOString().split("T")[0]}.csv`;
     downloadCSV(filename, filteredData);
     showToast("success", "Exported", `${filteredData.length} rows exported to CSV`);
   };
 
   const handleResetFilters = () => {
-    setStartDate(() => { const d = new Date(); d.setDate(d.getDate() - 30); return d; });
-    setEndDate(new Date());
+    setDatePreset("Last 30 Days");
+    const { start, end } = getPresetDates(DATE_PRESETS.find((p) => p.label === "Last 30 Days"));
+    setStartDate(start);
+    setEndDate(end);
     setItemFilter("All");
     setTypeFilter("All");
     setStatusFilter("All");
@@ -375,6 +516,7 @@ export default function Reports() {
   };
 
   const hasActiveFilters =
+    datePreset !== "Last 30 Days" ||
     itemFilter !== "All" ||
     typeFilter !== "All" ||
     statusFilter !== "All" ||
@@ -423,7 +565,7 @@ export default function Reports() {
             Reports
           </h1>
           <p style={{ margin: "6px 0 0 0", color: theme.textMuted, fontSize: 14 }}>
-            {filteredData.length} records · {fmtDate(startDate)} – {fmtDate(endDate)}
+            {filteredData.length} records · {fmtDateShort(startDate)} – {fmtDateShort(endDate)}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -470,7 +612,12 @@ export default function Reports() {
       {/* ═══════════════════════════════════════
             SUMMARY CARDS
       ═══════════════════════════════════════ */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14, marginBottom: 20 }}>
+      <div style={{ 
+        display: "grid", 
+        gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", 
+        gap: 14, 
+        marginBottom: 20 
+      }}>
         {summary.map((s, i) => (
           <Card key={i} style={{ padding: "18px 20px", borderRadius: 14, borderLeft: `4px solid ${s.color}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -491,22 +638,50 @@ export default function Reports() {
       </div>
 
       {/* ═══════════════════════════════════════
-            FILTERS BAR
+            ADVANCED FILTERS BAR
       ═══════════════════════════════════════ */}
       <Card style={{ marginBottom: 20, padding: "16px 20px", borderRadius: 14 }}>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "end" }}>
-          {/* Date From */}
+          {/* Date Preset */}
           <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>From</label>
-            <DatePicker selected={startDate} onChange={setStartDate} dateFormat="dd MMM yyyy" className="rs-datepicker"
-              style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }} />
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Date Range</label>
+            <select 
+              value={datePreset} 
+              onChange={(e) => handleDatePresetChange(e.target.value)}
+              style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, minWidth: 160, fontFamily: "inherit" }}
+            >
+              {DATE_PRESETS.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
+            </select>
           </div>
-          {/* Date To */}
-          <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>To</label>
-            <DatePicker selected={endDate} onChange={setEndDate} dateFormat="dd MMM yyyy" className="rs-datepicker"
-              style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }} />
-          </div>
+
+          {/* Custom Date Range */}
+          {datePreset === "Custom Range" && (
+            <>
+              <div>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>From</label>
+                <DatePicker 
+                  selected={startDate} 
+                  onChange={setStartDate} 
+                  dateFormat="dd MMM yyyy" 
+                  className="rs-datepicker"
+                  maxDate={endDate}
+                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }} 
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>To</label>
+                <DatePicker 
+                  selected={endDate} 
+                  onChange={setEndDate} 
+                  dateFormat="dd MMM yyyy" 
+                  className="rs-datepicker"
+                  minDate={startDate}
+                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }} 
+                />
+              </div>
+            </>
+          )}
+
           {/* Item */}
           <div>
             <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Item</label>
@@ -515,19 +690,20 @@ export default function Reports() {
               {uniqueItems.map((i) => <option key={i} value={i}>{i}</option>)}
             </select>
           </div>
-          {/* Type (stock only) */}
+
+          {/* Movement Type (stock only) */}
           {reportType === "stock" && (
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Type</label>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Movement Type</label>
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
                 style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, minWidth: 150, fontFamily: "inherit" }}>
                 <option>All</option>
                 <option>Stock IN</option>
                 <option>Stock OUT</option>
-                <option>Wastage</option>
               </select>
             </div>
           )}
+
           {/* Status (requests only) */}
           {reportType === "requests" && (
             <div>
@@ -538,6 +714,7 @@ export default function Reports() {
               </select>
             </div>
           )}
+
           {/* Dept (requests only) */}
           {reportType === "requests" && (
             <div>
@@ -548,6 +725,7 @@ export default function Reports() {
               </select>
             </div>
           )}
+
           {/* Search */}
           <div style={{ flex: 1, minWidth: 200 }}>
             <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Search</label>
@@ -557,6 +735,7 @@ export default function Reports() {
                 style={{ width: "100%", padding: "9px 12px 9px 36px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit", boxSizing: "border-box" }} />
             </div>
           </div>
+
           {/* Reset */}
           {hasActiveFilters && (
             <button onClick={handleResetFilters} style={{ padding: "9px 16px", fontSize: 13, fontWeight: 600, color: "#2563eb", background: "transparent", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>
@@ -578,11 +757,11 @@ export default function Reports() {
                 <Ic n="Activity" size={16} color={theme.text} /> Stock Movement Trend
               </h2>
               <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "#16a34a", fontWeight: 600 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#16a34a" }} /> IN
+                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "#22c55e", fontWeight: 600 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e" }} /> Stock In
                 </span>
-                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "#dc2626", fontWeight: 600 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#dc2626" }} /> OUT
+                <span style={{ display: "flex", alignItems: "center", gap: 4, color: "#3b82f6", fontWeight: 600 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#3b82f6" }} /> Stock Out
                 </span>
               </div>
             </div>
@@ -590,37 +769,36 @@ export default function Reports() {
               <ResponsiveContainer>
                 <AreaChart data={stockTrendData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="colorIn" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#16a34a" stopOpacity={0.15} /><stop offset="95%" stopColor="#16a34a" stopOpacity={0} /></linearGradient>
-                    <linearGradient id="colorOut" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#dc2626" stopOpacity={0.15} /><stop offset="95%" stopColor="#dc2626" stopOpacity={0} /></linearGradient>
+                    <linearGradient id="colorIn" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#22c55e" stopOpacity={0.15} /><stop offset="95%" stopColor="#22c55e" stopOpacity={0} /></linearGradient>
+                    <linearGradient id="colorOut" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3b82f6" stopOpacity={0.15} /><stop offset="95%" stopColor="#3b82f6" stopOpacity={0} /></linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke={theme.border} vertical={false} />
                   <XAxis dataKey="date" tick={{ fontSize: 11, fill: theme.textMuted }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 11, fill: theme.textMuted }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12, color: theme.text }} />
-                  <Area type="monotone" dataKey="in" stroke="#16a34a" strokeWidth={2} fill="url(#colorIn)" dot={{ r: 3, fill: "#16a34a", strokeWidth: 0 }} activeDot={{ r: 5 }} />
-                  <Area type="monotone" dataKey="out" stroke="#dc2626" strokeWidth={2} fill="url(#colorOut)" dot={{ r: 3, fill: "#dc2626", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                  <Area type="monotone" dataKey="in" name="Stock In" stroke="#22c55e" strokeWidth={2} fill="url(#colorIn)" dot={{ r: 3, fill: "#22c55e", strokeWidth: 0 }} activeDot={{ r: 5 }} />
+                  <Area type="monotone" dataKey="out" name="Stock Out" stroke="#3b82f6" strokeWidth={2} fill="url(#colorOut)" dot={{ r: 3, fill: "#3b82f6", strokeWidth: 0 }} activeDot={{ r: 5 }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </Card>
 
-          {/* Pie Chart */}
+          {/* Quick Insights */}
           <Card style={{ padding: 22, borderRadius: 14 }}>
             <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
-              <Ic n="PieChart" size={16} color={theme.text} /> Distribution
+              <Ic n="Zap" size={16} color={theme.text} /> Quick Insights
             </h2>
-            <div style={{ width: "100%", height: 240 }}>
-              <ResponsiveContainer>
-                <PieChart>
-                  <Pie data={[
-                    { name: "Stock IN", value: stockTrendData.reduce((s, d) => s + d.in, 0) },
-                    { name: "Stock OUT", value: stockTrendData.reduce((s, d) => s + d.out, 0) },
-                  ]} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                    <Cell fill="#16a34a" /><Cell fill="#dc2626" />
-                  </Pie>
-                  <Tooltip contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12, color: theme.text }} />
-                </PieChart>
-              </ResponsiveContainer>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ padding: 14, borderRadius: 10, background: "#dcfce7" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#22c55e", letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 4 }}>🟢 Stock In</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#22c55e" }}>{fmtNum(stockInTotal)}</div>
+                <div style={{ fontSize: 12, color: "#16a34a", marginTop: 2 }}>Total Quantity</div>
+              </div>
+              <div style={{ padding: 14, borderRadius: 10, background: "#dbeafe" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#3b82f6", letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 4 }}>🔵 Stock Out</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: "#3b82f6" }}>{fmtNum(stockOutTotal)}</div>
+                <div style={{ fontSize: 12, color: "#2563eb", marginTop: 2 }}>Total Quantity</div>
+              </div>
             </div>
           </Card>
         </div>
@@ -757,7 +935,7 @@ export default function Reports() {
                   <tr key={idx} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? "transparent" : theme.bg }}>
                     {columns.map((col) => (
                       <td key={col} style={{ padding: "10px 16px", color: theme.text, fontWeight: col === "Item" ? 600 : 400, whiteSpace: "nowrap" }}>
-                        {col === "Status" || col === "Priority" || col === "Type" ? statusBadge(row[col]) : row[col]}
+                        {col === "Status" || col === "Priority" || col === "Movement Type" ? statusBadge(row[col]) : row[col]}
                       </td>
                     ))}
                   </tr>
@@ -769,44 +947,71 @@ export default function Reports() {
       </Card>
 
       {/* ═══════════════════════════════════════
-            BOTTOM ROW: ACTIVITY + TOP ITEMS
+            BOTTOM ROW: STOCK ACTIVITIES + TOP ITEMS
       ═══════════════════════════════════════ */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 20 }}>
-        {/* Recent Activity */}
-        <Card style={{ padding: 22, borderRadius: 14 }}>
-          <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
-            <Ic n="Clock" size={16} color={theme.text} /> Recent Activity
-          </h2>
-          {recentActivity.length === 0 ? (
-            <EmptyState message="No recent activity." />
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {recentActivity.map((act, idx) => (
-                <div key={idx} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: idx < recentActivity.length - 1 ? `1px solid ${theme.border}` : "none" }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 10, background: act.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <Ic n={act.icon} size={16} color={act.color} />
+      {reportType === "stock" ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 20 }}>
+          {/* Stock In Activity */}
+          <Card style={{ padding: 22, borderRadius: 14 }}>
+            <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+              <Ic n="PackagePlus" size={16} color="#16a34a" /> Stock In Activity
+            </h2>
+            {stockInActivity.length === 0 ? (
+              <EmptyState message="No stock in activity." />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {stockInActivity.map((act, idx) => (
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: idx < stockInActivity.length - 1 ? `1px solid ${theme.border}` : "none" }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: act.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Ic n={act.icon} size={16} color={act.color} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{act.title}</div>
+                      <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>{act.desc}</div>
+                      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Warehouse: {act.detail}</div>
+                      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>By: {act.user}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap", flexShrink: 0 }}>{fmtAgo(act.date)}</div>
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{act.title}</div>
-                    <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>{act.desc}</div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Stock Out Activity */}
+          <Card style={{ padding: 22, borderRadius: 14 }}>
+            <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+              <Ic n="PackageMinus" size={16} color="#3b82f6" /> Stock Out Activity
+            </h2>
+            {stockOutActivity.length === 0 ? (
+              <EmptyState message="No stock out activity." />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {stockOutActivity.map((act, idx) => (
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: idx < stockOutActivity.length - 1 ? `1px solid ${theme.border}` : "none" }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: act.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Ic n={act.icon} size={16} color={act.color} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{act.title}</div>
+                      <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>{act.desc}</div>
+                      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>Issued to: {act.detail}</div>
+                      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 1 }}>By: {act.user}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap", flexShrink: 0 }}>{fmtAgo(act.date)}</div>
                   </div>
-                  <div style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap", flexShrink: 0 }}>{fmtAgo(act.date)}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
+                ))}
+              </div>
+            )}
+          </Card>
 
-        {/* Top Moving Items (stock) or Top Requested (requests) or Categories (inventory) */}
-        <Card style={{ padding: 22, borderRadius: 14 }}>
-          <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
-            <Ic n="TrendingUp" size={16} color={theme.text} />
-            {reportType === "stock" ? "Top Moving Items" : reportType === "requests" ? "Top Requested" : "Top Categories"}
-          </h2>
-
-          {reportType === "stock" && topItemsData.length === 0 && <EmptyState message="No item movement found." />}
-          {reportType === "stock" &&
-            topItemsData.map((item, idx) => (
+          {/* Top Moving Items */}
+          <Card style={{ padding: 22, borderRadius: 14 }}>
+            <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+              <Ic n="TrendingUp" size={16} color={theme.text} /> Top Moving Items
+            </h2>
+            {topItemsData.length === 0 && <EmptyState message="No item movement found." />}
+            {topItemsData.map((item, idx) => (
               <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: idx < topItemsData.length - 1 ? `1px solid ${theme.border}` : "none" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <div style={{ width: 26, height: 26, borderRadius: 6, background: idx < 3 ? "#fef3c7" : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: idx < 3 ? "#d97706" : "#94a3b8", flexShrink: 0 }}>
@@ -817,41 +1022,77 @@ export default function Reports() {
                 <div style={{ fontWeight: 700, color: theme.text, fontSize: 13, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtNum(item.value)}</div>
               </div>
             ))}
-
-          {reportType === "requests" && (
-            (() => {
-              const reqCounts = {};
-              (requests || []).forEach((r) => {
-                (r.request_items || []).forEach((ri) => {
-                  const name = ri.name || "Unknown";
-                  reqCounts[name] = (reqCounts[name] || 0) + Number(ri.qty || 0);
-                });
-              });
-              const topReq = Object.entries(reqCounts).sort((a, b) => b[1] - a[1]).slice(0, 6);
-              return topReq.length === 0 ? <EmptyState message="No request data." /> : topReq.map(([name, qty], idx) => (
-                <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: idx < topReq.length - 1 ? `1px solid ${theme.border}` : "none" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 26, height: 26, borderRadius: 6, background: idx < 3 ? "#fef3c7" : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: idx < 3 ? "#d97706" : "#94a3b8", flexShrink: 0 }}>{idx + 1}</div>
-                    <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+          </Card>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 20 }}>
+          {/* Recent Activity */}
+          <Card style={{ padding: 22, borderRadius: 14 }}>
+            <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+              <Ic n="Clock" size={16} color={theme.text} /> Recent Activity
+            </h2>
+            {recentActivity.length === 0 ? (
+              <EmptyState message="No recent activity." />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {recentActivity.map((act, idx) => (
+                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: idx < recentActivity.length - 1 ? `1px solid ${theme.border}` : "none" }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 10, background: act.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Ic n={act.icon} size={16} color={act.color} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{act.title}</div>
+                      <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>{act.desc}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap", flexShrink: 0 }}>{fmtAgo(act.date)}</div>
                   </div>
-                  <div style={{ fontWeight: 700, color: theme.text, fontSize: 13, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtNum(qty)}</div>
-                </div>
-              ));
-            })()
-          )}
-
-          {reportType === "inventory" &&
-            categoryData.map((cat, idx) => (
-              <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: idx < categoryData.length - 1 ? `1px solid ${theme.border}` : "none" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ width: 26, height: 26, borderRadius: 6, background: idx < 3 ? "#ede9fe" : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: idx < 3 ? "#7c3aed" : "#94a3b8", flexShrink: 0 }}>{idx + 1}</div>
-                  <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cat.name}</div>
-                </div>
-                <div style={{ fontWeight: 700, color: theme.text, fontSize: 13, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtNum(cat.value)}</div>
+                ))}
               </div>
-            ))}
-        </Card>
-      </div>
+            )}
+          </Card>
+
+          {/* Top Requested / Top Categories */}
+          <Card style={{ padding: 22, borderRadius: 14 }}>
+            <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+              <Ic n="TrendingUp" size={16} color={theme.text} />
+              {reportType === "requests" ? "Top Requested" : "Top Categories"}
+            </h2>
+
+            {reportType === "requests" && (
+              (() => {
+                const reqCounts = {};
+                (requests || []).forEach((r) => {
+                  (r.request_items || []).forEach((ri) => {
+                    const name = ri.name || "Unknown";
+                    reqCounts[name] = (reqCounts[name] || 0) + Number(ri.qty || 0);
+                  });
+                });
+                const topReq = Object.entries(reqCounts).sort((a, b) => b[1] - a[1]).slice(0, 6);
+                return topReq.length === 0 ? <EmptyState message="No request data." /> : topReq.map(([name, qty], idx) => (
+                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: idx < topReq.length - 1 ? `1px solid ${theme.border}` : "none" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: 6, background: idx < 3 ? "#fef3c7" : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: idx < 3 ? "#d97706" : "#94a3b8", flexShrink: 0 }}>{idx + 1}</div>
+                      <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
+                    </div>
+                    <div style={{ fontWeight: 700, color: theme.text, fontSize: 13, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtNum(qty)}</div>
+                  </div>
+                ));
+              })()
+            )}
+
+            {reportType === "inventory" &&
+              categoryData.map((cat, idx) => (
+                <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: idx < categoryData.length - 1 ? `1px solid ${theme.border}` : "none" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 26, height: 26, borderRadius: 6, background: idx < 3 ? "#ede9fe" : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: idx < 3 ? "#7c3aed" : "#94a3b8", flexShrink: 0 }}>{idx + 1}</div>
+                    <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cat.name}</div>
+                  </div>
+                  <div style={{ fontWeight: 700, color: theme.text, fontSize: 13, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtNum(cat.value)}</div>
+                </div>
+              ))}
+          </Card>
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════
             FOOTER
