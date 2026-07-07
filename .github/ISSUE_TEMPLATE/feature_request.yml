@@ -1,0 +1,26 @@
+---
+name: Feature Request
+about: Suggest a new feature or enhancement
+title: '[Feature] '
+labels: enhancement
+assignees: ''
+---
+
+## Summary
+Brief description of the feature.
+
+## Problem / Motivation
+What problem does this solve? Who benefits?
+
+## Proposed Solution
+Describe how you'd like this to work.
+
+## Alternatives Considered
+Other approaches you've thought about.
+
+## Acceptance Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## Additional Context
+Mockups, references, or related issues.
