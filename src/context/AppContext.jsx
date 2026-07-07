@@ -35,7 +35,7 @@ export function AppProvider({ children }) {
   const [systemMsg,     setSystemMsg]     = useState('System is currently under maintenance.')
   const [customUnits,   setCustomUnits]   = useState([])
   const [loading,       setLoading]       = useState(false)
-
+  const [categories,   setCategories]            = useState([])
   // ── Business data ──────────────────────────────────────────────────────────
   const [transactions,          setTransactions]          = useState([])
   const [requests,              setRequests]              = useState([])
@@ -511,6 +511,70 @@ export function AppProvider({ children }) {
       return { success: false, error }
     }
   }, [showToast, fetchRequests])
+  
+  // ── Categories ─────────────────────────────────────────────────────────────
+  const fetchCategories = useCallback(async () => {
+    if (!user?.branch_id) return
+    try {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('branch_id', user.branch_id)
+        .order('name', { ascending: true })
+      if (error) throw error
+      setCategories(data || [])
+    } catch (err) {
+      console.error('[AppContext] fetchCategories error:', err)
+      showToast('error', 'Error loading categories', err.message)
+    }
+  }, [user?.branch_id, showToast])
+
+  const createCategory = useCallback(async (cat) => {
+    try {
+      const { data, error } = await supabase
+        .from('categories')
+        .insert({ ...cat, branch_id: user?.branch_id, created_by: user?.id })
+        .select()
+        .single()
+      if (error) throw error
+      setCategories(prev => [...prev, data])
+      showToast('success', 'Category Created', data.name)
+      return data
+    } catch (err) {
+      showToast('error', 'Failed', err.message)
+      throw err
+    }
+  }, [user, showToast])
+
+  const updateCategory = useCallback(async (id, updates) => {
+    try {
+      const { data, error } = await supabase
+        .from('categories')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single()
+      if (error) throw error
+      setCategories(prev => prev.map(c => c.id === id ? { ...c, ...data } : c))
+      showToast('success', 'Category Updated', data.name)
+      return data
+    } catch (err) {
+      showToast('error', 'Failed', err.message)
+      throw err
+    }
+  }, [showToast])
+
+  const deleteCategory = useCallback(async (id) => {
+    try {
+      const { error } = await supabase.from('categories').delete().eq('id', id)
+      if (error) throw error
+      setCategories(prev => prev.filter(c => c.id !== id))
+      showToast('info', 'Category Deleted', '')
+    } catch (err) {
+      showToast('error', 'Failed', err.message)
+      throw err
+    }
+  }, [showToast])
 
   // ── Create Notification ────────────────────────────────────────────────
   const createNotification = useCallback(async ({ type, title, message, link }) => {
@@ -598,6 +662,7 @@ export function AppProvider({ children }) {
 
       // Load requests from Supabase
       await fetchRequests()
+            await fetchCategories()
 
       setDataLoaded(true)
       console.log('[AppContext] loadAllData complete ✓', {
@@ -868,6 +933,7 @@ export function AppProvider({ children }) {
     createActivityLog,
     // Templates, Suppliers, Users, etc.
     createTemplate, updateTemplate, deleteTemplate,
+        categories, fetchCategories, createCategory, updateCategory, deleteCategory,
     createSupplier, updateSupplier, deleteSupplier,
     createUser, updateUser, deleteUser,
     createProcurement, updateProcurementStatus, deleteProcurement,
