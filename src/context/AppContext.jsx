@@ -315,21 +315,44 @@ export function AppProvider({ children }) {
 
       if (fetchError) throw fetchError
 
-      // Reduce inventory for each item
-      for (const item of (req.request_items || [])) {
-        const { data: invItem } = await supabase
-          .from('inventory')
-          .select('*')
-          .eq('branch_id', user.branch_id)
-          .ilike('name', item.name)
-          .single()
+      const items = req.request_items || []
+      if (items.length === 0) {
+        throw new Error('No items found on this request')
+      }
 
-        if (invItem) {
-          const newQty = Math.max(0, Number(invItem.quantity) - Number(item.qty))
-          await supabase
-            .from('inventory')
-            .update({ quantity: newQty, updated_at: new Date().toISOString() })
-            .eq('id', invItem.id)
+      // Deduct inventory for each item before updating request status
+      for (const item of items) {
+        const qty = Number(item.qty) || 0
+        if (qty <= 0) continue
+
+        const { data: txnData, error: stockError } = await transactionsApi.stockOut({
+          item: item.name,
+          qty,
+          unit: item.unit || 'pcs',
+          type: 'Fulfillment',
+          notes: `Fulfilled request from ${req.department || 'department'}`,
+          branchId: user.branch_id,
+          userId: user.id,
+          userName: user.name,
+        })
+
+        if (stockError) {
+          throw new Error(`Failed to deduct ${item.name}: ${stockError.message}`)
+        }
+
+        if (txnData) {
+          setTransactions(prev => [txnData, ...prev])
+        }
+
+        if (item.id) {
+          const { error: itemError } = await supabase
+            .from('request_items')
+            .update({ fulfilled_qty: qty })
+            .eq('id', item.id)
+
+          if (itemError) {
+            throw new Error(`Failed to update ${item.name}: ${itemError.message}`)
+          }
         }
       }
 
@@ -357,6 +380,7 @@ export function AppProvider({ children }) {
       })
 
       await fetchRequests()
+      showToast('success', 'Request Fulfilled', 'Inventory has been updated')
       return { success: true }
 
     } catch (error) {
@@ -367,29 +391,98 @@ export function AppProvider({ children }) {
   }, [user, showToast, fetchRequests])
 
   // ── Partial Fulfill Request ────────────────────────────────────────────
-  const partialFulfillRequest = useCallback(async (id) => {
+  const partialFulfillRequest = useCallback(async (id, fulfilledItems = []) => {
     try {
+      if (!Array.isArray(fulfilledItems) || fulfilledItems.length === 0) {
+        throw new Error('No fulfilled items provided')
+      }
+
+      const { data: req, error: fetchError } = await supabase
+        .from('requests')
+        .select(`*, request_items (*)`)
+        .eq('id', id)
+        .single()
+
+      if (fetchError) throw fetchError
+
+      for (const { itemId, qty } of fulfilledItems) {
+        const item = (req.request_items || []).find(ri => ri.id === itemId)
+        if (!item) {
+          throw new Error('Request item not found')
+        }
+
+        const deductQty = Number(qty) || 0
+        if (deductQty <= 0) continue
+
+        const { data: txnData, error: stockError } = await transactionsApi.stockOut({
+          item: item.name,
+          qty: deductQty,
+          unit: item.unit || 'pcs',
+          type: 'Fulfillment',
+          notes: `Partially fulfilled request from ${req.department || 'department'}`,
+          branchId: user.branch_id,
+          userId: user.id,
+          userName: user.name,
+        })
+
+        if (stockError) {
+          throw new Error(`Failed to deduct ${item.name}: ${stockError.message}`)
+        }
+
+        if (txnData) {
+          setTransactions(prev => [txnData, ...prev])
+        }
+
+        const newFulfilled = Number(item.fulfilled_qty || 0) + deductQty
+        const { error: itemError } = await supabase
+          .from('request_items')
+          .update({ fulfilled_qty: newFulfilled })
+          .eq('id', itemId)
+
+        if (itemError) {
+          throw new Error(`Failed to update ${item.name}: ${itemError.message}`)
+        }
+      }
+
+      const allFulfilled = (req.request_items || []).every(ri => {
+        const fulfilled = fulfilledItems.find(fi => fi.itemId === ri.id)
+        const addedQty = Number(fulfilled?.qty) || 0
+        return Number(ri.fulfilled_qty || 0) + addedQty >= Number(ri.qty || 0)
+      })
+
       const { error } = await supabase
         .from('requests')
-        .update({ status: 'Partially Fulfilled' })
+        .update({
+          status: allFulfilled ? 'Completed' : 'Partially Fulfilled',
+          completed_at: allFulfilled ? new Date().toISOString() : null,
+        })
         .eq('id', id)
 
       if (error) throw error
 
       await createNotification({
         type: 'request_partial',
-        title: 'Request Partially Fulfilled',
-        message: `Request is partially fulfilled`,
+        title: allFulfilled ? 'Request Fulfilled' : 'Request Partially Fulfilled',
+        message: allFulfilled
+          ? 'Request has been fulfilled and inventory updated'
+          : 'Request is partially fulfilled and inventory updated',
         link: '/requests',
       })
 
       await createActivityLog({
-        action: 'REQUEST_PARTIAL',
-        description: `Request was partially fulfilled`,
+        action: allFulfilled ? 'REQUEST_FULFILLED' : 'REQUEST_PARTIAL',
+        description: allFulfilled
+          ? 'Request was fulfilled and inventory updated'
+          : 'Request was partially fulfilled and inventory updated',
         metadata: { requestId: id }
       })
 
       await fetchRequests()
+      showToast(
+        'success',
+        allFulfilled ? 'Request Fulfilled' : 'Partially Fulfilled',
+        'Inventory has been updated'
+      )
       return { success: true }
 
     } catch (error) {
@@ -397,7 +490,7 @@ export function AppProvider({ children }) {
       showToast('error', 'Partial Fulfill Failed', error.message)
       return { success: false, error }
     }
-  }, [showToast, fetchRequests])
+  }, [user, showToast, fetchRequests])
 
   // ── Delete Request ────────────────────────────────────────────────────
   const deleteRequest = useCallback(async (id) => {
