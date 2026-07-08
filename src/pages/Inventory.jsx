@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
+import { supabase } from '../lib/supabase'  // ← ADD THIS IMPORT
 import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum, userCan } from '../lib/constants'
 import { inventoryApi } from '../lib/api'
@@ -60,6 +61,32 @@ export default function Inventory() {
       loadItems()
     }
   }, [transactions?.length, user?.branch_id])
+
+  /* ── Real-time inventory subscription ─────────────────────────────────── */
+  useEffect(() => {
+    if (!supabase || !user?.branch_id) return
+
+    const channel = supabase
+      .channel('inventory-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',              // Listen to INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'inventory',
+          filter: `branch_id=eq.${user.branch_id}`,  // Only this branch
+        },
+        (payload) => {
+          console.log('[Inventory] Real-time update:', payload.eventType, payload)
+          loadItems()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [supabase, user?.branch_id])
 
   async function loadItems() {
     setLoading(true)

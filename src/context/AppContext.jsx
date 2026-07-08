@@ -172,6 +172,14 @@ export function AppProvider({ children }) {
 
   // ── Create Request ─────────────────────────────────────────────────────
   const createRequest = useCallback(async ({ department, notes, items }) => {
+    const branchId = user?.branch_id || user?.branchId || null
+
+    if (!branchId) {
+      console.error('[AppContext] createRequest: No branch_id found in user:', user)
+      showToast('error', 'Branch Error', 'No branch assigned')
+      return { success: false, error: new Error('No branch') }
+    }
+
     try {
       const { data: req, error: reqError } = await supabase
         .from('requests')
@@ -179,9 +187,9 @@ export function AppProvider({ children }) {
           department,
           notes,
           status: 'Pending',
-          branch_id: user.branch_id,
-          created_by: user.id,
-          created_by_name: user.name,
+          branch_id: branchId,
+          created_by: user?.id,
+          created_by_name: user?.name || user?.full_name || 'Unknown',
         })
         .select()
         .single()
@@ -331,9 +339,9 @@ export function AppProvider({ children }) {
           unit: item.unit || 'pcs',
           type: 'Fulfillment',
           notes: `Fulfilled request from ${req.department || 'department'}`,
-          branchId: user.branch_id,
-          userId: user.id,
-          userName: user.name,
+          branchId: user?.branch_id || user?.branchId || null,
+          userId: user?.id,
+          userName: user?.name || user?.full_name || 'Unknown',
         })
 
         if (stockError) {
@@ -420,9 +428,9 @@ export function AppProvider({ children }) {
           unit: item.unit || 'pcs',
           type: 'Fulfillment',
           notes: `Partially fulfilled request from ${req.department || 'department'}`,
-          branchId: user.branch_id,
-          userId: user.id,
-          userName: user.name,
+          branchId: user?.branch_id || user?.branchId || null,
+          userId: user?.id,
+          userName: user?.name || user?.full_name || 'Unknown',
         })
 
         if (stockError) {
@@ -617,10 +625,18 @@ export function AppProvider({ children }) {
 
   // ── Load all business data ─────────────────────────────────────────────────
   const loadAllData = useCallback(async (loggedInUser) => {
-    const branchId = loggedInUser?.branch_id ?? null
+    // Make sure we have a user
+    if (!loggedInUser) {
+      console.warn('[AppContext] loadAllData: no user provided')
+      setDataLoaded(true)
+      return
+    }
+
+    const branchId = loggedInUser?.branch_id ?? loggedInUser?.branchId ?? null
 
     if (!branchId) {
-      console.warn('[AppContext] loadAllData: no branch_id — skipping fetch')
+      console.warn('[AppContext] loadAllData: no branch_id — user:', loggedInUser)
+      showToast('error', 'Branch Error', 'No branch assigned to your account. Please contact administrator.')
       setDataLoaded(true)
       return
     }
@@ -710,6 +726,11 @@ export function AppProvider({ children }) {
       }
 
       console.log('[AppContext] authenticated:', restoredUser.email)
+      console.log('[AppContext] user set:', { 
+        id: restoredUser.id, 
+        email: restoredUser.email, 
+        branch_id: restoredUser.branch_id 
+      })
       setUser(restoredUser)
       await loadAllDataRef.current(restoredUser)
       setAuthReady(true)
@@ -782,11 +803,20 @@ export function AppProvider({ children }) {
   // ── Stock IN ───────────────────────────────────────────────────────────────
   const handleStockIn = useCallback(async (formData) => {
     return withActionLock(async () => {
+      // Ensure we have branch_id
+      const branchId = user?.branch_id || user?.branchId || null
+
+      if (!branchId) {
+        console.error('[AppContext] handleStockIn: No branch_id found in user:', user)
+        showToast('error', 'Branch Error', 'No branch assigned to your account')
+        return false
+      }
+
       const { data, error } = await transactionsApi.stockIn({
         ...formData,
-        branchId: user?.branch_id,
+        branchId: branchId,
         userId:   user?.id,
-        userName: user?.name,
+        userName: user?.name || user?.full_name || 'Unknown',
       })
       if (error) { showToast('error', 'Stock IN Failed', error.message); return false }
       setTransactions(prev => [data, ...prev])

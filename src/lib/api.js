@@ -353,65 +353,73 @@ export const transactionsApi = {
   },
 
   async stockIn({ item, qty, unit, price, source, category, notes, branchId, userId, userName }) {
-  const quantity     = Math.abs(Number(qty))
-  const pricePerUnit = Math.max(0, Number(price) || 0)
-  const totalAmount  = quantity * pricePerUnit
-  const itemName     = String(item).trim()
+    // Make sure branchId is defined
+    if (!branchId) {
+      console.error('[api] stockIn: branchId is required but was not provided')
+      return wrap(null, { message: 'Branch ID is required for stock in' })
+    }
 
-  // 1. Insert transaction
-  const { data, error } = await supabase
-    .from('transactions')
-    .insert([{
-      branch_id:      branchId,
-      item_name:      itemName,
-      type:           'Stock IN',
-      quantity,
-      unit,
-      price_per_unit: pricePerUnit,
-      total_amount:   totalAmount,
-      source:         source ?? null,
-      category:       category ?? null,
-      notes:          notes ?? null,
-      recorded_by:    userId,
-      created_at:     now(),
-    }])
-    .select().single()
+    const quantity = Math.abs(Number(qty))
+    const pricePerUnit = Math.max(0, Number(price) || 0)
+    const totalAmount = quantity * pricePerUnit
+    const itemName = String(item).trim()
 
-  if (error) return wrap(null, error)
+    console.log('[api] stockIn called with:', { branchId, itemName, quantity, unit, userId })
 
-  // 2. UPDATE INVENTORY TABLE — Add stock to existing item or create new
-  const { data: existingItem } = await supabase
-    .from('inventory')
-    .select('id, quantity, unit')
-    .eq('branch_id', branchId)
-    .ilike('name', itemName)
-    .maybeSingle()
-
-  if (existingItem) {
-    const newQty = Number(existingItem.quantity || 0) + quantity
-    await supabase
-      .from('inventory')
-      .update({
-        quantity: newQty,
-        unit: unit || existingItem.unit,
-        updated_at: now(),
-      })
-      .eq('id', existingItem.id)
-  } else {
-    await supabase
-      .from('inventory')
+    // 1. Insert transaction
+    const { data, error } = await supabase
+      .from('transactions')
       .insert([{
-        branch_id,
-        name: itemName,
+        branch_id: branchId,  // Use branchId consistently
+        item_name: itemName,
+        type: 'Stock IN',
         quantity,
         unit,
+        price_per_unit: pricePerUnit,
+        total_amount: totalAmount,
+        source: source ?? null,
+        category: category ?? null,
+        notes: notes ?? null,
+        recorded_by: userId,
         created_at: now(),
-        updated_at: now(),
       }])
-  }
+      .select().single()
 
-  return wrap(data, error)
-},
+    if (error) return wrap(null, error)
+
+    // 2. UPDATE INVENTORY TABLE — Add stock to existing item or create new
+    const { data: existingItem } = await supabase
+      .from('inventory')
+      .select('id, quantity, unit')
+      .eq('branch_id', branchId)  // Use branchId consistently
+      .ilike('name', itemName)
+      .maybeSingle()
+
+    if (existingItem) {
+      const newQty = Number(existingItem.quantity || 0) + quantity
+      await supabase
+        .from('inventory')
+        .update({
+          quantity: newQty,
+          unit: unit || existingItem.unit,
+          updated_at: now(),
+        })
+        .eq('id', existingItem.id)
+    } else {
+      await supabase
+        .from('inventory')
+        .insert([{
+          branch_id: branchId,  // Use branchId consistently
+          name: itemName,
+          quantity,
+          unit,
+          created_at: now(),
+          updated_at: now(),
+        }])
+    }
+
+    return wrap(data, error)
+  },
 }
 
 // ─── DEMANDS ──────────────────────────────────────────────────────────────────
@@ -451,48 +459,101 @@ export const demandsApi = {
     return wrap(data, error)
   },
 
+  // ✅ FIXED: Enhanced stockOut with proper inventory deduction
   async stockOut({ item, qty, unit, type = 'Stock OUT', notes, branchId, userId, userName }) {
-  const quantity = Math.abs(Number(qty))
-  const itemName = String(item).trim()
+    // Validate required parameters
+    if (!branchId) {
+      console.error('[api] stockOut: branchId is required')
+      return wrap(null, { message: 'Branch ID is required for stock out' })
+    }
 
-  // 1. Insert transaction
-  const { data, error } = await supabase
-    .from('transactions')
-    .insert([{
-      branch_id:   branchId,
-      item_name:   itemName,
-      type,
-      quantity,
-      unit,
-      notes:       notes ?? null,
-      recorded_by: userId,
-      created_at:  now(),
-    }])
-    .select().single()
+    const quantity = Math.abs(Number(qty))
+    const itemName = String(item).trim()
 
-  if (error) return wrap(null, error)
+    console.log('[api] stockOut called:', { branchId, itemName, quantity, unit, type })
 
-  // 2. UPDATE INVENTORY — Subtract quantity
-  const { data: existingItem } = await supabase
-    .from('inventory')
-    .select('id, quantity')
-    .eq('branch_id', branchId)
-    .ilike('name', itemName)
-    .maybeSingle()
+    if (quantity <= 0) {
+      return wrap(null, { message: 'Quantity must be greater than 0' })
+    }
 
-  if (existingItem) {
-    const newQty = Math.max(0, Number(existingItem.quantity || 0) - quantity)
-    await supabase
+    // 1. Check if item exists in inventory
+    const { data: existingItem, error: findError } = await supabase
+      .from('inventory')
+      .select('id, quantity, unit')
+      .eq('branch_id', branchId)
+      .ilike('name', itemName)
+      .maybeSingle()
+
+    if (findError) {
+      console.error('[api] stockOut findError:', findError)
+      return wrap(null, findError)
+    }
+
+    if (!existingItem) {
+      return wrap(null, { message: `Item "${itemName}" not found in inventory` })
+    }
+
+    // 2. Check if enough stock
+    const currentQty = Number(existingItem.quantity || 0)
+    if (currentQty < quantity) {
+      return wrap(null, { 
+        message: `Insufficient stock. Available: ${currentQty} ${existingItem.unit || unit}`
+      })
+    }
+
+    // 3. Insert transaction
+    const { data: txnData, error: txnError } = await supabase
+      .from('transactions')
+      .insert([{
+        branch_id: branchId,
+        item_name: itemName,
+        type: type || 'Stock OUT',
+        quantity: quantity,
+        unit: unit || existingItem.unit || 'pcs',
+        notes: notes || null,
+        recorded_by: userId,
+        recorded_by_name: userName,
+        created_at: now(),
+      }])
+      .select()
+      .single()
+
+    if (txnError) {
+      console.error('[api] stockOut transaction error:', txnError)
+      return wrap(null, txnError)
+    }
+
+    // 4. UPDATE INVENTORY — Subtract quantity
+    const newQty = currentQty - quantity
+    const { error: updateError } = await supabase
       .from('inventory')
       .update({
         quantity: newQty,
         updated_at: now(),
       })
       .eq('id', existingItem.id)
-  }
 
-  logActivity({ branchId, userId, userName, action: 'stock_out', details: `${type}: ${quantity} ${unit} of ${item}` })
-  return wrap(data, error)
+    if (updateError) {
+      console.error('[api] stockOut update error:', updateError)
+      return wrap(null, updateError)
+    }
+
+    console.log('[api] stockOut success:', { 
+      item: itemName, 
+      deducted: quantity, 
+      remaining: newQty 
+    })
+
+    // 5. Log activity
+    logActivity({
+      branchId,
+      userId,
+      userName,
+      action: 'stock_out',
+      details: `${type || 'Stock OUT'}: ${quantity} ${unit || existingItem.unit} of ${itemName}`
+    })
+
+    return wrap(txnData, null)
   },
 }
 

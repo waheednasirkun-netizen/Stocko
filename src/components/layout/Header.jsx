@@ -21,30 +21,20 @@ const PAGE_TITLES = {
 
 export default function Header() {
   const { user, setUser, tab, setTab, dark, setDark, theme, setSidebar, sidebarOpen,
-    notifications, markAllRead, logout, inventory, showToast } = useApp()
+    notifications, markAllRead, logout, showToast } = useApp()
 
   const [showNotifs,  setShowNotifs]  = useState(false)
   const [showProfile, setShowProfile] = useState(false)
-  const [searchVal,   setSearchVal]   = useState('')
-  const [searchRes,   setSearchRes]   = useState([])
-  const [showSearch,  setShowSearch]  = useState(false)
-  const searchRef = useRef(null)
+  const notifRef = useRef(null)
+  const profileRef = useRef(null)
 
   const unread = notifications.filter(n => !n.read).length
-
-  // Search inventory
-  useEffect(() => {
-    if (!searchVal.trim()) { setSearchRes([]); return }
-    const q = searchVal.toLowerCase()
-    setSearchRes(inventory.filter(i => i.name.toLowerCase().includes(q)).slice(0, 6))
-  }, [searchVal, inventory])
 
   // Click outside to close dropdowns
   useEffect(() => {
     const handler = (e) => {
-      if (!e.target.closest('#header-notifs'))  setShowNotifs(false)
-      if (!e.target.closest('#header-profile')) setShowProfile(false)
-      if (!e.target.closest('#header-search'))  setShowSearch(false)
+      if (notifRef.current && !notifRef.current.contains(e.target)) setShowNotifs(false)
+      if (profileRef.current && !profileRef.current.contains(e.target)) setShowProfile(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -57,6 +47,11 @@ export default function Header() {
   const avatarColor = {
     'Admin':        '#dc2626', 'Manager': '#854d0e', 'Store Keeper': '#166534',
     'Kitchen Staff':'#7c3aed', 'Viewer':  '#1d4ed8', 'Developer':   '#475569',
+  }
+
+  const handleNotifClick = () => {
+    setShowNotifs(p => !p)
+    if (unread > 0) markAllRead()
   }
 
   return (
@@ -76,77 +71,116 @@ export default function Header() {
         {PAGE_TITLES[tab] || 'RestoStock'}
       </h2>
 
-      {/* Search */}
-      <div id="header-search" style={{ position:'relative', width:220 }} className="hide-mobile">
-        <Ic n="Search" size={15} color="#9ca3af"
-          style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)' }}/>
-        <input
-          ref={searchRef}
-          value={searchVal}
-          onChange={e => { setSearchVal(e.target.value); setShowSearch(true) }}
-          onFocus={() => setShowSearch(true)}
-          placeholder="Search inventory…"
-          style={{ width:'100%', padding:'7px 10px 7px 32px', border:`1px solid ${theme.border}`,
-            borderRadius:8, fontSize:13, background:theme.inputBg, color:theme.text }}
-        />
-        {showSearch && searchRes.length > 0 && (
-          <div className="search-dropdown">
-            {searchRes.map((item, i) => (
-              <div key={i} className="search-result-item"
-                onClick={() => { setTab('inventory'); setSearchVal(''); setShowSearch(false) }}>
-                <div style={{ fontWeight:500, fontSize:13 }}>{item.name}</div>
-                <div style={{ fontSize:11, color:'#9ca3af' }}>
-                  {item.quantity} {item.unit} · {item.status}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Dark mode toggle */}
-      <button onClick={() => setDark(p => !p)}
-        style={{ background:'none', border:'none', cursor:'pointer', color:theme.textMuted, padding:6 }}>
-        <Ic n={dark ? 'Sun' : 'Moon'} size={18}/>
-      </button>
-
       {/* Notifications */}
-      <div id="header-notifs" style={{ position:'relative' }}>
-        <button onClick={() => { setShowNotifs(p => !p); if (unread > 0) markAllRead() }}
+      <div ref={notifRef} id="header-notifs" style={{ position:'relative' }}>
+        <button onClick={handleNotifClick}
           style={{ background:'none', border:'none', cursor:'pointer', color:theme.textMuted,
             padding:6, position:'relative' }}>
           <Ic n="Bell" size={18}/>
           {unread > 0 && (
-            <span style={{ position:'absolute', top:2, right:2, width:8, height:8,
-              background:'#ef4444', borderRadius:'50%', border:'2px solid white' }}/>
+            <span style={{ position:'absolute', top:2, right:2, minWidth:16, height:16,
+              background:'#ef4444', borderRadius:'50%', border:'2px solid white',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:9, fontWeight:700, color:'white', padding:'0 3px' }}>
+              {unread > 99 ? '99+' : unread}
+            </span>
           )}
         </button>
         {showNotifs && (
-          <div style={{ position:'absolute', right:0, top:'calc(100% + 8px)', width:300,
+          <div style={{ position:'absolute', right:0, top:'calc(100% + 8px)', width:340,
             background:theme.cardBg, border:`1px solid ${theme.border}`, borderRadius:12,
-            boxShadow:'0 10px 30px rgba(0,0,0,0.12)', zIndex:200, maxHeight:380, overflowY:'auto' }}>
+            boxShadow:'0 10px 30px rgba(0,0,0,0.12)', zIndex:200, maxHeight:420, overflowY:'auto' }}>
+            {/* Header */}
             <div style={{ padding:'14px 16px', borderBottom:`1px solid ${theme.border}`,
-              fontWeight:600, fontSize:14, color:theme.text }}>
-              Notifications
+              display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <div style={{ fontWeight:600, fontSize:14, color:theme.text }}>
+                Notifications
+                {unread > 0 && (
+                  <span style={{ marginLeft:6, padding:'1px 6px', background:'#fee2e2',
+                    color:'#dc2626', borderRadius:10, fontSize:11, fontWeight:600 }}>
+                    {unread} new
+                  </span>
+                )}
+              </div>
+              {notifications.length > 0 && (
+                <button onClick={markAllRead}
+                  style={{ background:'none', border:'none', cursor:'pointer',
+                    fontSize:12, color:'#2563eb', fontWeight:500 }}>
+                  Mark all read
+                </button>
+              )}
             </div>
+
+            {/* Empty state */}
             {notifications.length === 0 ? (
-              <div style={{ padding:20, textAlign:'center', color:theme.textMuted, fontSize:13 }}>
-                No notifications
+              <div style={{ padding:32, textAlign:'center', color:theme.textMuted, fontSize:13 }}>
+                <div style={{ fontSize:28, marginBottom:8, opacity:0.4 }}>🔔</div>
+                <div>No notifications yet</div>
+                <div style={{ fontSize:12, marginTop:4, opacity:0.7 }}>You'll see alerts here when they arrive</div>
               </div>
-            ) : notifications.slice(0,10).map(n => (
-              <div key={n.id} style={{ padding:'12px 16px', borderBottom:`1px solid ${theme.border}`,
-                background: n.read ? 'transparent' : 'rgba(37,99,235,0.03)' }}>
-                <div style={{ fontSize:13, fontWeight:500, color:theme.text }}>{n.title}</div>
-                <div style={{ fontSize:12, color:theme.textMuted, marginTop:2 }}>{n.msg}</div>
-                <div style={{ fontSize:11, color:theme.textMuted, marginTop:4 }}>{n.time}</div>
-              </div>
-            ))}
+            ) : (
+              <>
+                {/* Unread */}
+                {notifications.filter(n => !n.read).length > 0 && (
+                  <>
+                    <div style={{ padding:'6px 16px', fontSize:11, fontWeight:600,
+                      color:theme.textMuted, textTransform:'uppercase', letterSpacing:'0.5px' }}>
+                      New
+                    </div>
+                    {notifications.filter(n => !n.read).map(n => (
+                      <div key={n.id} style={{ padding:'12px 16px', borderBottom:`1px solid ${theme.border}`,
+                        background:'rgba(37,99,235,0.04)', cursor:'pointer',
+                        transition:'background 0.15s' }}
+                        onMouseEnter={e => e.currentTarget.style.background='rgba(37,99,235,0.08)'}
+                        onMouseLeave={e => e.currentTarget.style.background='rgba(37,99,235,0.04)'}>
+                        <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                          <div style={{ width:8, height:8, borderRadius:'50%', background:'#2563eb',
+                            marginTop:5, flexShrink:0 }}/>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:13, fontWeight:600, color:theme.text }}>{n.title}</div>
+                            <div style={{ fontSize:12, color:theme.textMuted, marginTop:2, lineHeight:1.4 }}>{n.msg}</div>
+                            <div style={{ fontSize:11, color:theme.textMuted, marginTop:4, opacity:0.7 }}>{n.time}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* Read */}
+                {notifications.filter(n => n.read).length > 0 && (
+                  <>
+                    <div style={{ padding:'6px 16px', fontSize:11, fontWeight:600,
+                      color:theme.textMuted, textTransform:'uppercase', letterSpacing:'0.5px' }}>
+                      Earlier
+                    </div>
+                    {notifications.filter(n => n.read).slice(0, 10).map(n => (
+                      <div key={n.id} style={{ padding:'12px 16px', borderBottom:`1px solid ${theme.border}`,
+                        background:'transparent', cursor:'pointer',
+                        transition:'background 0.15s' }}
+                        onMouseEnter={e => e.currentTarget.style.background=theme.navActive || 'rgba(0,0,0,0.02)'}
+                        onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                        <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
+                          <div style={{ width:8, height:8, borderRadius:'50%', background:'#d1d5db',
+                            marginTop:5, flexShrink:0 }}/>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:13, fontWeight:500, color:theme.text }}>{n.title}</div>
+                            <div style={{ fontSize:12, color:theme.textMuted, marginTop:2, lineHeight:1.4 }}>{n.msg}</div>
+                            <div style={{ fontSize:11, color:theme.textMuted, marginTop:4, opacity:0.7 }}>{n.time}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
 
       {/* Profile */}
-      <div id="header-profile" style={{ position:'relative' }}>
+      <div ref={profileRef} id="header-profile" style={{ position:'relative' }}>
         <button onClick={() => setShowProfile(p => !p)}
           style={{ display:'flex', alignItems:'center', gap:8, background:'none',
             border:'none', cursor:'pointer', padding:'4px 8px', borderRadius:8 }}>

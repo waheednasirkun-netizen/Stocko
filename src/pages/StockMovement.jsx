@@ -290,6 +290,20 @@ export default function StockMovement() {
 
   const handleSubmit = async () => {
     if (!validate() || processingRef.current) return
+
+    // Debug: log user object and branch_id
+    console.log('[StockMovement] User object:', user)
+    console.log('[StockMovement] branch_id from user:', user?.branch_id)
+
+    // Safely get branch_id with fallbacks
+    const branchId = user?.branch_id || user?.branchId || null
+
+    if (!branchId) {
+      console.error('[StockMovement] No branch_id found in user:', user)
+      showToast('error', 'Branch Error', 'No branch assigned to your account. Please contact administrator.')
+      return
+    }
+
     return withActionLock(async () => {
       processingRef.current = true
       setLoading(true)
@@ -300,13 +314,13 @@ export default function StockMovement() {
             item: form.item.trim(),
             qty: Number(form.qty),
             unit: form.unit,
-            price: 0, // Price no longer collected from user, template has it if needed
+            price: 0,
             source: form.source,
             category: form.category,
             notes: form.notes,
-            branchId: user?.branch_id,
+            branchId: branchId,
             userId: user?.id,
-            userName: user?.name,
+            userName: user?.name || user?.full_name || 'Unknown',
           })
         } else {
           result = await transactionsApi.stockOut({
@@ -315,12 +329,16 @@ export default function StockMovement() {
             unit: form.unit,
             type: 'Wastage',
             notes: form.notes,
-            branchId: user?.branch_id,
+            branchId: branchId,
             userId: user?.id,
-            userName: user?.name,
+            userName: user?.name || user?.full_name || 'Unknown',
           })
         }
-        if (result.error) { showToast('error', 'Failed', result.error.message); return }
+        if (result.error) {
+          console.error('[StockMovement] API error:', result.error)
+          showToast('error', 'Failed', result.error.message)
+          return
+        }
 
         // Update transactions in state immediately for UI
         setTransactions(prev => [result.data, ...prev])
@@ -329,13 +347,15 @@ export default function StockMovement() {
         addNotification({ title: txnType, msg: `${form.qty} ${form.unit} of ${form.item}`, type:'success' })
         setShowModal(false)
         resetForm()
+      } catch (err) {
+        console.error('[StockMovement] Unexpected error:', err)
+        showToast('error', 'Failed', err.message || 'An unexpected error occurred')
       } finally {
         setLoading(false)
         processingRef.current = false
       }
     })
   }
-
   // Handle template selection (Stock IN)
   const handleTemplateSelect = (template) => {
     setSelectedTemplate(template)
