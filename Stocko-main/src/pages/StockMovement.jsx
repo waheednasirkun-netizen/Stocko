@@ -278,6 +278,7 @@ export default function StockMovement() {
   const validate = () => {
     const e = {}
     if (!form.item.trim()) e.item = 'Item name required'
+    if (txnType === 'Stock IN' && !selectedTemplate) e.item = 'Please select a template from the dropdown'
     if (!form.qty || Number(form.qty) <= 0) e.qty = 'Quantity must be > 0'
     if (txnType === 'Wastage') {
       const inv = inventory.find(i => i.name.toLowerCase() === form.item.toLowerCase())
@@ -297,10 +298,11 @@ export default function StockMovement() {
         let result
         if (txnType === 'Stock IN') {
           result = await transactionsApi.stockIn({
+            templateId: selectedTemplate?.id,
             item: form.item.trim(),
             qty: Number(form.qty),
             unit: form.unit,
-            price: 0, // Price no longer collected from user, template has it if needed
+            price: 0,
             source: form.source,
             category: form.category,
             notes: form.notes,
@@ -310,6 +312,7 @@ export default function StockMovement() {
           })
         } else {
           result = await transactionsApi.stockOut({
+            itemId: selectedInv?.id,
             item: form.item.trim(),
             qty: Number(form.qty),
             unit: form.unit,
@@ -343,6 +346,7 @@ export default function StockMovement() {
     set('item', template.name)
     set('category', template.category || '')
     set('unit', template.unit || 'pcs')
+    setErrors(prev => ({ ...prev, item: undefined }))
   }
 
   // Handle inventory selection (Wastage)
@@ -352,12 +356,13 @@ export default function StockMovement() {
     set('item', inv.name)
     set('category', inv.category || '')
     set('unit', inv.unit || 'pcs')
+    setErrors(prev => ({ ...prev, item: undefined }))
   }
 
   // Navigate to templates page when no template found
   const handleGoToTemplates = () => {
     setShowModal(false)
-    setTab('templates') // or use your router navigation
+    setTab('templates')
   }
 
   const typeColor = (t) => ({

@@ -744,8 +744,7 @@ export default function Reports() {
           )}
         </div>
       </Card>
-
-      {/* ═══════════════════════════════════════
+{/* ═══════════════════════════════════════
             CHARTS (context-aware)
       ═══════════════════════════════════════ */}
       {reportType === "stock" && (
@@ -906,50 +905,9 @@ export default function Reports() {
       )}
 
       {/* ═══════════════════════════════════════
-            DATA TABLE
-      ═══════════════════════════════════════ */}
-      <Card style={{ padding: 0, borderRadius: 14, overflow: "hidden", marginBottom: 20 }}>
-        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
-            <Ic n="List" size={16} color={theme.text} /> {REPORT_TYPES.find((r) => r.key === reportType)?.label}
-          </h2>
-          <span style={{ fontSize: 12, color: theme.textMuted }}>{filteredData.length} records</span>
-        </div>
-
-        {filteredData.length === 0 ? (
-          <EmptyState icon="FileText" title="No records found" message="Try adjusting your date range or filters." />
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: theme.bg }}>
-                  {columns.map((col) => (
-                    <th key={col} style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: theme.textMuted, borderBottom: `1px solid ${theme.border}`, whiteSpace: "nowrap", letterSpacing: 0.5, textTransform: "uppercase" }}>
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredData.map((row, idx) => (
-                  <tr key={idx} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? "transparent" : theme.bg }}>
-                    {columns.map((col) => (
-                      <td key={col} style={{ padding: "10px 16px", color: theme.text, fontWeight: col === "Item" ? 600 : 400, whiteSpace: "nowrap" }}>
-                        {col === "Status" || col === "Priority" || col === "Movement Type" ? statusBadge(row[col]) : row[col]}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      {/* ═══════════════════════════════════════
             BOTTOM ROW: STOCK ACTIVITIES + TOP ITEMS
       ═══════════════════════════════════════ */}
-      {reportType === "stock" ? (
+      {reportType === "stock" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 20 }}>
           {/* Stock In Activity */}
           <Card style={{ padding: 22, borderRadius: 14 }}>
@@ -1024,75 +982,48 @@ export default function Reports() {
             ))}
           </Card>
         </div>
-      ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 20 }}>
-          {/* Recent Activity */}
-          <Card style={{ padding: 22, borderRadius: 14 }}>
-            <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
-              <Ic n="Clock" size={16} color={theme.text} /> Recent Activity
-            </h2>
-            {recentActivity.length === 0 ? (
-              <EmptyState message="No recent activity." />
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                {recentActivity.map((act, idx) => (
-                  <div key={idx} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: idx < recentActivity.length - 1 ? `1px solid ${theme.border}` : "none" }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 10, background: act.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <Ic n={act.icon} size={16} color={act.color} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{act.title}</div>
-                      <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>{act.desc}</div>
-                    </div>
-                    <div style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap", flexShrink: 0 }}>{fmtAgo(act.date)}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-
-          {/* Top Requested / Top Categories */}
-          <Card style={{ padding: 22, borderRadius: 14 }}>
-            <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
-              <Ic n="TrendingUp" size={16} color={theme.text} />
-              {reportType === "requests" ? "Top Requested" : "Top Categories"}
-            </h2>
-
-            {reportType === "requests" && (
-              (() => {
-                const reqCounts = {};
-                (requests || []).forEach((r) => {
-                  (r.request_items || []).forEach((ri) => {
-                    const name = ri.name || "Unknown";
-                    reqCounts[name] = (reqCounts[name] || 0) + Number(ri.qty || 0);
-                  });
-                });
-                const topReq = Object.entries(reqCounts).sort((a, b) => b[1] - a[1]).slice(0, 6);
-                return topReq.length === 0 ? <EmptyState message="No request data." /> : topReq.map(([name, qty], idx) => (
-                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: idx < topReq.length - 1 ? `1px solid ${theme.border}` : "none" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ width: 26, height: 26, borderRadius: 6, background: idx < 3 ? "#fef3c7" : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: idx < 3 ? "#d97706" : "#94a3b8", flexShrink: 0 }}>{idx + 1}</div>
-                      <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
-                    </div>
-                    <div style={{ fontWeight: 700, color: theme.text, fontSize: 13, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtNum(qty)}</div>
-                  </div>
-                ));
-              })()
-            )}
-
-            {reportType === "inventory" &&
-              categoryData.map((cat, idx) => (
-                <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: idx < categoryData.length - 1 ? `1px solid ${theme.border}` : "none" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ width: 26, height: 26, borderRadius: 6, background: idx < 3 ? "#ede9fe" : "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: idx < 3 ? "#7c3aed" : "#94a3b8", flexShrink: 0 }}>{idx + 1}</div>
-                    <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cat.name}</div>
-                  </div>
-                  <div style={{ fontWeight: 700, color: theme.text, fontSize: 13, whiteSpace: "nowrap", marginLeft: 8 }}>{fmtNum(cat.value)}</div>
-                </div>
-              ))}
-          </Card>
-        </div>
       )}
+      
+      {/* ═══════════════════════════════════════
+            DATA TABLE
+      ═══════════════════════════════════════ */}
+      <Card style={{ padding: 0, borderRadius: 14, overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ padding: "16px 20px", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+            <Ic n="List" size={16} color={theme.text} /> {REPORT_TYPES.find((r) => r.key === reportType)?.label}
+          </h2>
+          <span style={{ fontSize: 12, color: theme.textMuted }}>{filteredData.length} records</span>
+        </div>
+
+        {filteredData.length === 0 ? (
+          <EmptyState icon="FileText" title="No records found" message="Try adjusting your date range or filters." />
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: theme.bg }}>
+                  {columns.map((col) => (
+                    <th key={col} style={{ padding: "12px 16px", textAlign: "left", fontSize: 11, fontWeight: 700, color: theme.textMuted, borderBottom: `1px solid ${theme.border}`, whiteSpace: "nowrap", letterSpacing: 0.5, textTransform: "uppercase" }}>
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredData.map((row, idx) => (
+                  <tr key={idx} style={{ borderBottom: `1px solid ${theme.border}`, background: idx % 2 === 0 ? "transparent" : theme.bg }}>
+                    {columns.map((col) => (
+                      <td key={col} style={{ padding: "10px 16px", color: theme.text, fontWeight: col === "Item" ? 600 : 400, whiteSpace: "nowrap" }}>
+                        {col === "Status" || col === "Priority" || col === "Movement Type" ? statusBadge(row[col]) : row[col]}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       {/* ═══════════════════════════════════════
             FOOTER
