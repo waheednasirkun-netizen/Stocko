@@ -1,17 +1,33 @@
 console.log('[RestoStock] api.js loaded')
 
 /**
- * RestoStock — src/lib/api.js
+ * Stocko — src/lib/api.js
  * Production-ready Supabase API layer
  */
 
 import { supabase } from './supabase'
 
-/* ─── Helpers ─────────────────────────────────────────────────────────────── */
-
-const now = () => new Date().toISOString()
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 const USER_SELECT = 'id, auth_id, email, name, full_name, role, status, phone, branch_id, created_at'
+
+const ACTIVITY_ACTIONS = {
+  STOCK_IN:        'Stock IN',
+  STOCK_OUT:       'Stock OUT',
+  WASTAGE:         'Wastage',
+  FULFILLMENT:     'Fulfillment',
+  INV_ADDED:       'Inventory Added',
+  INV_UPDATED:     'Inventory Updated',
+  INV_DELETED:     'Inventory Deleted',
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HELPERS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const now = () => new Date().toISOString()
 
 function wrap(data, error) {
   if (error) {
@@ -19,6 +35,8 @@ function wrap(data, error) {
       data: null,
       error: {
         message: error.message ?? String(error),
+        code: error.code ?? null,
+        details: error.details ?? null,
       },
     }
   }
@@ -31,12 +49,33 @@ function normalizeUser(u) {
   return { ...u, name, full_name: u.full_name ?? u.name ?? name }
 }
 
-/* ─── Internal helpers ─────────────────────────────────────────────────────── */
+async function logActivity({ branchId, userId, userName, action, details }) {
+  if (!branchId) return
+  try {
+    const { error } = await supabase
+      .from('activity_logs')
+      .insert([{
+        branch_id: branchId,
+        user_id: userId,
+        user_name: userName,
+        action,
+        details,
+        created_at: now(),
+      }])
+    if (error) console.warn('[api] activity log error:', error.message)
+  } catch (err) {
+    console.warn('[api] activity log exception:', err)
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AUTH & PROFILE
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 async function fetchProfile(authId, email) {
   console.log('[api] fetchProfile — authId:', authId, 'email:', email)
 
-  const queryUser = async (label, column, value) => {
+  const tryQuery = async (label, column, value) => {
     const { data, error } = await supabase
       .from('users')
       .select(USER_SELECT)
@@ -51,30 +90,33 @@ async function fetchProfile(authId, email) {
     return { data, error: null }
   }
 
-  let { data, error } = await queryUser('auth_id', 'auth_id', authId)
-  if (error) return { profile: null, error }
-  if (data) return { profile: data, error: null }
+  // Try auth_id first
+  let result = await tryQuery('auth_id', 'auth_id', authId)
+  if (result.error) return { profile: null, error: result.error }
+  if (result.data) return { profile: result.data, error: null }
 
-  ;({ data, error } = await queryUser('id', 'id', authId))
-  if (error) return { profile: null, error }
-  if (data) {
-    if (!data.auth_id) {
-      await supabase.from('users').update({ auth_id: authId }).eq('id', data.id)
-      data.auth_id = authId
+  // Fallback: try id (for legacy rows)
+  result = await tryQuery('id', 'id', authId)
+  if (result.error) return { profile: null, error: result.error }
+  if (result.data) {
+    if (!result.data.auth_id) {
+      await supabase.from('users').update({ auth_id: authId }).eq('id', result.data.id)
+      result.data.auth_id = authId
     }
-    return { profile: data, error: null }
+    return { profile: result.data, error: null }
   }
 
+  // Fallback: try email
   const normalizedEmail = email?.trim().toLowerCase()
   if (normalizedEmail) {
-    ;({ data, error } = await queryUser('email', 'email', normalizedEmail))
-    if (error) return { profile: null, error }
-    if (data) {
-      if (!data.auth_id) {
-        await supabase.from('users').update({ auth_id: authId }).eq('id', data.id)
-        data.auth_id = authId
+    result = await tryQuery('email', 'email', normalizedEmail)
+    if (result.error) return { profile: null, error: result.error }
+    if (result.data) {
+      if (!result.data.auth_id) {
+        await supabase.from('users').update({ auth_id: authId }).eq('id', result.data.id)
+        result.data.auth_id = authId
       }
-      return { profile: data, error: null }
+      return { profile: result.data, error: null }
     }
   }
 
@@ -114,7 +156,7 @@ async function buildUser(authUser) {
   const { profile, error: pe } = await fetchProfile(authId, email)
   if (pe) return { user: null, error: pe }
 
-  const branchName = await fetchBranchName(profile.branch_id)
+  const branchName = profile.branch_id ? await fetchBranchName(profile.branch_id) : null
 
   const user = {
     ...normalizeUser(profile),
@@ -125,26 +167,9 @@ async function buildUser(authUser) {
   return { user, error: null }
 }
 
-function logActivity({ branchId, userId, userName, action, details }) {
-  if (!branchId) return
-  supabase
-    .from('activity_logs')
-    .insert([
-      {
-        branch_id: branchId,
-        user_id: userId,
-        user_name: userName,
-        action,
-        details,
-        created_at: now(),
-      },
-    ])
-    .then(({ error }) => {
-      if (error) console.warn('[api] activity log error:', error.message)
-    })
-}
-
-/* ─── Auth ───────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   AUTH API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const authApi = {
   async login(email, password) {
@@ -229,7 +254,9 @@ export const authApi = {
   },
 }
 
-/* ─── Branches ───────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   BRANCH API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const branchApi = {
   async getAll() {
@@ -257,7 +284,9 @@ export const branchApi = {
   },
 }
 
-/* ─── Users ──────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   USERS API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const usersApi = {
   async getAll() {
@@ -305,7 +334,9 @@ export const usersApi = {
   },
 }
 
-/* ─── Item Templates ─────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   TEMPLATES API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const templatesApi = {
   async getAll(branchId) {
@@ -344,7 +375,9 @@ export const templatesApi = {
   },
 }
 
-/* ─── Suppliers ───────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   SUPPLIERS API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const suppliersApi = {
   async getAll(branchId) {
@@ -383,7 +416,9 @@ export const suppliersApi = {
   },
 }
 
-/* ─── Transactions ───────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   TRANSACTIONS API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const transactionsApi = {
   async getAll(branchId) {
@@ -414,23 +449,21 @@ export const transactionsApi = {
     // 1. Insert transaction
     const { data: txnData, error: txnError } = await supabase
       .from('transactions')
-      .insert([
-        {
-          branch_id: branchId,
-          item_name: itemName,
-          type: 'Stock IN',
-          quantity,
-          unit,
-          price_per_unit: 0,
-          total_amount: 0,
-          source: source ?? null,
-          category: category ?? null,
-          notes: notes ?? null,
-          recorded_by: userId,
-          recorded_by_name: userName,
-          created_at: now(),
-        },
-      ])
+      .insert([{
+        branch_id: branchId,
+        item_name: itemName,
+        type: ACTIVITY_ACTIONS.STOCK_IN,
+        quantity,
+        unit,
+        price_per_unit: 0,
+        total_amount: 0,
+        source: source ?? null,
+        category: category ?? null,
+        notes: notes ?? null,
+        recorded_by: userId,
+        recorded_by_name: userName,
+        created_at: now(),
+      }])
       .select()
       .single()
 
@@ -439,12 +472,13 @@ export const transactionsApi = {
       return wrap(null, txnError)
     }
 
-    // 2. Upsert inventory
+    // 2. Upsert inventory — use normalized name to prevent duplicates
+    const normalizedName = itemName.toLowerCase()
     const { data: existingItem } = await supabase
       .from('inventory')
       .select('id, quantity, unit')
       .eq('branch_id', branchId)
-      .ilike('name', itemName)
+      .ilike('name', normalizedName)
       .maybeSingle()
 
     if (existingItem) {
@@ -464,17 +498,15 @@ export const transactionsApi = {
         return wrap(null, updateError)
       }
     } else {
-      const { error: insertError } = await supabase.from('inventory').insert([
-        {
-          branch_id: branchId,
-          name: itemName,
-          category: category ?? 'Other',
-          quantity,
-          unit,
-          created_at: now(),
-          updated_at: now(),
-        },
-      ])
+      const { error: insertError } = await supabase.from('inventory').insert([{
+        branch_id: branchId,
+        name: itemName,
+        category: category ?? 'Other',
+        quantity,
+        unit,
+        created_at: now(),
+        updated_at: now(),
+      }])
 
       if (insertError) {
         console.error('[api] stockIn inventory insert error:', insertError)
@@ -482,19 +514,115 @@ export const transactionsApi = {
       }
     }
 
-    logActivity({
+    await logActivity({
       branchId,
       userId,
       userName,
-      action: 'stock_in',
+      action: ACTIVITY_ACTIONS.STOCK_IN,
       details: `Stock IN: ${quantity} ${unit} of ${itemName}`,
+    })
+
+    return wrap(txnData, null)
+  },
+
+  async stockOut({ item, qty, unit, type = ACTIVITY_ACTIONS.STOCK_OUT, notes, branchId, userId, userName }) {
+    if (!branchId) {
+      console.error('[api] stockOut: branchId is required')
+      return wrap(null, { message: 'Branch ID is required for stock out' })
+    }
+
+    const quantity = Math.abs(Number(qty))
+    const itemName = String(item).trim()
+
+    if (!itemName || quantity <= 0) {
+      return wrap(null, { message: 'Valid item name and quantity are required' })
+    }
+
+    console.log('[api] stockOut:', { branchId, itemName, quantity, unit, type })
+
+    // 1. Verify item exists
+    const { data: existingItem, error: findError } = await supabase
+      .from('inventory')
+      .select('id, quantity, unit')
+      .eq('branch_id', branchId)
+      .ilike('name', itemName)
+      .maybeSingle()
+
+    if (findError) {
+      console.error('[api] stockOut findError:', findError)
+      return wrap(null, findError)
+    }
+
+    if (!existingItem) {
+      return wrap(null, { message: `Item "${itemName}" not found in inventory` })
+    }
+
+    // 2. Verify sufficient stock
+    const currentQty = Number(existingItem.quantity || 0)
+    if (currentQty < quantity) {
+      return wrap(null, {
+        message: `Insufficient stock. Available: ${currentQty} ${existingItem.unit || unit}`,
+      })
+    }
+
+    // 3. Insert transaction
+    const { data: txnData, error: txnError } = await supabase
+      .from('transactions')
+      .insert([{
+        branch_id: branchId,
+        item_name: itemName,
+        type,
+        quantity,
+        unit,
+        price_per_unit: 0,
+        total_amount: 0,
+        source: null,
+        category: null,
+        notes: notes ?? null,
+        recorded_by: userId,
+        recorded_by_name: userName,
+        created_at: now(),
+      }])
+      .select()
+      .single()
+
+    if (txnError) {
+      console.error('[api] stockOut transaction error:', txnError)
+      return wrap(null, txnError)
+    }
+
+    // 4. Deduct inventory
+    const newQty = currentQty - quantity
+    const { error: updateError } = await supabase
+      .from('inventory')
+      .update({
+        quantity: newQty,
+        updated_at: now(),
+      })
+      .eq('id', existingItem.id)
+
+    if (updateError) {
+      console.error('[api] stockOut update error:', updateError)
+      return wrap(null, updateError)
+    }
+
+    console.log('[api] stockOut success:', { item: itemName, deducted: quantity, remaining: newQty })
+
+    await logActivity({
+      branchId,
+      userId,
+      userName,
+      action: type,
+      details: `${type}: ${quantity} ${unit || existingItem.unit} of ${itemName}`,
     })
 
     return wrap(txnData, null)
   },
 }
 
-/* ─── Demands ────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEMANDS API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const demandsApi = {
   async getAll(branchId) {
@@ -541,104 +669,15 @@ export const demandsApi = {
     return wrap(data, error)
   },
 
-  async stockOut({ item, qty, unit, type = 'Stock OUT', notes, branchId, userId, userName }) {
-    if (!branchId) {
-      console.error('[api] stockOut: branchId is required')
-      return wrap(null, { message: 'Branch ID is required for stock out' })
-    }
-
-    const quantity = Math.abs(Number(qty))
-    const itemName = String(item).trim()
-
-    if (!itemName || quantity <= 0) {
-      return wrap(null, { message: 'Valid item name and quantity are required' })
-    }
-
-    console.log('[api] stockOut:', { branchId, itemName, quantity, unit, type })
-
-    // 1. Verify item exists
-    const { data: existingItem, error: findError } = await supabase
-      .from('inventory')
-      .select('id, quantity, unit')
-      .eq('branch_id', branchId)
-      .ilike('name', itemName)
-      .maybeSingle()
-
-    if (findError) {
-      console.error('[api] stockOut findError:', findError)
-      return wrap(null, findError)
-    }
-
-    if (!existingItem) {
-      return wrap(null, { message: `Item "${itemName}" not found in inventory` })
-    }
-
-    // 2. Verify sufficient stock
-    const currentQty = Number(existingItem.quantity || 0)
-    if (currentQty < quantity) {
-      return wrap(null, {
-        message: `Insufficient stock. Available: ${currentQty} ${existingItem.unit || unit}`,
-      })
-    }
-
-    // 3. Insert transaction
-    const { data: txnData, error: txnError } = await supabase
-      .from('transactions')
-      .insert([
-        {
-          branch_id: branchId,
-          item_name: itemName,
-          type,
-          quantity,
-          unit,
-          price_per_unit: 0,
-          total_amount: 0,
-          source: null,
-          category: null,
-          notes: notes ?? null,
-          recorded_by: userId,
-          recorded_by_name: userName,
-          created_at: now(),
-        },
-      ])
-      .select()
-      .single()
-
-    if (txnError) {
-      console.error('[api] stockOut transaction error:', txnError)
-      return wrap(null, txnError)
-    }
-
-    // 4. Deduct inventory
-    const newQty = currentQty - quantity
-    const { error: updateError } = await supabase
-      .from('inventory')
-      .update({
-        quantity: newQty,
-        updated_at: now(),
-      })
-      .eq('id', existingItem.id)
-
-    if (updateError) {
-      console.error('[api] stockOut update error:', updateError)
-      return wrap(null, updateError)
-    }
-
-    console.log('[api] stockOut success:', { item: itemName, deducted: quantity, remaining: newQty })
-
-    logActivity({
-      branchId,
-      userId,
-      userName,
-      action: 'stock_out',
-      details: `${type}: ${quantity} ${unit || existingItem.unit} of ${itemName}`,
-    })
-
-    return wrap(txnData, null)
+  async stockOut({ item, qty, unit, type = ACTIVITY_ACTIONS.STOCK_OUT, notes, branchId, userId, userName }) {
+    // Delegate to transactionsApi.stockOut for consistency
+    return transactionsApi.stockOut({ item, qty, unit, type, notes, branchId, userId, userName })
   },
 }
 
-/* ─── Procurement ────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROCUREMENT API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const procurementApi = {
   async getAll(branchId) {
@@ -676,7 +715,9 @@ export const procurementApi = {
   },
 }
 
-/* ─── Purchase Orders ──────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   PURCHASE ORDERS API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const purchaseOrdersApi = {
   async getAll(branchId) {
@@ -717,7 +758,9 @@ export const purchaseOrdersApi = {
   },
 }
 
-/* ─── Financial ──────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   FINANCIAL API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const financialApi = {
   async getAll(branchId) {
@@ -741,7 +784,9 @@ export const financialApi = {
   },
 }
 
-/* ─── Activity Logs ───────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACTIVITY LOGS API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const activityApi = {
   async getAll(branchId, limit = 200) {
@@ -756,7 +801,9 @@ export const activityApi = {
   },
 }
 
-/* ─── Inventory ──────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   INVENTORY API
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 export const inventoryApi = {
   async getAll(branchId) {
@@ -770,17 +817,30 @@ export const inventoryApi = {
   },
 
   async create({ itemData, branchId, userId, userName }) {
+    // Check for duplicates first
+    const { data: existing } = await supabase
+      .from('inventory')
+      .select('id')
+      .eq('branch_id', branchId)
+      .ilike('name', itemData.name?.trim())
+      .maybeSingle()
+
+    if (existing) {
+      return wrap(null, { message: `Item "${itemData.name}" already exists in inventory` })
+    }
+
     const { data, error } = await supabase
       .from('inventory')
       .insert([{ ...itemData, branch_id: branchId, created_by: userId, created_at: now() }])
       .select()
       .single()
+
     if (!error) {
-      logActivity({
+      await logActivity({
         branchId,
         userId,
         userName,
-        action: 'Inventory Item Added',
+        action: ACTIVITY_ACTIONS.INV_ADDED,
         details: `Added ${data.name} (${data.quantity} ${data.unit})`,
       })
     }
@@ -796,11 +856,11 @@ export const inventoryApi = {
       .select()
       .single()
     if (!error) {
-      logActivity({
+      await logActivity({
         branchId,
         userId,
         userName,
-        action: 'Inventory Item Updated',
+        action: ACTIVITY_ACTIONS.INV_UPDATED,
         details: `Updated ${data.name}`,
       })
     }
@@ -810,11 +870,11 @@ export const inventoryApi = {
   async remove({ id, branchId, userId, userName, itemName }) {
     const { error } = await supabase.from('inventory').delete().eq('id', id)
     if (!error) {
-      logActivity({
+      await logActivity({
         branchId,
         userId,
         userName,
-        action: 'Inventory Item Deleted',
+        action: ACTIVITY_ACTIONS.INV_DELETED,
         details: `Deleted ${itemName}`,
       })
     }

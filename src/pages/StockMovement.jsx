@@ -1,14 +1,44 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
 import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
-import { fmtNum, fmtPKR, userCan } from '../lib/constants'
+import { fmtNum, userCan } from '../lib/constants'
 import { transactionsApi } from '../lib/api'
 
-const TXN_TYPES = ['Stock IN', 'Wastage']
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONSTANTS
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ─── Searchable Dropdown for Templates / Inventory ─────────────────────── */
+const TRANSACTION_TYPES = [
+  { key: 'Stock IN',    label: 'Stock IN',    variant: 'primary',  icon: 'Plus' },
+  { key: 'Stock OUT',   label: 'Stock OUT',   variant: 'danger',   icon: 'Minus' },
+  { key: 'Wastage',     label: 'Wastage',     variant: 'warning',  icon: 'Trash2' },
+  { key: 'Fulfillment', label: 'Fulfillment', variant: 'purple',   icon: 'CheckCircle' },
+]
+
+const TYPE_FILTERS = ['All', 'Stock IN', 'Stock OUT', 'Wastage', 'Fulfillment']
+
+const TYPE_STYLES = {
+  'Stock IN':    { bg: '#dcfce7', color: '#166534', sign: '+' },
+  'Stock OUT':   { bg: '#fee2e2', color: '#991b1b', sign: '-' },
+  'Wastage':     { bg: '#fef9c3', color: '#854d0e', sign: '-' },
+  'Fulfillment': { bg: '#f3e8ff', color: '#7c3aed', sign: '-' },
+}
+
+const DEFAULT_FORM = {
+  item: '',
+  category: '',
+  unit: 'pcs',
+  qty: '',
+  source: '',
+  notes: '',
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SEARCHABLE DROPDOWN COMPONENT
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 function SearchableDropdown({
-  items,
+  items = [],
   value,
   onChange,
   onSelect,
@@ -21,25 +51,17 @@ function SearchableDropdown({
   emptyAction,
   emptyActionLabel,
 }) {
-  const [isOpen, setIsOpen]     = useState(false)
+  const [isOpen, setIsOpen] = useState(false)
   const [focusedIdx, setFocusedIdx] = useState(-1)
   const containerRef = useRef(null)
-  const inputRef     = useRef(null)
-  const listRef      = useRef(null)
-  const itemRefs     = useRef([])
+  const inputRef = useRef(null)
 
   const filtered = useMemo(() => {
-    if (!value.trim()) return items.slice(0, 8)
+    const safeItems = Array.isArray(items) ? items : []
+    if (!value?.trim()) return safeItems.slice(0, 8)
     const q = value.toLowerCase()
-    return items.filter(i => i.name.toLowerCase().includes(q)).slice(0, 8)
+    return safeItems.filter(i => i.name?.toLowerCase().includes(q)).slice(0, 8)
   }, [items, value])
-
-  // Scroll focused item into view
-  useEffect(() => {
-    if (isOpen && focusedIdx >= 0 && focusedIdx < filtered.length) {
-      itemRefs.current[focusedIdx]?.scrollIntoView({ block: 'nearest' })
-    }
-  }, [focusedIdx, isOpen, filtered.length])
 
   // Close on click outside
   useEffect(() => {
@@ -54,7 +76,7 @@ function SearchableDropdown({
     return () => document.removeEventListener('mousedown', handleClick)
   }, [isOpen])
 
-  const handleKeyDown = (e) => {
+  const handleKeyDown = useCallback((e) => {
     if (!isOpen) {
       if (e.key === 'ArrowDown' || e.key === 'Enter') {
         e.preventDefault()
@@ -91,15 +113,15 @@ function SearchableDropdown({
         setFocusedIdx(-1)
         break
     }
-  }
+  }, [isOpen, filtered, focusedIdx, onSelect])
 
-  const handleSelect = (item) => {
+  const handleSelect = useCallback((item) => {
     onSelect(item)
     setIsOpen(false)
     setFocusedIdx(-1)
-  }
+  }, [onSelect])
 
-  const defaultRender = (item) => (
+  const defaultRender = useCallback((item) => (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <div>
         <div style={{ fontSize: 13, fontWeight: 500, color: '#111827' }}>{item.name}</div>
@@ -111,21 +133,27 @@ function SearchableDropdown({
         <div style={{ fontSize: 11, color: '#9ca3af', fontWeight: 500 }}>{item.unit}</div>
       )}
     </div>
-  )
+  ), [])
 
-  const showEmpty = value.trim().length > 0 && filtered.length === 0
+  const showEmpty = value?.trim().length > 0 && filtered.length === 0
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
       {label && (
-        <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>
+        <label style={{
+          display: 'block',
+          fontSize: 13,
+          fontWeight: 500,
+          color: '#374151',
+          marginBottom: 5,
+        }}>
           {label}
         </label>
       )}
       <input
         ref={inputRef}
         type="text"
-        value={value}
+        value={value || ''}
         onChange={e => { onChange(e.target.value); setIsOpen(true); setFocusedIdx(-1) }}
         onFocus={() => { setIsOpen(true); setFocusedIdx(-1) }}
         onKeyDown={handleKeyDown}
@@ -142,26 +170,25 @@ function SearchableDropdown({
           outline: 'none',
         }}
       />
-      {error && <div className="field-error">{error}</div>}
+      {error && (
+        <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>{error}</div>
+      )}
 
       {isOpen && (
-        <div
-          ref={listRef}
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            right: 0,
-            background: '#fff',
-            border: `1px solid ${theme.border}`,
-            borderRadius: 10,
-            boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)',
-            zIndex: 50,
-            maxHeight: 280,
-            overflowY: 'auto',
-            padding: '6px 0',
-          }}
-        >
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 4px)',
+          left: 0,
+          right: 0,
+          background: '#fff',
+          border: `1px solid ${theme.border}`,
+          borderRadius: 10,
+          boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)',
+          zIndex: 50,
+          maxHeight: 280,
+          overflowY: 'auto',
+          padding: '6px 0',
+        }}>
           {showEmpty ? (
             <div style={{ padding: '16px 14px', textAlign: 'center' }}>
               <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 10 }}>
@@ -190,28 +217,25 @@ function SearchableDropdown({
               Start typing to search…
             </div>
           ) : (
-            <>
-              {filtered.map((item, idx) => {
-                const isFocused = idx === focusedIdx
-                return (
-                  <div
-                    key={item.id || idx}
-                    ref={el => itemRefs.current[idx] = el}
-                    onClick={() => handleSelect(item)}
-                    onMouseEnter={() => setFocusedIdx(idx)}
-                    style={{
-                      padding: '10px 14px',
-                      cursor: 'pointer',
-                      background: isFocused ? '#eff6ff' : 'transparent',
-                      borderLeft: isFocused ? '3px solid #2563eb' : '3px solid transparent',
-                      transition: 'background 0.1s',
-                    }}
-                  >
-                    {renderItem ? renderItem(item) : defaultRender(item)}
-                  </div>
-                )
-              })}
-            </>
+            filtered.map((item, idx) => {
+              const isFocused = idx === focusedIdx
+              return (
+                <div
+                  key={item.id || `item-${idx}`}
+                  onClick={() => handleSelect(item)}
+                  onMouseEnter={() => setFocusedIdx(idx)}
+                  style={{
+                    padding: '10px 14px',
+                    cursor: 'pointer',
+                    background: isFocused ? '#eff6ff' : 'transparent',
+                    borderLeft: isFocused ? '3px solid #2563eb' : '3px solid transparent',
+                    transition: 'background 0.1s',
+                  }}
+                >
+                  {renderItem ? renderItem(item) : defaultRender(item)}
+                </div>
+              )
+            })
           )}
         </div>
       )}
@@ -219,297 +243,584 @@ function SearchableDropdown({
   )
 }
 
-/* ─── Main StockMovement Component ─────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   MAIN STOCK MOVEMENT COMPONENT
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 export default function StockMovement() {
-  const { transactions, setTransactions, inventory, templates, suppliers, theme,
-    user, allUnits, showToast, withActionLock, addNotification, setTab } = useApp()
+  const {
+    transactions,
+    setTransactions,
+    inventory,
+    templates,
+    suppliers,
+    theme,
+    user,
+    showToast,
+    withActionLock,
+    addNotification,
+    setTab,
+    setInventory,
+  } = useApp()
 
-  const [showModal, setShowModal]   = useState(false)
-  const [txnType,   setTxnType]     = useState('Stock IN')
-  const [loading,   setLoading]     = useState(false)
-  const [search,    setSearch]      = useState('')
-  const [filterType,setFilterType]  = useState('All')
-  const processingRef = useRef(false)
+  // ── UI State ──────────────────────────────────────────────────────────
+  const [showModal, setShowModal] = useState(false)
+  const [txnType, setTxnType] = useState('Stock IN')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [search, setSearch] = useState('')
+  const [filterType, setFilterType] = useState('All')
 
-  // Template search state (Stock IN)
-  const [templateSearch, setTemplateSearch] = useState('')
-  const [selectedTemplate, setSelectedTemplate] = useState(null)
-
-  // Inventory search state (Wastage)
-  const [invSearch, setInvSearch] = useState('')
-  const [selectedInv, setSelectedInv] = useState(null)
-
-  // Supplier search
-  const [supplierSearch, setSupplierSearch] = useState('')
-
-  const [form, setForm] = useState({
-    item:'', category:'', unit:'pcs', qty:'', source:'', notes:'',
-  })
+  // ── Form State ──────────────────────────────────────────────────────────
+  const [form, setForm] = useState({ ...DEFAULT_FORM })
   const [errors, setErrors] = useState({})
 
-  // Filtered transaction history
-  const filtered = useMemo(() => {
-    let list = [...transactions]
-      .sort((a,b) => new Date(b.created_at||b.date) - new Date(a.created_at||a.date))
-    if (search) list = list.filter(t => (t.item_name||t.item||'').toLowerCase().includes(search.toLowerCase()))
-    if (filterType !== 'All') list = list.filter(t => t.type === filterType)
+  // ── Dropdown State ────────────────────────────────────────────────────
+  const [templateSearch, setTemplateSearch] = useState('')
+  const [invSearch, setInvSearch] = useState('')
+  const [supplierSearch, setSupplierSearch] = useState('')
+
+  const isStockIn = txnType === 'Stock IN'
+  const isStockOut = txnType === 'Stock OUT' || txnType === 'Wastage' || txnType === 'Fulfillment'
+
+  // ── Derived Data ────────────────────────────────────────────────────────
+  const filteredTransactions = useMemo(() => {
+    let list = [...(transactions || [])].sort(
+      (a, b) => new Date(b.created_at || b.date || 0) - new Date(a.created_at || a.date || 0)
+    )
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      list = list.filter(t => (t.item_name || t.item || '').toLowerCase().includes(q))
+    }
+    if (filterType !== 'All') {
+      list = list.filter(t => t.type === filterType)
+    }
     return list
   }, [transactions, search, filterType])
 
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+  // ── Helpers ─────────────────────────────────────────────────────────────
+  const updateForm = useCallback((key, value) => {
+    setForm(prev => ({ ...prev, [key]: value }))
+    // Clear error when user types
+    setErrors(prev => prev[key] ? { ...prev, [key]: undefined } : prev)
+  }, [])
 
-  // Reset form when modal opens or type changes
   const resetForm = useCallback(() => {
-    setForm({ item:'', category:'', unit:'pcs', qty:'', source:'', notes:'' })
+    setForm({ ...DEFAULT_FORM })
     setErrors({})
     setTemplateSearch('')
-    setSelectedTemplate(null)
     setInvSearch('')
-    setSelectedInv(null)
     setSupplierSearch('')
   }, [])
 
-  const openModal = (type) => {
+  const openModal = useCallback((type) => {
     setTxnType(type)
     resetForm()
     setShowModal(true)
-  }
+  }, [resetForm])
 
-  const validate = () => {
+  // ── Validation ──────────────────────────────────────────────────────────
+  const validate = useCallback(() => {
     const e = {}
-    if (!form.item.trim()) e.item = 'Item name required'
-    if (!form.qty || Number(form.qty) <= 0) e.qty = 'Quantity must be > 0'
-    if (txnType === 'Wastage') {
-      const inv = inventory.find(i => i.name.toLowerCase() === form.item.toLowerCase())
-      if (!inv) e.item = `"${form.item}" not found in inventory`
-      else if (Number(form.qty) > inv.quantity) e.qty = `Max available: ${fmtNum(inv.quantity)} ${inv.unit}`
+    const itemName = form.item?.trim()
+    const qty = Number(form.qty)
+
+    if (!itemName) e.item = 'Item name is required'
+    if (!form.qty || qty <= 0) e.qty = 'Quantity must be greater than 0'
+
+    if (isStockOut && itemName) {
+      const inv = inventory?.find(i => i.name?.toLowerCase() === itemName.toLowerCase())
+      if (!inv) {
+        e.item = `"${itemName}" not found in inventory`
+      } else if (qty > (inv.quantity || 0)) {
+        e.qty = `Max available: ${fmtNum(inv.quantity)} ${inv.unit || 'pcs'}`
+      }
     }
+
     setErrors(e)
     return Object.keys(e).length === 0
-  }
+  }, [form, isStockOut, inventory])
 
-  const handleSubmit = async () => {
-    if (!validate() || processingRef.current) return
+  // ── Optimistic Inventory Update ─────────────────────────────────────────
+  const applyOptimisticInventory = useCallback((itemName, qtyDelta, unit) => {
+    setInventory(prev => {
+      if (!prev) return prev
+      const idx = prev.findIndex(i => i.name?.toLowerCase() === itemName.toLowerCase())
+      if (idx >= 0) {
+        const updated = [...prev]
+        updated[idx] = {
+          ...updated[idx],
+          quantity: Math.max(0, (Number(updated[idx].quantity) || 0) + qtyDelta),
+          unit: unit || updated[idx].unit,
+          updated_at: new Date().toISOString(),
+        }
+        return updated
+      }
+      if (qtyDelta > 0) {
+        // New inventory item (Stock IN)
+        return [
+          {
+            id: `temp-${Date.now()}`,
+            name: itemName,
+            quantity: qtyDelta,
+            unit: unit || 'pcs',
+            category: form.category || 'Other',
+            branch_id: user?.branch_id,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          ...prev,
+        ]
+      }
+      return prev
+    })
+  }, [setInventory, user?.branch_id, form.category])
 
-    // Debug: log user object and branch_id
-    console.log('[StockMovement] User object:', user)
-    console.log('[StockMovement] branch_id from user:', user?.branch_id)
+  const revertOptimisticInventory = useCallback((itemName) => {
+    // Reload from server to ensure consistency
+    setInventory(null) // Trigger reload in parent context
+  }, [setInventory])
 
-    // Safely get branch_id with fallbacks
-    const branchId = user?.branch_id || user?.branchId || null
+  // ── Submit Handler ──────────────────────────────────────────────────────
+  const handleSubmit = useCallback(async () => {
+    if (!validate() || isSubmitting) return
 
+    const branchId = user?.branch_id
     if (!branchId) {
-      console.error('[StockMovement] No branch_id found in user:', user)
-      showToast('error', 'Branch Error', 'No branch assigned to your account. Please contact administrator.')
+      showToast('error', 'Branch Error', 'No branch assigned to your account. Contact your administrator.')
       return
     }
 
-    return withActionLock(async () => {
-      processingRef.current = true
-      setLoading(true)
-      try {
-        let result
-        if (txnType === 'Stock IN') {
-          result = await transactionsApi.stockIn({
-            item: form.item.trim(),
-            qty: Number(form.qty),
-            unit: form.unit,
-            price: 0,
-            source: form.source,
-            category: form.category,
-            notes: form.notes,
-            branchId: branchId,
-            userId: user?.id,
-            userName: user?.name || user?.full_name || 'Unknown',
-          })
-        } else {
-          result = await transactionsApi.stockOut({
-            item: form.item.trim(),
-            qty: Number(form.qty),
-            unit: form.unit,
-            type: 'Wastage',
-            notes: form.notes,
-            branchId: branchId,
-            userId: user?.id,
-            userName: user?.name || user?.full_name || 'Unknown',
-          })
-        }
-        if (result.error) {
-          console.error('[StockMovement] API error:', result.error)
-          showToast('error', 'Failed', result.error.message)
-          return
-        }
+    if (!userCan('stockIn', user?.role) && !userCan('stockOut', user?.role)) {
+      showToast('error', 'Permission Denied', 'You do not have permission to record stock movements.')
+      return
+    }
 
-        // Update transactions in state immediately for UI
-        setTransactions(prev => [result.data, ...prev])
+    const itemName = form.item.trim()
+    const quantity = Math.abs(Number(form.qty))
+    const userName = user?.name || user?.full_name || 'Unknown'
 
-        showToast('success', `${txnType} Recorded`, `${form.item} — ${fmtNum(form.qty)} ${form.unit}`)
-        addNotification({ title: txnType, msg: `${form.qty} ${form.unit} of ${form.item}`, type:'success' })
-        setShowModal(false)
-        resetForm()
-      } catch (err) {
-        console.error('[StockMovement] Unexpected error:', err)
-        showToast('error', 'Failed', err.message || 'An unexpected error occurred')
-      } finally {
-        setLoading(false)
-        processingRef.current = false
+    // Optimistic UI update
+    const qtyDelta = isStockIn ? quantity : -quantity
+    applyOptimisticInventory(itemName, qtyDelta, form.unit)
+
+    // Optimistic transaction update
+    const optimisticTxn = {
+      id: `temp-${Date.now()}`,
+      branch_id: branchId,
+      item_name: itemName,
+      type: txnType,
+      quantity,
+      unit: form.unit,
+      price_per_unit: 0,
+      total_amount: 0,
+      source: form.source || null,
+      category: form.category || null,
+      notes: form.notes || null,
+      recorded_by: user?.id,
+      recorded_by_name: userName,
+      created_at: new Date().toISOString(),
+      _optimistic: true,
+    }
+    setTransactions(prev => [optimisticTxn, ...(prev || [])])
+
+    setIsSubmitting(true)
+
+    try {
+      let result
+      if (isStockIn) {
+        result = await transactionsApi.stockIn({
+          item: itemName,
+          qty: quantity,
+          unit: form.unit,
+          source: form.source,
+          category: form.category,
+          notes: form.notes,
+          branchId,
+          userId: user?.id,
+          userName,
+        })
+      } else {
+        result = await transactionsApi.stockOut({
+          item: itemName,
+          qty: quantity,
+          unit: form.unit,
+          type: txnType,
+          notes: form.notes,
+          branchId,
+          userId: user?.id,
+          userName,
+        })
       }
-    })
-  }
-  // Handle template selection (Stock IN)
-  const handleTemplateSelect = (template) => {
-    setSelectedTemplate(template)
+
+      if (result.error) {
+        // Revert optimistic updates
+        setTransactions(prev => (prev || []).filter(t => t.id !== optimisticTxn.id))
+        revertOptimisticInventory(itemName)
+        showToast('error', 'Failed', result.error.message)
+        return
+      }
+
+      // Replace optimistic with real data
+      setTransactions(prev =>
+        (prev || []).map(t => (t.id === optimisticTxn.id ? result.data : t))
+      )
+
+      showToast('success', `${txnType} Recorded`, `${itemName} — ${fmtNum(quantity)} ${form.unit}`)
+      addNotification({
+        title: txnType,
+        msg: `${quantity} ${form.unit} of ${itemName}`,
+        type: 'success',
+      })
+      setShowModal(false)
+      resetForm()
+    } catch (err) {
+      // Revert optimistic updates
+      setTransactions(prev => (prev || []).filter(t => t.id !== optimisticTxn.id))
+      revertOptimisticInventory(itemName)
+      console.error('[StockMovement] Unexpected error:', err)
+      showToast('error', 'Failed', err.message || 'An unexpected error occurred')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }, [
+    validate, isSubmitting, user, form, txnType, isStockIn,
+    applyOptimisticInventory, revertOptimisticInventory,
+    setTransactions, setInventory, showToast, addNotification, resetForm,
+  ])
+
+  // ── Selection Handlers ──────────────────────────────────────────────────
+  const handleTemplateSelect = useCallback((template) => {
     setTemplateSearch(template.name)
-    set('item', template.name)
-    set('category', template.category || '')
-    set('unit', template.unit || 'pcs')
-  }
+    setForm(prev => ({
+      ...prev,
+      item: template.name,
+      category: template.category || '',
+      unit: template.unit || 'pcs',
+    }))
+    setErrors(prev => ({ ...prev, item: undefined }))
+  }, [])
 
-  // Handle inventory selection (Wastage)
-  const handleInvSelect = (inv) => {
-    setSelectedInv(inv)
+  const handleInvSelect = useCallback((inv) => {
     setInvSearch(inv.name)
-    set('item', inv.name)
-    set('category', inv.category || '')
-    set('unit', inv.unit || 'pcs')
-  }
+    setForm(prev => ({
+      ...prev,
+      item: inv.name,
+      category: inv.category || '',
+      unit: inv.unit || 'pcs',
+    }))
+    setErrors(prev => ({ ...prev, item: undefined }))
+  }, [])
 
-  // Navigate to templates page when no template found
-  const handleGoToTemplates = () => {
+  const handleSupplierSelect = useCallback((supplier) => {
+    setSupplierSearch(supplier.name)
+    updateForm('source', supplier.name)
+  }, [updateForm])
+
+  const handleGoToTemplates = useCallback(() => {
     setShowModal(false)
-    setTab('templates') // or use your router navigation
-  }
+    setTab('templates')
+  }, [setTab])
 
-  const typeColor = (t) => ({
-    'Stock IN':    { bg:'#dcfce7', color:'#166534' },
-    'Wastage':     { bg:'#fef9c3', color:'#854d0e' },
-    'Fulfillment': { bg:'#f3e8ff', color:'#7c3aed' },
-  }[t] || { bg:'#f3f4f6', color:'#374151' })
+  // ── Type Style Helper ─────────────────────────────────────────────────
+  const getTypeStyle = useCallback((type) => {
+    return TYPE_STYLES[type] || { bg: '#f3f4f6', color: '#374151', sign: '' }
+  }, [])
 
-  const canDo = userCan('stockIn', user?.role)
+  const canRecord = userCan('stockIn', user?.role) || userCan('stockOut', user?.role)
 
+  // ── Render ──────────────────────────────────────────────────────────────
   return (
     <div className="animate-fade-in">
       {/* Header */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 20,
+        flexWrap: 'wrap',
+        gap: 12,
+      }}>
         <div>
-          <h2 style={{ fontSize:18, fontWeight:700, color:theme.text }}>Stock Movement</h2>
-          <p style={{ fontSize:12, color:theme.textMuted }}>All transactions — the source of truth for inventory</p>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: theme.text, margin: 0 }}>
+            Stock Movement
+          </h2>
+          <p style={{ fontSize: 13, color: theme.textMuted, margin: '4px 0 0 0' }}>
+            All transactions — the source of truth for inventory
+          </p>
         </div>
-        {canDo && (
-          <div style={{ display:'flex', gap:8 }}>
-            <Btn id="btn-stock-in" variant="primary"
-              onClick={() => openModal('Stock IN')}>
-              <Ic n="Plus" size={14} color="white"/> Stock IN
-            </Btn>
-            <Btn variant="warning"
-              onClick={() => openModal('Wastage')}>
-              <Ic n="Trash2" size={14}/> Wastage
-            </Btn>
+        {canRecord && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {TRANSACTION_TYPES.map(t => (
+              <Btn
+                key={t.key}
+                variant={t.variant}
+                onClick={() => openModal(t.key)}
+                disabled={isSubmitting}
+              >
+                <Ic n={t.icon} size={14} color="white" />
+                {t.label}
+              </Btn>
+            ))}
           </div>
         )}
       </div>
 
       {/* Filters */}
-      <Card style={{ marginBottom:16, padding:'12px 14px' }}>
-        <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
-          <div style={{ position:'relative', flex:1, minWidth:160 }}>
-            <Ic n="Search" size={13} color="#9ca3af"
-              style={{ position:'absolute', left:9, top:'50%', transform:'translateY(-50%)' }}/>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item…"
-              style={{ width:'100%', padding:'8px 10px 8px 28px', border:`1px solid ${theme.inputBorder}`,
-                borderRadius:7, fontSize:13, background:theme.inputBg, color:theme.text }}/>
+      <Card style={{ marginBottom: 16, padding: '12px 14px' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+            <Ic
+              n="Search"
+              size={13}
+              color="#9ca3af"
+              style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}
+            />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search transactions by item name…"
+              style={{
+                width: '100%',
+                padding: '9px 10px 9px 32px',
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: 8,
+                fontSize: 13,
+                background: theme.inputBg,
+                color: theme.text,
+                outline: 'none',
+              }}
+            />
           </div>
-          <select value={filterType} onChange={e => setFilterType(e.target.value)}
-            style={{ padding:'8px 10px', border:`1px solid ${theme.inputBorder}`,
-              borderRadius:7, fontSize:13, background:theme.inputBg, color:theme.text }}>
-            {['All','Stock IN','Wastage','Fulfillment'].map(t => <option key={t}>{t}</option>)}
+          <select
+            value={filterType}
+            onChange={e => setFilterType(e.target.value)}
+            style={{
+              padding: '9px 12px',
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: 8,
+              fontSize: 13,
+              background: theme.inputBg,
+              color: theme.text,
+              cursor: 'pointer',
+              minWidth: 140,
+            }}
+          >
+            {TYPE_FILTERS.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
+          {(search || filterType !== 'All') && (
+            <button
+              onClick={() => { setSearch(''); setFilterType('All') }}
+              style={{
+                padding: '9px 14px',
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#2563eb',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Reset Filters
+            </button>
+          )}
         </div>
       </Card>
 
-      {/* Transactions table */}
-      <Card style={{ padding:0, overflow:'hidden' }}>
-        {filtered.length === 0
-          ? <EmptyState icon="ArrowLeftRight" title="No transactions" message="Record a Stock IN to get started"/>
-          : (
-            <div style={{ overflowX:'auto' }}>
-              <table style={{ width:'100%', borderCollapse:'collapse' }}>
-                <thead>
-                  <tr style={{ background:theme.bg }}>
-                    {['Type','Item','Qty','Unit','Source','Notes','Recorded By','Date'].map(h => (
-                      <th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:12,
-                        fontWeight:600, color:theme.textMuted, borderBottom:`1px solid ${theme.border}`,
-                        whiteSpace:'nowrap' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map(t => {
-                    const { bg, color } = typeColor(t.type)
-                    const itemName = t.item_name || t.item || '—'
-                    const qty = t.quantity ?? t.qty
-                    const recordedBy = t.recorded_by_name || t.user || '—'
-                    const dateStr = t.created_at || t.date
-                    return (
-                      <tr key={t.id} style={{ borderBottom:`1px solid ${theme.border}` }}>
-                        <td style={{ padding:'10px 14px' }}>
-                          <span style={{ padding:'2px 8px', borderRadius:6, fontSize:11,
-                            fontWeight:600, background:bg, color, whiteSpace:'nowrap' }}>
-                            {t.type}
+      {/* Transactions Table */}
+      <Card style={{ padding: 0, overflow: 'hidden' }}>
+        {filteredTransactions.length === 0 ? (
+          <EmptyState
+            icon="ArrowLeftRight"
+            title="No transactions found"
+            message={
+              search || filterType !== 'All'
+                ? 'Try adjusting your search or filters'
+                : 'Record a Stock IN to get started'
+            }
+          />
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: theme.bg }}>
+                  {['Type', 'Item', 'Qty', 'Unit', 'Source', 'Notes', 'Recorded By', 'Date'].map(h => (
+                    <th
+                      key={h}
+                      style={{
+                        padding: '12px 14px',
+                        textAlign: 'left',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        color: theme.textMuted,
+                        borderBottom: `1px solid ${theme.border}`,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTransactions.map(t => {
+                  const style = getTypeStyle(t.type)
+                  const itemName = t.item_name || t.item || '—'
+                  const qty = t.quantity ?? t.qty ?? 0
+                  const recordedBy = t.recorded_by_name || t.user || '—'
+                  const dateStr = t.created_at || t.date
+                  const isOptimistic = t._optimistic
+
+                  return (
+                    <tr
+                      key={t.id}
+                      style={{
+                        borderBottom: `1px solid ${theme.border}`,
+                        opacity: isOptimistic ? 0.6 : 1,
+                      }}
+                    >
+                      <td style={{ padding: '10px 14px' }}>
+                        <span style={{
+                          padding: '3px 10px',
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          background: style.bg,
+                          color: style.color,
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {t.type}
+                        </span>
+                      </td>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: theme.text,
+                      }}>
+                        {itemName}
+                      </td>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: style.color,
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {style.sign}{fmtNum(qty)}
+                      </td>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontSize: 13,
+                        color: theme.textMuted,
+                      }}>
+                        {t.unit || '—'}
+                      </td>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontSize: 13,
+                        color: theme.textMuted,
+                      }}>
+                        {t.source || '—'}
+                      </td>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontSize: 12,
+                        color: theme.textMuted,
+                        maxWidth: 180,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}>
+                        {t.notes || '—'}
+                      </td>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontSize: 12,
+                        color: theme.textMuted,
+                      }}>
+                        {recordedBy}
+                      </td>
+                      <td style={{
+                        padding: '10px 14px',
+                        fontSize: 12,
+                        color: theme.textMuted,
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {dateStr ? new Date(dateStr).toLocaleString() : '—'}
+                        {isOptimistic && (
+                          <span style={{ marginLeft: 6, fontSize: 10, color: '#9ca3af' }}>
+                            (syncing…)
                           </span>
-                        </td>
-                        <td style={{ padding:'10px 14px', fontSize:13, fontWeight:600, color:theme.text }}>
-                          {itemName}
-                        </td>
-                        <td style={{ padding:'10px 14px', fontSize:13,
-                          color: t.type==='Stock IN' ? '#16a34a' : '#dc2626', fontWeight:600 }}>
-                          {t.type==='Stock IN' ? '+' : '-'}{fmtNum(qty)}
-                        </td>
-                        <td style={{ padding:'10px 14px', fontSize:13, color:theme.textMuted }}>{t.unit||'—'}</td>
-                        <td style={{ padding:'10px 14px', fontSize:13, color:theme.textMuted }}>
-                          {t.source || '—'}
-                        </td>
-                        <td style={{ padding:'10px 14px', fontSize:12, color:theme.textMuted, maxWidth:160,
-                          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                          {t.notes || '—'}
-                        </td>
-                        <td style={{ padding:'10px 14px', fontSize:12, color:theme.textMuted }}>
-                          {recordedBy}
-                        </td>
-                        <td style={{ padding:'10px 14px', fontSize:12, color:theme.textMuted, whiteSpace:'nowrap' }}>
-                          {dateStr ? new Date(dateStr).toLocaleString() : '—'}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )
-        }
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {filteredTransactions.length > 0 && (
+          <div style={{
+            padding: '10px 14px',
+            fontSize: 12,
+            color: theme.textMuted,
+            textAlign: 'right',
+            borderTop: `1px solid ${theme.border}`,
+          }}>
+            Showing {filteredTransactions.length} of {(transactions || []).length} transactions
+          </div>
+        )}
       </Card>
 
-      {/* Stock IN / Wastage Modal */}
-      <Modal open={showModal} onClose={() => { setShowModal(false); resetForm() }}
-        title={txnType === 'Stock IN' ? '📦 Record Stock IN' : '🗑️ Record Wastage'}>
-
-        {/* Type selector */}
-        <div style={{ display:'flex', gap:8, marginBottom:18 }}>
-          {TXN_TYPES.map(t => (
-            <button key={t} onClick={() => { setTxnType(t); resetForm() }}
-              style={{ flex:1, padding:'7px 4px', borderRadius:7, fontSize:12, fontWeight:600, cursor:'pointer',
-                border: txnType===t ? 'none' : '1px solid #e5e7eb',
-                background: txnType===t ? (t==='Stock IN'?'#2563eb':'#d97706') : '#f9fafb',
-                color: txnType===t ? 'white' : '#6b7280' }}>
-              {t}
+      {/* Modal */}
+      <Modal
+        open={showModal}
+        onClose={() => { setShowModal(false); resetForm() }}
+        title={
+          txnType === 'Stock IN' ? '📦 Record Stock IN'
+          : txnType === 'Stock OUT' ? '📤 Record Stock OUT'
+          : txnType === 'Wastage' ? '🗑️ Record Wastage'
+          : '✅ Record Fulfillment'
+        }
+      >
+        {/* Type Selector */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
+          {TRANSACTION_TYPES.map(t => (
+            <button
+              key={t.key}
+              onClick={() => { setTxnType(t.key); resetForm() }}
+              disabled={isSubmitting}
+              style={{
+                flex: 1,
+                minWidth: 100,
+                padding: '8px 6px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                border: txnType === t.key ? 'none' : '1px solid #e5e7eb',
+                background: txnType === t.key
+                  ? (t.key === 'Stock IN' ? '#2563eb' : t.key === 'Stock OUT' ? '#dc2626' : t.key === 'Wastage' ? '#d97706' : '#7c3aed')
+                  : '#f9fafb',
+                color: txnType === t.key ? 'white' : '#6b7280',
+                transition: 'all 0.15s',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+              }}
+            >
+              <Ic n={t.icon} size={12} color={txnType === t.key ? 'white' : '#6b7280'} />
+              {t.label}
             </button>
           ))}
         </div>
 
-        {/* Item selection — Template for Stock IN, Inventory for Wastage */}
-        {txnType === 'Stock IN' ? (
-          <div style={{ marginBottom:14 }}>
+        {/* Item Selection */}
+        {isStockIn ? (
+          <div style={{ marginBottom: 14 }}>
             <SearchableDropdown
               items={templates || []}
               value={templateSearch}
@@ -525,7 +836,7 @@ export default function StockMovement() {
             />
           </div>
         ) : (
-          <div style={{ marginBottom:14 }}>
+          <div style={{ marginBottom: 14 }}>
             <SearchableDropdown
               items={inventory || []}
               value={invSearch}
@@ -540,49 +851,110 @@ export default function StockMovement() {
         )}
 
         {/* Quantity */}
-        <div style={{ marginBottom:14 }}>
-          <label style={{ display:'block', fontSize:13, fontWeight:500, color:'#374151', marginBottom:5 }}>
-            Quantity <span style={{ color:'#ef4444' }}>*</span>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{
+            display: 'block',
+            fontSize: 13,
+            fontWeight: 500,
+            color: '#374151',
+            marginBottom: 5,
+          }}>
+            Quantity <span style={{ color: '#ef4444' }}>*</span>
           </label>
-          <input type="number" value={form.qty} onChange={e => set('qty', e.target.value)}
-            min="0.01" step="0.01" placeholder="0"
-            style={{ width:'100%', padding:'10px 12px', border:`1px solid ${errors.qty?'#ef4444':theme.inputBorder}`,
-              borderRadius:8, fontSize:14, fontWeight:600, background:theme.inputBg, color:theme.text }}/>
-          {errors.qty && <div className="field-error">{errors.qty}</div>}
+          <input
+            type="number"
+            value={form.qty}
+            onChange={e => updateForm('qty', e.target.value)}
+            min="0.01"
+            step="0.01"
+            placeholder="0"
+            disabled={isSubmitting}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              border: `1px solid ${errors.qty ? '#ef4444' : theme.inputBorder}`,
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 600,
+              background: theme.inputBg,
+              color: theme.text,
+              outline: 'none',
+            }}
+          />
+          {errors.qty && (
+            <div style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>{errors.qty}</div>
+          )}
         </div>
 
-        {/* Supplier (Stock IN only) */}
-        {txnType === 'Stock IN' && (
-          <div style={{ marginBottom:14 }}>
+        {/* Supplier / Source (Stock IN only) */}
+        {isStockIn && (
+          <div style={{ marginBottom: 14 }}>
             <SearchableDropdown
               items={(suppliers || []).map(s => ({ id: s.id, name: s.name }))}
               value={supplierSearch}
-              onChange={v => { setSupplierSearch(v); set('source', v) }}
-              onSelect={(supplier) => { setSupplierSearch(supplier.name); set('source', supplier.name) }}
+              onChange={v => { setSupplierSearch(v); updateForm('source', v) }}
+              onSelect={handleSupplierSelect}
               placeholder="Search or type supplier…"
-              label="Supplier"
+              label="Supplier / Source"
               theme={theme}
             />
           </div>
         )}
 
         {/* Notes */}
-        <div style={{ marginBottom:18 }}>
-          <label style={{ display:'block', fontSize:13, fontWeight:500, color:'#374151', marginBottom:5 }}>Notes</label>
-          <textarea value={form.notes} onChange={e => set('notes', e.target.value)} rows={2}
+        <div style={{ marginBottom: 18 }}>
+          <label style={{
+            display: 'block',
+            fontSize: 13,
+            fontWeight: 500,
+            color: '#374151',
+            marginBottom: 5,
+          }}>
+            Notes
+          </label>
+          <textarea
+            value={form.notes}
+            onChange={e => updateForm('notes', e.target.value)}
+            rows={2}
             placeholder="Optional notes…"
-            style={{ width:'100%', padding:'10px 12px', border:`1px solid ${theme.inputBorder}`,
-              borderRadius:8, fontSize:13, resize:'vertical', background:theme.inputBg, color:theme.text }}/>
+            disabled={isSubmitting}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: 8,
+              fontSize: 13,
+              resize: 'vertical',
+              background: theme.inputBg,
+              color: theme.text,
+              outline: 'none',
+              minHeight: 60,
+            }}
+          />
         </div>
 
-        <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
-          <Btn variant="outline" onClick={() => { setShowModal(false); resetForm() }}>Cancel</Btn>
+        {/* Actions */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Btn
-            variant={txnType==='Stock IN' ? 'primary' : 'warning'}
-            onClick={handleSubmit}
-            disabled={loading || processingRef.current}
+            variant="outline"
+            onClick={() => { setShowModal(false); resetForm() }}
+            disabled={isSubmitting}
           >
-            {loading ? 'Saving…' : `Record ${txnType}`}
+            Cancel
+          </Btn>
+          <Btn
+            variant={isStockIn ? 'primary' : 'danger'}
+            onClick={handleSubmit}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? (
+              <>
+                <Ic n="Loader2" size={14} className="spin" />
+                Saving…
+              </>
+            ) : (
+              `Record ${txnType}`
+            )}
           </Btn>
         </div>
       </Modal>

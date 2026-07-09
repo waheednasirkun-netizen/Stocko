@@ -1,13 +1,12 @@
-console.log('[RestoStock] AppContext.jsx loaded')
 
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   authApi, usersApi, templatesApi, suppliersApi,
   transactionsApi, procurementApi,
   purchaseOrdersApi, financialApi, activityApi,
+  inventoryApi,
 } from '../lib/api'
 import { supabase } from '../lib/supabase'
-import { computeInventory } from '../lib/computeInventory'
 import { lightTheme, darkTheme, DEFAULT_UNITS } from '../lib/constants'
 
 const AppContext = createContext(null)
@@ -18,15 +17,26 @@ export const useApp = () => {
   return ctx
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   APPCONTEXT PROVIDER
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 export function AppProvider({ children }) {
 
-  // ── Auth state ─────────────────────────────────────────────────────────────
+  // ── Auth state ────────────────────────────────────────────────────────────
   const [user,      setUser]      = useState(null)
   const [authReady, setAuthReady] = useState(false)
   const [authError, setAuthError] = useState(null)
 
-  // ── UI state ───────────────────────────────────────────────────────────────
-  const [dark,          setDark]          = useState(() => localStorage.getItem('rs_dark') === 'true')
+  // ── Theme state ───────────────────────────────────────────────────────────
+const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true')
+
+  useEffect(() => {
+    localStorage.setItem('rs_dark', dark)
+  }, [dark])
+
+  const theme = dark ? darkTheme : lightTheme
+  // ── UI state ──────────────────────────────────────────────────────────────
   const [tab,           setTab]           = useState('dashboard')
   const [sidebarOpen,   setSidebar]       = useState(window.innerWidth > 768)
   const [toasts,        setToasts]        = useState([])
@@ -35,10 +45,12 @@ export function AppProvider({ children }) {
   const [systemMsg,     setSystemMsg]     = useState('System is currently under maintenance.')
   const [customUnits,   setCustomUnits]   = useState([])
   const [loading,       setLoading]       = useState(false)
-  const [categories,   setCategories]            = useState([])
-  // ── Business data ──────────────────────────────────────────────────────────
+  const [categories,    setCategories]    = useState([])
+
+  // ── Business data ───────────────────────────────────────────────────────
   const [transactions,          setTransactions]          = useState([])
   const [requests,              setRequests]              = useState([])
+  const [inventory,             setInventory]             = useState([])
   const [templates,             setTemplates]             = useState([])
   const [suppliers,             setSuppliers]             = useState([])
   const [users,                 setUsers]                 = useState([])
@@ -48,50 +60,13 @@ export function AppProvider({ children }) {
   const [activityLogs,          setActivityLogs]          = useState([])
   const [dataLoaded,            setDataLoaded]            = useState(false)
 
-  const theme = dark ? darkTheme : lightTheme
-
-  useEffect(() => { localStorage.setItem('rs_dark', dark) }, [dark])
-
-  // ── Inventory — derived, never stored ─────────────────────────────────────
-  const inventory = useMemo(
-    () => {
-      const safeTransactions = Array.isArray(transactions) ? transactions : []
-      const safeTemplates = Array.isArray(templates) ? templates : []
-      return computeInventory(safeTransactions, safeTemplates)
-    },
-    [transactions, templates]
-  )
-
-  // ── Stats ──────────────────────────────────────────────────────────────────
-  const stats = useMemo(() => {
-    // Safety checks - ensure we have arrays
-    const safeInventory = Array.isArray(inventory) ? inventory : []
-    const safeTransactions = Array.isArray(transactions) ? transactions : []
-    const safeSuppliers = Array.isArray(suppliers) ? suppliers : []
-    
-    const lowStock = safeInventory.filter(i => i.quantity <= (i.minQty || 0) && i.minQty > 0)
-    const critical = safeInventory.filter(i => i.status === 'Critical')
-    const stockInTotal = safeTransactions.filter(t => t.type === 'Stock IN')
-      .reduce((s, t) => s + Math.abs(Number(t.quantity || t.qty) || 0), 0)
-    const stockOutTotal = safeTransactions.filter(t => ['Stock OUT', 'Wastage'].includes(t.type))
-      .reduce((s, t) => s + Math.abs(Number(t.quantity || t.qty) || 0), 0)
-    const invValue = safeInventory.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.cost) || 0), 0)
-    
-    return {
-      totalItems: safeInventory.length,
-      lowStockCount: lowStock.length,
-      criticalCount: critical.length,
-      stockInTotal,
-      stockOutTotal,
-      activeSuppliers: safeSuppliers.length,
-      inventoryValue: invValue,
-    }
-  }, [inventory, transactions, suppliers])
+  // ── Derived: all units ──────────────────────────────────────────────────
   const allUnits = useMemo(
     () => [...new Set([...DEFAULT_UNITS, ...customUnits])],
     [customUnits]
   )
-  // ── Toast helpers ──────────────────────────────────────────────────────────
+
+  // ── Toast helpers ───────────────────────────────────────────────────────
   const showToast = useCallback((type, title, msg, duration = 4500) => {
     const id = Date.now() + Math.random()
     setToasts(prev => [...prev.slice(-4), { id, type, title, msg }])
@@ -114,10 +89,11 @@ export function AppProvider({ children }) {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })))
   }, [])
 
-  // ── Clear data on logout ───────────────────────────────────────────────────
+  // ── Clear data on logout ────────────────────────────────────────────────
   const clearData = useCallback(() => {
     setTransactions([])
     setRequests([])
+    setInventory([])
     setTemplates([])
     setSuppliers([])
     setUsers([])
@@ -125,29 +101,36 @@ export function AppProvider({ children }) {
     setPurchaseOrders([])
     setFinancialTransactions([])
     setActivityLogs([])
+    setCategories([])
     setDataLoaded(false)
   }, [])
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // REQUESTS SYSTEM (replaces old demands)
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ═════════════════════════════════════════════════════════════════════════
+  // DATA FETCHING
+  // ═════════════════════════════════════════════════════════════════════════
 
-  // ── Fetch Requests ────────────────────────────────────────────────────
-  const fetchRequests = useCallback(async () => {
-    if (!user?.branch_id) return
+  const getBranchId = useCallback((u) => {
+    return u?.branch_id ?? u?.branchId ?? null
+  }, [])
+
+  const fetchInventory = useCallback(async (branchId) => {
+    if (!branchId) return
+    const { data, error } = await inventoryApi.getAll(branchId)
+    if (error) console.error('[AppContext] fetchInventory error:', error.message)
+    else setInventory(data || [])
+  }, [])
+
+  const fetchRequests = useCallback(async (branchId) => {
+    if (!branchId) return
     try {
       const { data, error } = await supabase
         .from('requests')
-        .select(`
-          *,
-          request_items (*)
-        `)
-        .eq('branch_id', user.branch_id)
+        .select(`*, request_items (*)`)
+        .eq('branch_id', branchId)
         .order('created_at', { ascending: false })
 
       if (error) throw error
 
-      // Flatten for table display (primary item info)
       const flattened = (data || []).map(r => {
         const primaryItem = r.request_items?.[0] || {}
         return {
@@ -168,14 +151,361 @@ export function AppProvider({ children }) {
       showToast('error', 'Error loading requests', error.message)
       return []
     }
-  }, [user?.branch_id, showToast])
+  }, [showToast])
 
-  // ── Create Request ─────────────────────────────────────────────────────
-  const createRequest = useCallback(async ({ department, notes, items }) => {
-    const branchId = user?.branch_id || user?.branchId || null
+  const fetchCategories = useCallback(async (branchId) => {
+    if (!branchId) return
+    try {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('branch_id', branchId)
+        .order('name', { ascending: true })
+      if (error) throw error
+      setCategories(data || [])
+    } catch (err) {
+      console.error('[AppContext] fetchCategories error:', err)
+      showToast('error', 'Error loading categories', err.message)
+    }
+  }, [showToast])
+
+  // ── Load all business data ────────────────────────────────────────────────
+  const loadAllData = useCallback(async (loggedInUser) => {
+    if (!loggedInUser) {
+      console.warn('[AppContext] loadAllData: no user provided')
+      setDataLoaded(true)
+      return
+    }
+
+    const branchId = getBranchId(loggedInUser)
 
     if (!branchId) {
-      console.error('[AppContext] createRequest: No branch_id found in user:', user)
+      console.warn('[AppContext] loadAllData: no branch_id — user:', loggedInUser)
+      showToast('error', 'Branch Error', 'No branch assigned to your account. Please contact administrator.')
+      setDataLoaded(true)
+      return
+    }
+
+    console.log('[AppContext] loadAllData start — branch:', branchId)
+    setLoading(true)
+    try {
+      const [
+        txnRes, invRes, tmplRes, supRes,
+        usrRes, procRes, poRes, finRes, actRes,
+      ] = await Promise.all([
+        transactionsApi.getAll(branchId),
+        inventoryApi.getAll(branchId),
+        templatesApi.getAll(branchId),
+        suppliersApi.getAll(branchId),
+        usersApi.getAll(),
+        procurementApi.getAll(branchId),
+        purchaseOrdersApi.getAll(branchId),
+        financialApi.getAll(branchId),
+        activityApi.getAll(branchId),
+      ])
+
+      if (txnRes.error)  console.error('[AppContext] transactions:', txnRes.error.message)
+      if (invRes.error)  console.error('[AppContext] inventory:', invRes.error.message)
+      if (tmplRes.error) console.error('[AppContext] templates:', tmplRes.error.message)
+      if (supRes.error)  console.error('[AppContext] suppliers:', supRes.error.message)
+      if (usrRes.error)  console.error('[AppContext] users:', usrRes.error.message)
+      if (procRes.error) console.error('[AppContext] procurement:', procRes.error.message)
+      if (poRes.error)   console.error('[AppContext] purchase orders:', poRes.error.message)
+      if (finRes.error)  console.error('[AppContext] financials:', finRes.error.message)
+      if (actRes.error)  console.error('[AppContext] activity logs:', actRes.error.message)
+
+      if (txnRes.data)  setTransactions(txnRes.data)
+      if (invRes.data)  setInventory(invRes.data)
+      if (tmplRes.data) setTemplates(tmplRes.data)
+      if (supRes.data)  setSuppliers(supRes.data)
+      if (usrRes.data)  setUsers(usrRes.data)
+      if (procRes.data) setProcurements(procRes.data)
+      if (poRes.data)   setPurchaseOrders(poRes.data)
+      if (finRes.data)  setFinancialTransactions(finRes.data)
+      if (actRes.data)  setActivityLogs(actRes.data)
+
+      await fetchRequests(branchId)
+      await fetchCategories(branchId)
+
+      setDataLoaded(true)
+      console.log('[AppContext] loadAllData complete ✓', {
+        transactions: txnRes.data?.length ?? 0,
+        inventory:    invRes.data?.length ?? 0,
+        requests:     requests.length,
+        templates:    tmplRes.data?.length ?? 0,
+        suppliers:    supRes.data?.length ?? 0,
+      })
+    } catch (err) {
+      console.error('[AppContext] loadAllData error:', err)
+      showToast('error', 'Load Failed', 'Could not load data. Check console for details.')
+      setDataLoaded(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [showToast, fetchRequests, fetchCategories, getBranchId, requests.length])
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // REAL-TIME SUBSCRIPTIONS (single source of truth)
+  // ═════════════════════════════════════════════════════════════════════════
+
+  useEffect(() => {
+    if (!user?.branch_id) return
+
+    const channels = []
+
+    // Inventory real-time updates
+    const invChannel = supabase
+      .channel(`inventory:${user.branch_id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'inventory',
+        filter: `branch_id=eq.${user.branch_id}`,
+      }, (payload) => {
+        console.log('[AppContext] inventory realtime:', payload.eventType, payload.new?.name)
+        fetchInventory(user.branch_id)
+      })
+      .subscribe()
+    channels.push(invChannel)
+
+    // Transactions real-time updates
+    const txnChannel = supabase
+      .channel(`transactions:${user.branch_id}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'transactions',
+        filter: `branch_id=eq.${user.branch_id}`,
+      }, (payload) => {
+        console.log('[AppContext] transaction realtime:', payload.new?.type, payload.new?.item_name)
+        setTransactions(prev => [payload.new, ...prev])
+      })
+      .subscribe()
+    channels.push(txnChannel)
+
+    // Requests real-time updates
+    const reqChannel = supabase
+      .channel(`requests:${user.branch_id}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'requests',
+        filter: `branch_id=eq.${user.branch_id}`,
+      }, () => {
+        fetchRequests(user.branch_id)
+      })
+      .subscribe()
+    channels.push(reqChannel)
+
+    return () => {
+      channels.forEach(ch => supabase.removeChannel(ch))
+    }
+  }, [user?.branch_id, fetchInventory, fetchRequests])
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // AUTH LISTENER
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const loadAllDataRef  = useRef(loadAllData)
+  const clearDataRef    = useRef(clearData)
+  const handledByLogin  = useRef(false)
+
+  useEffect(() => { loadAllDataRef.current = loadAllData }, [loadAllData])
+  useEffect(() => { clearDataRef.current   = clearData   }, [clearData])
+
+  useEffect(() => {
+    const finishAuth = async (session) => {
+      if (!session) {
+        setAuthReady(true)
+        return
+      }
+
+      if (handledByLogin.current) {
+        handledByLogin.current = false
+        setAuthReady(true)
+        return
+      }
+
+      const { data: restoredUser, error } = await authApi.userFromSession(session)
+
+      if (error || !restoredUser) {
+        console.error('[AppContext] session profile failed:', error?.message)
+        setAuthReady(true)
+        return
+      }
+
+      console.log('[AppContext] authenticated:', restoredUser.email)
+      setUser(restoredUser)
+      await loadAllDataRef.current(restoredUser)
+      setAuthReady(true)
+    }
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        console.log('[AppContext] auth event:', event)
+
+        if (event === 'INITIAL_SESSION') {
+          setTimeout(() => { void finishAuth(session) }, 0)
+          return
+        }
+
+        if (event === 'SIGNED_IN') {
+          setTimeout(() => { void finishAuth(session) }, 0)
+          return
+        }
+
+        if (event === 'SIGNED_OUT') {
+          setUser(null)
+          clearDataRef.current()
+          setTab('dashboard')
+          setAuthReady(true)
+          return
+        }
+      }
+    )
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // ── Login ─────────────────────────────────────────────────────────────────
+  const login = useCallback(async (email, password) => {
+    console.log('[AppContext] login:', email)
+    setAuthError(null)
+
+    const { data: loggedInUser, error } = await authApi.login(email, password)
+
+    if (error) {
+      setAuthError(error.message)
+      setAuthReady(true)
+      return { error }
+    }
+
+    if (loggedInUser) {
+      handledByLogin.current = true
+      setUser(loggedInUser)
+      await loadAllData(loggedInUser)
+      setAuthReady(true)
+    }
+
+    return { data: loggedInUser }
+  }, [loadAllData])
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const logout = useCallback(async () => {
+    await authApi.logout()
+  }, [])
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // ACTION LOCK
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const actionInProgress = useRef(false)
+  const withActionLock = useCallback(async (fn) => {
+    if (actionInProgress.current) {
+      showToast('info', 'Please wait', 'An operation is already in progress')
+      return { locked: true }
+    }
+    actionInProgress.current = true
+    try {
+      const result = await fn()
+      return { locked: false, result }
+    } catch (err) {
+      console.error('[AppContext] action lock error:', err)
+      return { locked: false, error: err }
+    } finally {
+      actionInProgress.current = false
+    }
+  }, [showToast])
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // STOCK OPERATIONS
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const handleStockIn = useCallback(async (formData) => {
+    const branchId = getBranchId(user)
+    if (!branchId) {
+      showToast('error', 'Branch Error', 'No branch assigned to your account')
+      return { success: false }
+    }
+
+    return withActionLock(async () => {
+      const { data, error } = await transactionsApi.stockIn({
+        ...formData,
+        branchId,
+        userId:   user?.id,
+        userName: user?.name || user?.full_name || 'Unknown',
+      })
+      if (error) {
+        showToast('error', 'Stock IN Failed', error.message)
+        return { success: false, error }
+      }
+      setTransactions(prev => [data, ...prev])
+      // Inventory is updated via real-time subscription, but optimistically:
+      setInventory(prev => {
+        const idx = prev.findIndex(i => i.name?.toLowerCase() === formData.item?.toLowerCase())
+        if (idx >= 0) {
+          const updated = [...prev]
+          updated[idx] = {
+            ...updated[idx],
+            quantity: (Number(updated[idx].quantity) || 0) + Math.abs(Number(formData.qty)),
+            updated_at: new Date().toISOString(),
+          }
+          return updated
+        }
+        return prev
+      })
+      addNotification({ title: 'Stock IN', msg: `${formData.qty} ${formData.unit} of ${formData.item}`, type: 'success' })
+      showToast('success', 'Stock IN Recorded', `${formData.item} — ${formData.qty} ${formData.unit}`)
+      return { success: true, data }
+    })
+  }, [user, getBranchId, withActionLock, addNotification, showToast])
+
+  const handleStockOut = useCallback(async (formData) => {
+    const branchId = getBranchId(user)
+    if (!branchId) {
+      showToast('error', 'Branch Error', 'No branch assigned to your account')
+      return { success: false }
+    }
+
+    return withActionLock(async () => {
+      const { data, error } = await transactionsApi.stockOut({
+        ...formData,
+        branchId,
+        userId:   user?.id,
+        userName: user?.name || user?.full_name || 'Unknown',
+      })
+      if (error) {
+        showToast('error', 'Stock OUT Failed', error.message)
+        return { success: false, error }
+      }
+      setTransactions(prev => [data, ...prev])
+      // Optimistic inventory update
+      setInventory(prev => {
+        const idx = prev.findIndex(i => i.name?.toLowerCase() === formData.item?.toLowerCase())
+        if (idx >= 0) {
+          const updated = [...prev]
+          updated[idx] = {
+            ...updated[idx],
+            quantity: Math.max(0, (Number(updated[idx].quantity) || 0) - Math.abs(Number(formData.qty))),
+            updated_at: new Date().toISOString(),
+          }
+          return updated
+        }
+        return prev
+      })
+      addNotification({ title: formData.type || 'Stock OUT', msg: `${formData.qty} ${formData.unit} of ${formData.item}`, type: 'success' })
+      showToast('success', `${formData.type || 'Stock OUT'} Recorded`, `${formData.item} — ${formData.qty} ${formData.unit}`)
+      return { success: true, data }
+    })
+  }, [user, getBranchId, withActionLock, addNotification, showToast])
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // REQUESTS SYSTEM
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const createRequest = useCallback(async ({ department, notes, items }) => {
+    const branchId = getBranchId(user)
+    if (!branchId) {
       showToast('error', 'Branch Error', 'No branch assigned')
       return { success: false, error: new Error('No branch') }
     }
@@ -211,7 +541,6 @@ export function AppProvider({ children }) {
 
       if (itemsError) throw itemsError
 
-      // Create notification
       await createNotification({
         type: 'request_created',
         title: 'New Request',
@@ -219,14 +548,13 @@ export function AppProvider({ children }) {
         link: '/requests',
       })
 
-      // Create activity log
       await createActivityLog({
         action: 'REQUEST_CREATED',
         description: `${department} created a request with ${items.length} item(s)`,
         metadata: { department, itemCount: items.length, requestId: req.id }
       })
 
-      await fetchRequests()
+      await fetchRequests(branchId)
       return { success: true, data: req }
 
     } catch (error) {
@@ -234,9 +562,8 @@ export function AppProvider({ children }) {
       showToast('error', 'Create Failed', error.message)
       return { success: false, error }
     }
-  }, [user, showToast, fetchRequests])
+  }, [user, getBranchId, showToast, fetchRequests])
 
-  // ── Approve Request ────────────────────────────────────────────────────
   const approveRequest = useCallback(async (id) => {
     try {
       const { error } = await supabase
@@ -250,31 +577,15 @@ export function AppProvider({ children }) {
         .eq('id', id)
 
       if (error) throw error
-
-      await createNotification({
-        type: 'request_approved',
-        title: 'Request Approved',
-        message: `Request has been approved`,
-        link: '/requests',
-      })
-
-      await createActivityLog({
-        action: 'REQUEST_APPROVED',
-        description: `Request was approved`,
-        metadata: { requestId: id }
-      })
-
-      await fetchRequests()
+      await fetchRequests(getBranchId(user))
       return { success: true }
-
     } catch (error) {
       console.error('approveRequest error:', error)
       showToast('error', 'Approve Failed', error.message)
       return { success: false, error }
     }
-  }, [user, showToast, fetchRequests])
+  }, [user, getBranchId, showToast, fetchRequests])
 
-  // ── Reject Request ──────────────────────────────────────────────────────
   const rejectRequest = useCallback(async (id) => {
     try {
       const { error } = await supabase
@@ -288,31 +599,15 @@ export function AppProvider({ children }) {
         .eq('id', id)
 
       if (error) throw error
-
-      await createNotification({
-        type: 'request_rejected',
-        title: 'Request Rejected',
-        message: `Request has been rejected`,
-        link: '/requests',
-      })
-
-      await createActivityLog({
-        action: 'REQUEST_REJECTED',
-        description: `Request was rejected`,
-        metadata: { requestId: id }
-      })
-
-      await fetchRequests()
+      await fetchRequests(getBranchId(user))
       return { success: true }
-
     } catch (error) {
       console.error('rejectRequest error:', error)
       showToast('error', 'Reject Failed', error.message)
       return { success: false, error }
     }
-  }, [user, showToast, fetchRequests])
+  }, [user, getBranchId, showToast, fetchRequests])
 
-  // ── Fulfill Request (updates inventory) ────────────────────────────────
   const fulfillRequest = useCallback(async (id) => {
     try {
       const { data: req, error: fetchError } = await supabase
@@ -324,11 +619,10 @@ export function AppProvider({ children }) {
       if (fetchError) throw fetchError
 
       const items = req.request_items || []
-      if (items.length === 0) {
-        throw new Error('No items found on this request')
-      }
+      if (items.length === 0) throw new Error('No items found on this request')
 
-      // Deduct inventory for each item before updating request status
+      const branchId = getBranchId(user)
+
       for (const item of items) {
         const qty = Number(item.qty) || 0
         if (qty <= 0) continue
@@ -339,55 +633,32 @@ export function AppProvider({ children }) {
           unit: item.unit || 'pcs',
           type: 'Fulfillment',
           notes: `Fulfilled request from ${req.department || 'department'}`,
-          branchId: user?.branch_id || user?.branchId || null,
+          branchId,
           userId: user?.id,
           userName: user?.name || user?.full_name || 'Unknown',
         })
 
-        if (stockError) {
-          throw new Error(`Failed to deduct ${item.name}: ${stockError.message}`)
-        }
-
-        if (txnData) {
-          setTransactions(prev => [txnData, ...prev])
-        }
+        if (stockError) throw new Error(`Failed to deduct ${item.name}: ${stockError.message}`)
+        if (txnData) setTransactions(prev => [txnData, ...prev])
 
         if (item.id) {
           const { error: itemError } = await supabase
             .from('request_items')
             .update({ fulfilled_qty: qty })
             .eq('id', item.id)
-
-          if (itemError) {
-            throw new Error(`Failed to update ${item.name}: ${itemError.message}`)
-          }
+          if (itemError) throw new Error(`Failed to update ${item.name}: ${itemError.message}`)
         }
       }
 
       const { error } = await supabase
         .from('requests')
-        .update({
-          status: 'Completed',
-          completed_at: new Date().toISOString(),
-        })
+        .update({ status: 'Completed', completed_at: new Date().toISOString() })
         .eq('id', id)
-
       if (error) throw error
 
-      await createNotification({
-        type: 'request_fulfilled',
-        title: 'Request Fulfilled',
-        message: `Request has been fulfilled and inventory updated`,
-        link: '/requests',
-      })
-
-      await createActivityLog({
-        action: 'REQUEST_FULFILLED',
-        description: `Request was fulfilled and inventory updated`,
-        metadata: { requestId: id }
-      })
-
-      await fetchRequests()
+      await createNotification({ type: 'request_fulfilled', title: 'Request Fulfilled', message: 'Request has been fulfilled and inventory updated', link: '/requests' })
+      await createActivityLog({ action: 'REQUEST_FULFILLED', description: 'Request was fulfilled and inventory updated', metadata: { requestId: id } })
+      await fetchRequests(branchId)
       showToast('success', 'Request Fulfilled', 'Inventory has been updated')
       return { success: true }
 
@@ -396,9 +667,8 @@ export function AppProvider({ children }) {
       showToast('error', 'Fulfill Failed', error.message)
       return { success: false, error }
     }
-  }, [user, showToast, fetchRequests])
+  }, [user, getBranchId, showToast, fetchRequests])
 
-  // ── Partial Fulfill Request ────────────────────────────────────────────
   const partialFulfillRequest = useCallback(async (id, fulfilledItems = []) => {
     try {
       if (!Array.isArray(fulfilledItems) || fulfilledItems.length === 0) {
@@ -413,11 +683,11 @@ export function AppProvider({ children }) {
 
       if (fetchError) throw fetchError
 
+      const branchId = getBranchId(user)
+
       for (const { itemId, qty } of fulfilledItems) {
         const item = (req.request_items || []).find(ri => ri.id === itemId)
-        if (!item) {
-          throw new Error('Request item not found')
-        }
+        if (!item) throw new Error('Request item not found')
 
         const deductQty = Number(qty) || 0
         if (deductQty <= 0) continue
@@ -428,28 +698,20 @@ export function AppProvider({ children }) {
           unit: item.unit || 'pcs',
           type: 'Fulfillment',
           notes: `Partially fulfilled request from ${req.department || 'department'}`,
-          branchId: user?.branch_id || user?.branchId || null,
+          branchId,
           userId: user?.id,
           userName: user?.name || user?.full_name || 'Unknown',
         })
 
-        if (stockError) {
-          throw new Error(`Failed to deduct ${item.name}: ${stockError.message}`)
-        }
-
-        if (txnData) {
-          setTransactions(prev => [txnData, ...prev])
-        }
+        if (stockError) throw new Error(`Failed to deduct ${item.name}: ${stockError.message}`)
+        if (txnData) setTransactions(prev => [txnData, ...prev])
 
         const newFulfilled = Number(item.fulfilled_qty || 0) + deductQty
         const { error: itemError } = await supabase
           .from('request_items')
           .update({ fulfilled_qty: newFulfilled })
           .eq('id', itemId)
-
-        if (itemError) {
-          throw new Error(`Failed to update ${item.name}: ${itemError.message}`)
-        }
+        if (itemError) throw new Error(`Failed to update ${item.name}: ${itemError.message}`)
       }
 
       const allFulfilled = (req.request_items || []).every(ri => {
@@ -465,32 +727,12 @@ export function AppProvider({ children }) {
           completed_at: allFulfilled ? new Date().toISOString() : null,
         })
         .eq('id', id)
-
       if (error) throw error
 
-      await createNotification({
-        type: 'request_partial',
-        title: allFulfilled ? 'Request Fulfilled' : 'Request Partially Fulfilled',
-        message: allFulfilled
-          ? 'Request has been fulfilled and inventory updated'
-          : 'Request is partially fulfilled and inventory updated',
-        link: '/requests',
-      })
-
-      await createActivityLog({
-        action: allFulfilled ? 'REQUEST_FULFILLED' : 'REQUEST_PARTIAL',
-        description: allFulfilled
-          ? 'Request was fulfilled and inventory updated'
-          : 'Request was partially fulfilled and inventory updated',
-        metadata: { requestId: id }
-      })
-
-      await fetchRequests()
-      showToast(
-        'success',
-        allFulfilled ? 'Request Fulfilled' : 'Partially Fulfilled',
-        'Inventory has been updated'
-      )
+      await createNotification({ type: 'request_partial', title: allFulfilled ? 'Request Fulfilled' : 'Request Partially Fulfilled', message: allFulfilled ? 'Request fulfilled' : 'Request partially fulfilled', link: '/requests' })
+      await createActivityLog({ action: allFulfilled ? 'REQUEST_FULFILLED' : 'REQUEST_PARTIAL', description: allFulfilled ? 'Request fulfilled' : 'Request partially fulfilled', metadata: { requestId: id } })
+      await fetchRequests(branchId)
+      showToast('success', allFulfilled ? 'Request Fulfilled' : 'Partially Fulfilled', 'Inventory has been updated')
       return { success: true }
 
     } catch (error) {
@@ -498,50 +740,123 @@ export function AppProvider({ children }) {
       showToast('error', 'Partial Fulfill Failed', error.message)
       return { success: false, error }
     }
-  }, [user, showToast, fetchRequests])
+  }, [user, getBranchId, showToast, fetchRequests])
 
-  // ── Delete Request ────────────────────────────────────────────────────
   const deleteRequest = useCallback(async (id) => {
     try {
-      const { error } = await supabase
-        .from('requests')
-        .delete()
-        .eq('id', id)
-
+      const { error } = await supabase.from('requests').delete().eq('id', id)
       if (error) throw error
-
-      await fetchRequests()
+      await fetchRequests(getBranchId(user))
       return { success: true }
-
     } catch (error) {
       console.error('deleteRequest error:', error)
       showToast('error', 'Delete Failed', error.message)
       return { success: false, error }
     }
-  }, [showToast, fetchRequests])
-  
-  // ── Categories ─────────────────────────────────────────────────────────────
-  const fetchCategories = useCallback(async () => {
-    if (!user?.branch_id) return
-    try {
-      const { data, error } = await supabase
-        .from('categories')
-        .select('*')
-        .eq('branch_id', user.branch_id)
-        .order('name', { ascending: true })
-      if (error) throw error
-      setCategories(data || [])
-    } catch (err) {
-      console.error('[AppContext] fetchCategories error:', err)
-      showToast('error', 'Error loading categories', err.message)
-    }
-  }, [user?.branch_id, showToast])
+  }, [user, getBranchId, showToast, fetchRequests])
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // NOTIFICATIONS & ACTIVITY LOGS
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const createNotification = useCallback(async ({ type, title, message, link }) => {
+    try {
+      await supabase.from('notifications').insert({
+        type, title, message, link,
+        user_id: user?.id,
+        branch_id: getBranchId(user),
+        read: false,
+        created_at: new Date().toISOString(),
+      })
+    } catch (error) {
+      console.error('createNotification error:', error)
+    }
+  }, [user, getBranchId])
+
+  const createActivityLog = useCallback(async ({ action, description, metadata }) => {
+    try {
+      await supabase.from('activity_logs').insert({
+        action, description, metadata,
+        user_id: user?.id,
+        user_name: user?.name,
+        branch_id: getBranchId(user),
+        created_at: new Date().toISOString(),
+      })
+    } catch (error) {
+      console.error('createActivityLog error:', error)
+    }
+  }, [user, getBranchId])
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // CRUD OPERATIONS
+  // ═════════════════════════════════════════════════════════════════════════
+
+  // ── Templates ─────────────────────────────────────────────────────────────
+  const createTemplate = useCallback(async (tmpl) => {
+    const { data, error } = await templatesApi.create({ ...tmpl, branch_id: getBranchId(user), created_by: user?.id })
+    if (error) { showToast('error', 'Failed', error.message); return null }
+    setTemplates(prev => [...prev, data])
+    return data
+  }, [user, getBranchId, showToast])
+
+  const updateTemplate = useCallback(async (id, updates) => {
+    const { data, error } = await templatesApi.update(id, updates)
+    if (error) { showToast('error', 'Failed', error.message); return }
+    setTemplates(prev => prev.map(t => t.id === id ? { ...t, ...data } : t))
+  }, [showToast])
+
+  const deleteTemplate = useCallback(async (id) => {
+    const { error } = await templatesApi.remove(id)
+    if (error) { showToast('error', 'Failed', error.message); return }
+    setTemplates(prev => prev.filter(t => t.id !== id))
+  }, [showToast])
+
+  // ── Suppliers ────────────────────────────────────────────────────────────
+  const createSupplier = useCallback(async (sup) => {
+    const { data, error } = await suppliersApi.create({ ...sup, branch_id: getBranchId(user) })
+    if (error) { showToast('error', 'Failed', error.message); return null }
+    setSuppliers(prev => [...prev, data])
+    return data
+  }, [user, getBranchId, showToast])
+
+  const updateSupplier = useCallback(async (id, updates) => {
+    const { data, error } = await suppliersApi.update(id, updates)
+    if (error) { showToast('error', 'Failed', error.message); return }
+    setSuppliers(prev => prev.map(s => s.id === id ? { ...s, ...data } : s))
+  }, [showToast])
+
+  const deleteSupplier = useCallback(async (id) => {
+    const { error } = await suppliersApi.remove(id)
+    if (error) { showToast('error', 'Failed', error.message); return }
+    setSuppliers(prev => prev.filter(s => s.id !== id))
+  }, [showToast])
+
+  // ── Users ─────────────────────────────────────────────────────────────────
+  const createUser = useCallback(async (userData) => {
+    const { data, error } = await usersApi.create(userData)
+    if (error) { showToast('error', 'Failed', error.message); return null }
+    setUsers(prev => [...prev, data])
+    return data
+  }, [showToast])
+
+  const updateUser = useCallback(async (id, updates) => {
+    const { data, error } = await usersApi.update(id, updates)
+    if (error) { showToast('error', 'Failed', error.message); return }
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, ...data } : u))
+  }, [showToast])
+
+  const deleteUser = useCallback(async (id) => {
+    const { error } = await usersApi.remove(id)
+    if (error) { showToast('error', 'Failed', error.message); return }
+    setUsers(prev => prev.filter(u => u.id !== id))
+  }, [showToast])
+
+  // ── Categories ──────────────────────────────────────────────────────────
   const createCategory = useCallback(async (cat) => {
     try {
       const { data, error } = await supabase
         .from('categories')
-        .insert({ ...cat, branch_id: user?.branch_id, created_by: user?.id })
+        .insert({ ...cat, branch_id: getBranchId(user), created_by: user?.id })
         .select()
         .single()
       if (error) throw error
@@ -552,16 +867,11 @@ export function AppProvider({ children }) {
       showToast('error', 'Failed', err.message)
       throw err
     }
-  }, [user, showToast])
+  }, [user, getBranchId, showToast])
 
   const updateCategory = useCallback(async (id, updates) => {
     try {
-      const { data, error } = await supabase
-        .from('categories')
-        .update(updates)
-        .eq('id', id)
-        .select()
-        .single()
+      const { data, error } = await supabase.from('categories').update(updates).eq('id', id).select().single()
       if (error) throw error
       setCategories(prev => prev.map(c => c.id === id ? { ...c, ...data } : c))
       showToast('success', 'Category Updated', data.name)
@@ -584,315 +894,13 @@ export function AppProvider({ children }) {
     }
   }, [showToast])
 
-  // ── Create Notification ────────────────────────────────────────────────
-  const createNotification = useCallback(async ({ type, title, message, link }) => {
-    try {
-      await supabase.from('notifications').insert({
-        type,
-        title,
-        message,
-        link,
-        user_id: user?.id,
-        branch_id: user?.branch_id,
-        read: false,
-        created_at: new Date().toISOString(),
-      })
-    } catch (error) {
-      console.error('createNotification error:', error)
-    }
-  }, [user])
-
-  // ── Create Activity Log ────────────────────────────────────────────────
-  const createActivityLog = useCallback(async ({ action, description, metadata }) => {
-    try {
-      await supabase.from('activity_logs').insert({
-        action,
-        description,
-        metadata,
-        user_id: user?.id,
-        user_name: user?.name,
-        branch_id: user?.branch_id,
-        created_at: new Date().toISOString(),
-      })
-    } catch (error) {
-      console.error('createActivityLog error:', error)
-    }
-  }, [user])
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // END REQUESTS SYSTEM
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  // ── Load all business data ─────────────────────────────────────────────────
-  const loadAllData = useCallback(async (loggedInUser) => {
-    // Make sure we have a user
-    if (!loggedInUser) {
-      console.warn('[AppContext] loadAllData: no user provided')
-      setDataLoaded(true)
-      return
-    }
-
-    const branchId = loggedInUser?.branch_id ?? loggedInUser?.branchId ?? null
-
-    if (!branchId) {
-      console.warn('[AppContext] loadAllData: no branch_id — user:', loggedInUser)
-      showToast('error', 'Branch Error', 'No branch assigned to your account. Please contact administrator.')
-      setDataLoaded(true)
-      return
-    }
-
-    console.log('[AppContext] loadAllData start — branch:', branchId)
-    setLoading(true)
-    try {
-      const [
-        txnRes, tmplRes, supRes,
-        usrRes, procRes, poRes, finRes, actRes,
-      ] = await Promise.all([
-        transactionsApi.getAll(branchId),
-        templatesApi.getAll(branchId),
-        suppliersApi.getAll(branchId),
-        usersApi.getAll(),
-        procurementApi.getAll(branchId),
-        purchaseOrdersApi.getAll(branchId),
-        financialApi.getAll(branchId),
-        activityApi.getAll(branchId),
-      ])
-
-      if (txnRes.error)  console.error('[AppContext] transactions:', txnRes.error.message)
-      if (tmplRes.error) console.error('[AppContext] templates:', tmplRes.error.message)
-      if (supRes.error)  console.error('[AppContext] suppliers:', supRes.error.message)
-      if (usrRes.error)  console.error('[AppContext] users:', usrRes.error.message)
-      if (procRes.error) console.error('[AppContext] procurement:', procRes.error.message)
-      if (poRes.error)   console.error('[AppContext] purchase orders:', poRes.error.message)
-      if (finRes.error)  console.error('[AppContext] financials:', finRes.error.message)
-      if (actRes.error)  console.error('[AppContext] activity logs:', actRes.error.message)
-
-      if (txnRes.data)  setTransactions(txnRes.data)
-      if (tmplRes.data) setTemplates(tmplRes.data)
-      if (supRes.data)  setSuppliers(supRes.data)
-      if (usrRes.data)  setUsers(usrRes.data)
-      if (procRes.data) setProcurements(procRes.data)
-      if (poRes.data)   setPurchaseOrders(poRes.data)
-      if (finRes.data)  setFinancialTransactions(finRes.data)
-      if (actRes.data)  setActivityLogs(actRes.data)
-
-      // Load requests from Supabase
-      await fetchRequests()
-            await fetchCategories()
-
-      setDataLoaded(true)
-      console.log('[AppContext] loadAllData complete ✓', {
-        transactions: txnRes.data?.length ?? 0,
-        requests:     requests.length,
-        templates:    tmplRes.data?.length ?? 0,
-        suppliers:    supRes.data?.length ?? 0,
-      })
-    } catch (err) {
-      console.error('[AppContext] loadAllData error:', err)
-      showToast('error', 'Load Failed', 'Could not load data. Check console for details.')
-      setDataLoaded(true)
-    } finally {
-      setLoading(false)
-    }
-  }, [showToast, fetchRequests, requests.length])
-
-  // ── Supabase Auth session listener ─────────────────────────────────────────
-  const loadAllDataRef  = useRef(loadAllData)
-  const clearDataRef    = useRef(clearData)
-  const handledByLogin  = useRef(false)
-
-  useEffect(() => { loadAllDataRef.current = loadAllData }, [loadAllData])
-  useEffect(() => { clearDataRef.current   = clearData   }, [clearData])
-
-  useEffect(() => {
-    const finishAuth = async (session) => {
-      if (!session) {
-        setAuthReady(true)
-        return
-      }
-
-      if (handledByLogin.current) {
-        handledByLogin.current = false
-        setAuthReady(true)
-        return
-      }
-
-      const { data: restoredUser, error } = await authApi.userFromSession(session)
-
-      if (error || !restoredUser) {
-        console.error('[AppContext] session profile failed:', error?.message)
-        setAuthReady(true)
-        return
-      }
-
-      console.log('[AppContext] authenticated:', restoredUser.email)
-      console.log('[AppContext] user set:', { 
-        id: restoredUser.id, 
-        email: restoredUser.email, 
-        branch_id: restoredUser.branch_id 
-      })
-      setUser(restoredUser)
-      await loadAllDataRef.current(restoredUser)
-      setAuthReady(true)
-    }
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        console.log('[AppContext] auth event:', event)
-
-        if (event === 'INITIAL_SESSION') {
-          setTimeout(() => { void finishAuth(session) }, 0)
-          return
-        }
-
-        if (event === 'SIGNED_IN') {
-          setTimeout(() => { void finishAuth(session) }, 0)
-          return
-        }
-
-        if (event === 'SIGNED_OUT') {
-          setUser(null)
-          clearDataRef.current()
-          setTab('dashboard')
-          setAuthReady(true)
-          return
-        }
-      }
-    )
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  // ── Login ──────────────────────────────────────────────────────────────────
-  const login = useCallback(async (email, password) => {
-    console.log('[AppContext] login:', email)
-    setAuthError(null)
-
-    const { data: loggedInUser, error } = await authApi.login(email, password)
-
-    if (error) {
-      setAuthError(error.message)
-      setAuthReady(true)
-      return { error }
-    }
-
-    if (loggedInUser) {
-      handledByLogin.current = true
-      setUser(loggedInUser)
-      await loadAllData(loggedInUser)
-      setAuthReady(true)
-    }
-
-    return { data: loggedInUser }
-  }, [loadAllData])
-
-  // ── Logout ─────────────────────────────────────────────────────────────────
-  const logout = useCallback(async () => {
-    await authApi.logout()
-  }, [])
-
-  // ── Action lock ────────────────────────────────────────────────────────────
-  const actionInProgress = useRef(false)
-  const withActionLock = useCallback(async (fn) => {
-    if (actionInProgress.current) return false
-    actionInProgress.current = true
-    try { return await fn() }
-    finally { actionInProgress.current = false }
-  }, [])
-
-  // ── Stock IN ───────────────────────────────────────────────────────────────
-  const handleStockIn = useCallback(async (formData) => {
-    return withActionLock(async () => {
-      // Ensure we have branch_id
-      const branchId = user?.branch_id || user?.branchId || null
-
-      if (!branchId) {
-        console.error('[AppContext] handleStockIn: No branch_id found in user:', user)
-        showToast('error', 'Branch Error', 'No branch assigned to your account')
-        return false
-      }
-
-      const { data, error } = await transactionsApi.stockIn({
-        ...formData,
-        branchId: branchId,
-        userId:   user?.id,
-        userName: user?.name || user?.full_name || 'Unknown',
-      })
-      if (error) { showToast('error', 'Stock IN Failed', error.message); return false }
-      setTransactions(prev => [data, ...prev])
-      addNotification({ title: 'Stock IN', msg: `${formData.qty} ${formData.unit} of ${formData.item}`, type: 'success' })
-      showToast('success', 'Stock IN Recorded', `${formData.item} — ${formData.qty} ${formData.unit}`)
-      return true
-    })
-  }, [user, withActionLock, addNotification, showToast])
-
-  // ── Templates ──────────────────────────────────────────────────────────────
-  const createTemplate = useCallback(async (tmpl) => {
-    const { data, error } = await templatesApi.create({ ...tmpl, branch_id: user?.branch_id, created_by: user?.id })
-    if (error) { showToast('error', 'Failed', error.message); return null }
-    setTemplates(prev => [...prev, data])
-    return data
-  }, [user, showToast])
-
-  const updateTemplate = useCallback(async (id, updates) => {
-    const { data, error } = await templatesApi.update(id, updates)
-    if (error) { showToast('error', 'Failed', error.message); return }
-    setTemplates(prev => prev.map(t => t.id === id ? { ...t, ...data } : t))
-  }, [showToast])
-
-  const deleteTemplate = useCallback(async (id) => {
-    const { error } = await templatesApi.remove(id)
-    if (error) { showToast('error', 'Failed', error.message); return }
-    setTemplates(prev => prev.filter(t => t.id !== id))
-  }, [showToast])
-
-  // ── Suppliers ──────────────────────────────────────────────────────────────
-  const createSupplier = useCallback(async (sup) => {
-    const { data, error } = await suppliersApi.create({ ...sup, branch_id: user?.branch_id })
-    if (error) { showToast('error', 'Failed', error.message); return null }
-    setSuppliers(prev => [...prev, data])
-    return data
-  }, [user, showToast])
-
-  const updateSupplier = useCallback(async (id, updates) => {
-    const { data, error } = await suppliersApi.update(id, updates)
-    if (error) { showToast('error', 'Failed', error.message); return }
-    setSuppliers(prev => prev.map(s => s.id === id ? { ...s, ...data } : s))
-  }, [showToast])
-
-  const deleteSupplier = useCallback(async (id) => {
-    const { error } = await suppliersApi.remove(id)
-    if (error) { showToast('error', 'Failed', error.message); return }
-    setSuppliers(prev => prev.filter(s => s.id !== id))
-  }, [showToast])
-
-  // ── Users ──────────────────────────────────────────────────────────────────
-  const createUser = useCallback(async (userData) => {
-    const { data, error } = await usersApi.create(userData)
-    if (error) { showToast('error', 'Failed', error.message); return null }
-    setUsers(prev => [...prev, data])
-    return data
-  }, [showToast])
-
-  const updateUser = useCallback(async (id, updates) => {
-    const { data, error } = await usersApi.update(id, updates)
-    if (error) { showToast('error', 'Failed', error.message); return }
-    setUsers(prev => prev.map(u => u.id === id ? { ...u, ...data } : u))
-  }, [showToast])
-
-  const deleteUser = useCallback(async (id) => {
-    const { error } = await usersApi.remove(id)
-    if (error) { showToast('error', 'Failed', error.message); return }
-    setUsers(prev => prev.filter(u => u.id !== id))
-  }, [showToast])
-
-  // ── Procurement ────────────────────────────────────────────────────────────
+  // ── Procurement ───────────────────────────────────────────────────────────
   const createProcurement = useCallback(async (req) => {
-    const { data, error } = await procurementApi.create({ ...req, branch_id: user?.branch_id, created_by: user?.id })
+    const { data, error } = await procurementApi.create({ ...req, branch_id: getBranchId(user), created_by: user?.id })
     if (error) { showToast('error', 'Failed', error.message); return null }
     setProcurements(prev => [data, ...prev])
     return data
-  }, [user, showToast])
+  }, [user, getBranchId, showToast])
 
   const updateProcurementStatus = useCallback(async (id, status) => {
     const { data, error } = await procurementApi.updateStatus(id, status, user?.id)
@@ -906,16 +914,16 @@ export function AppProvider({ children }) {
     setProcurements(prev => prev.filter(p => p.id !== id))
   }, [showToast])
 
-  // ── Purchase orders ────────────────────────────────────────────────────────
+  // ── Purchase orders ───────────────────────────────────────────────────────
   const createPurchaseOrder = useCallback(async ({ po, items }) => {
     const { data, error } = await purchaseOrdersApi.create({
-      po: { ...po, branch_id: user?.branch_id, created_by: user?.id },
+      po: { ...po, branch_id: getBranchId(user), created_by: user?.id },
       items,
     })
     if (error) { showToast('error', 'Failed', error.message); return null }
     setPurchaseOrders(prev => [data, ...prev])
     return data
-  }, [user, showToast])
+  }, [user, getBranchId, showToast])
 
   const updatePOStatus = useCallback(async (id, status) => {
     const { data, error } = await purchaseOrdersApi.updateStatus(id, status, user?.id)
@@ -923,24 +931,72 @@ export function AppProvider({ children }) {
     setPurchaseOrders(prev => prev.map(p => p.id === id ? { ...p, ...data } : p))
   }, [user, showToast])
 
-  // ── Financial ──────────────────────────────────────────────────────────────
+  // ── Financial ────────────────────────────────────────────────────────────
   const updateFinancialTxnStatus = useCallback(async (id, paymentStatus) => {
     const { data, error } = await financialApi.updatePaymentStatus(id, paymentStatus)
     if (error) { showToast('error', 'Failed', error.message); return }
     setFinancialTransactions(prev => prev.map(f => f.id === id ? { ...f, ...data } : f))
   }, [showToast])
 
-  // ── Context value ──────────────────────────────────────────────────────────
+  // ═════════════════════════════════════════════════════════════════════════
+  // STATS
+  // ═════════════════════════════════════════════════════════════════════════
+
+  const stats = useMemo(() => {
+    const safeInventory = Array.isArray(inventory) ? inventory : []
+    const safeTransactions = Array.isArray(transactions) ? transactions : []
+    const safeSuppliers = Array.isArray(suppliers) ? suppliers : []
+
+    const lowStock = safeInventory.filter(i => {
+      const qty = Number(i.quantity) || 0
+      const threshold = Number(i.min_threshold || i.min_stock || i.threshold || 0)
+      return threshold > 0 && qty <= threshold
+    })
+
+    const critical = safeInventory.filter(i => (Number(i.quantity) || 0) === 0)
+
+    const stockInTotal = safeTransactions
+      .filter(t => t.type === 'Stock IN')
+      .reduce((s, t) => s + Math.abs(Number(t.quantity || t.qty) || 0), 0)
+
+    const stockOutTotal = safeTransactions
+      .filter(t => ['Stock OUT', 'Wastage', 'Fulfillment'].includes(t.type))
+      .reduce((s, t) => s + Math.abs(Number(t.quantity || t.qty) || 0), 0)
+
+    const invValue = safeInventory.reduce((s, i) =>
+      s + (Number(i.quantity) || 0) * (Number(i.cost || i.price || 0) || 0), 0)
+
+    return {
+      totalItems: safeInventory.length,
+      lowStockCount: lowStock.length,
+      criticalCount: critical.length,
+      stockInTotal,
+      stockOutTotal,
+      activeSuppliers: safeSuppliers.length,
+      inventoryValue: invValue,
+    }
+  }, [inventory, transactions, suppliers])
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // CONTEXT VALUE
+  // ═════════════════════════════════════════════════════════════════════════
+
   const value = {
+    // Auth
     user, setUser, login, logout,
     authReady, authError,
-    dark, setDark, tab, setTab, sidebarOpen, setSidebar,
-    theme, loading, dataLoaded,
+    // Theme
+    dark, setDark, theme,
+    // UI
+    tab, setTab, sidebarOpen, setSidebar,
+    loading, dataLoaded,
     toasts, showToast, dismissToast,
     notifications, addNotification, markAllRead,
     systemEnabled, setSystemEnabled, systemMsg, setSystemMsg,
+    // Data
     transactions, setTransactions,
     requests, setRequests,
+    inventory, setInventory,
     templates, setTemplates,
     suppliers, setSuppliers,
     users, setUsers,
@@ -948,27 +1004,28 @@ export function AppProvider({ children }) {
     purchaseOrders, setPurchaseOrders,
     financialTransactions, setFinancialTransactions,
     activityLogs,
-    inventory, stats,
+    stats,
+    // Units
     customUnits, setCustomUnits, allUnits,
-    handleStockIn,
+    // Categories
+    categories, setCategories,
+    fetchCategories, createCategory, updateCategory, deleteCategory,
+    // Stock operations
+    handleStockIn, handleStockOut,
     // Requests
-    createRequest,
-    approveRequest,
-    rejectRequest,
-    fulfillRequest,
-    partialFulfillRequest,
-    deleteRequest,
+    createRequest, approveRequest, rejectRequest,
+    fulfillRequest, partialFulfillRequest, deleteRequest,
     fetchRequests,
-    createNotification,
-    createActivityLog,
-    // Templates, Suppliers, Users, etc.
+    // Notifications & Logs
+    createNotification, createActivityLog,
+    // CRUD
     createTemplate, updateTemplate, deleteTemplate,
-        categories, fetchCategories, createCategory, updateCategory, deleteCategory,
     createSupplier, updateSupplier, deleteSupplier,
     createUser, updateUser, deleteUser,
     createProcurement, updateProcurementStatus, deleteProcurement,
     createPurchaseOrder, updatePOStatus,
     updateFinancialTxnStatus,
+    // Utils
     withActionLock,
     loadAllData,
   }
