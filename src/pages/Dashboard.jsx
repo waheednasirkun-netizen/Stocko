@@ -282,44 +282,44 @@ export default function Dashboard() {
   }, [transactions, requests]);
 
   /* ── Quick Actions ── */
- const quickActions = [
-  {
-    label: "Create Demand",
-    icon: "Plus",
-    color: COLORS.primary,
-    onClick: () => setTab("demands"),
-  },
-  {
-    label: "Stock IN",
-    icon: "ArrowDown",
-    color: COLORS.success,
-    onClick: () => setTab("reports"),
-  },
-  {
-    label: "Stock OUT",
-    icon: "ArrowUp",
-    color: COLORS.danger,
-    onClick: () => setTab("reports"),
-  },
-  {
-    label: "View Reports",
-    icon: "BarChart",
-    color: COLORS.purple,
-    onClick: () => setTab("reports"),
-  },
-  {
-    label: "Fulfillment",
-    icon: "Package",
-    color: COLORS.teal,
-    onClick: () => setTab("fulfillment"),
-  },
-  {
-    label: "Inventory",
-    icon: "Boxes",
-    color: COLORS.info,
-    onClick: () => setTab("inventory"),
-  },
-];
+  const quickActions = [
+    {
+      label: "Create Demand",
+      icon: "Plus",
+      color: COLORS.primary,
+      onClick: () => setTab("demands"),
+    },
+    {
+      label: "Stock IN",
+      icon: "ArrowDown",
+      color: COLORS.success,
+      onClick: () => setTab("stock-movement"),
+    },
+    {
+      label: "Stock OUT",
+      icon: "ArrowUp",
+      color: COLORS.danger,
+      onClick: () => setTab("stock-movement"),
+    },
+    {
+      label: "View Reports",
+      icon: "BarChart",
+      color: COLORS.purple,
+      onClick: () => setTab("reports"),
+    },
+    {
+      label: "Fulfillment",
+      icon: "Package",
+      color: COLORS.teal,
+      onClick: () => setTab("fulfillment-center"),  // ← FIXED
+    },
+    {
+      label: "Inventory",
+      icon: "Boxes",
+      color: COLORS.info,
+      onClick: () => setTab("inventory"),
+    },
+  ];
 
   /* ── Format helpers ── */
   const fmtAgo = (str) => {
