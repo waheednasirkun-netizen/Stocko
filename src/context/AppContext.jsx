@@ -832,12 +832,22 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
   }, [showToast])
 
   // ── Users ─────────────────────────────────────────────────────────────────
-  const createUser = useCallback(async (userData) => {
-    const { data, error } = await usersApi.create(userData)
-    if (error) { showToast('error', 'Failed', error.message); return null }
-    setUsers(prev => [...prev, data])
-    return data
-  }, [showToast])
+const createUser = useCallback(async (userData) => {
+  const payload = {
+    ...userData,
+    branch_id: getBranchId(user),
+  }
+
+  const { data, error } = await usersApi.create(payload)
+
+  if (error) {
+    showToast('error', 'Failed', error.message)
+    return null
+  }
+
+  setUsers(prev => [...prev, data])
+  return data
+}, [user, getBranchId, showToast])
 
   const updateUser = useCallback(async (id, updates) => {
     const { data, error } = await usersApi.update(id, updates)

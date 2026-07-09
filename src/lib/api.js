@@ -299,18 +299,21 @@ export const usersApi = {
   },
 
   async create(userData) {
-    const { id: _id, created_at: _ca, auth_id: _ai, branch_name: _bn, ...safe } = userData
-    const payload = {
-      ...safe,
-      full_name: safe.full_name ?? safe.name,
-      created_at: now(),
+    const response = await supabase.functions.invoke("create-user", {
+      body: userData,
+    })
+
+    console.log("FULL RESPONSE:", response)
+    console.log("DATA:", response.data)
+    console.log("ERROR:", response.error)
+
+    if (response.error) {
+      const text = await response.error.context?.text?.()
+      console.log("FUNCTION RESPONSE:", text)
+      return wrap(null, response.error)
     }
-    const { data, error } = await supabase
-      .from('users')
-      .insert([payload])
-      .select(USER_SELECT)
-      .single()
-    return wrap(normalizeUser(data), error)
+
+    return wrap(normalizeUser(response.data), null)
   },
 
   async update(id, updates) {
