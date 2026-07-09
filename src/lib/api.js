@@ -2,16 +2,26 @@ console.log('[RestoStock] api.js loaded')
 
 /**
  * RestoStock — src/lib/api.js
+ * Production-ready Supabase API layer
  */
 
 import { supabase } from './supabase'
+
+/* ─── Helpers ─────────────────────────────────────────────────────────────── */
 
 const now = () => new Date().toISOString()
 
 const USER_SELECT = 'id, auth_id, email, name, full_name, role, status, phone, branch_id, created_at'
 
 function wrap(data, error) {
-  if (error) return { data: null, error: { message: error.message ?? String(error) } }
+  if (error) {
+    return {
+      data: null,
+      error: {
+        message: error.message ?? String(error),
+      },
+    }
+  }
   return { data, error: null }
 }
 
@@ -21,7 +31,8 @@ function normalizeUser(u) {
   return { ...u, name, full_name: u.full_name ?? u.name ?? name }
 }
 
-// ─── INTERNAL: fetch profile row from public.users ────────────────────────────
+/* ─── Internal helpers ─────────────────────────────────────────────────────── */
+
 async function fetchProfile(authId, email) {
   console.log('[api] fetchProfile — authId:', authId, 'email:', email)
 
@@ -74,12 +85,12 @@ async function fetchProfile(authId, email) {
   return {
     profile: null,
     error: {
-      message: 'No profile found for this account. Ask your administrator to add you, or check Row Level Security on the users table.',
+      message:
+        'No profile found for this account. Ask your administrator to add you, or check Row Level Security on the users table.',
     },
   }
 }
 
-// ─── INTERNAL: optional branch name lookup ────────────────────────────────────
 async function fetchBranchName(branchId) {
   if (!branchId) return null
   const { data, error } = await supabase
@@ -95,10 +106,9 @@ async function fetchBranchName(branchId) {
   return data?.name ?? null
 }
 
-// ─── INTERNAL: build the merged user object ───────────────────────────────────
 async function buildUser(authUser) {
   const authId = typeof authUser === 'string' ? authUser : authUser?.id
-  const email  = typeof authUser === 'object' ? authUser?.email : undefined
+  const email = typeof authUser === 'object' ? authUser?.email : undefined
   if (!authId) return { user: null, error: { message: 'Not authenticated' } }
 
   const { profile, error: pe } = await fetchProfile(authId, email)
@@ -108,14 +118,33 @@ async function buildUser(authUser) {
 
   const user = {
     ...normalizeUser(profile),
-    auth_id:     profile.auth_id ?? authId,
+    auth_id: profile.auth_id ?? authId,
     branch_name: branchName,
   }
   console.log('[api] buildUser complete:', { id: user.id, role: user.role, branch_id: user.branch_id })
   return { user, error: null }
 }
 
-// ─── AUTH ─────────────────────────────────────────────────────────────────────
+function logActivity({ branchId, userId, userName, action, details }) {
+  if (!branchId) return
+  supabase
+    .from('activity_logs')
+    .insert([
+      {
+        branch_id: branchId,
+        user_id: userId,
+        user_name: userName,
+        action,
+        details,
+        created_at: now(),
+      },
+    ])
+    .then(({ error }) => {
+      if (error) console.warn('[api] activity log error:', error.message)
+    })
+}
+
+/* ─── Auth ───────────────────────────────────────────────────────────────── */
 
 export const authApi = {
   async login(email, password) {
@@ -142,7 +171,7 @@ export const authApi = {
 
     if (authData.session) {
       await supabase.auth.setSession({
-        access_token:  authData.session.access_token,
+        access_token: authData.session.access_token,
         refresh_token: authData.session.refresh_token,
       })
     }
@@ -169,7 +198,10 @@ export const authApi = {
     console.log('[api] restoreSession')
     const { data: { session }, error } = await supabase.auth.getSession()
     if (error) return wrap(null, error)
-    if (!session) { console.log('[api] no active session'); return wrap(null, null) }
+    if (!session) {
+      console.log('[api] no active session')
+      return wrap(null, null)
+    }
     const { user, error: buildError } = await buildUser(session.user)
     if (buildError) return wrap(null, buildError)
     return wrap(user, null)
@@ -197,12 +229,14 @@ export const authApi = {
   },
 }
 
-// ─── BRANCHES ─────────────────────────────────────────────────────────────────
+/* ─── Branches ───────────────────────────────────────────────────────────── */
 
 export const branchApi = {
   async getAll() {
     const { data, error } = await supabase
-      .from('branches').select('id, name, address').order('name')
+      .from('branches')
+      .select('id, name, address')
+      .order('name')
     return wrap(data, error)
   },
 
@@ -223,7 +257,7 @@ export const branchApi = {
   },
 }
 
-// ─── USERS ────────────────────────────────────────────────────────────────────
+/* ─── Users ──────────────────────────────────────────────────────────────── */
 
 export const usersApi = {
   async getAll() {
@@ -254,9 +288,7 @@ export const usersApi = {
     const { id: _id, created_at: _ca, auth_id: _ai, branch_name: _bn, ...safe } = updates
     const payload = {
       ...safe,
-      ...(safe.name !== undefined && safe.full_name === undefined
-        ? { full_name: safe.name }
-        : {}),
+      ...(safe.name !== undefined && safe.full_name === undefined ? { full_name: safe.name } : {}),
     }
     const { data, error } = await supabase
       .from('users')
@@ -273,13 +305,16 @@ export const usersApi = {
   },
 }
 
-// ─── ITEM TEMPLATES ───────────────────────────────────────────────────────────
+/* ─── Item Templates ─────────────────────────────────────────────────────── */
 
 export const templatesApi = {
   async getAll(branchId) {
     if (!branchId) return wrap([], null)
     const { data, error } = await supabase
-      .from('item_templates').select('*').eq('branch_id', branchId).order('name')
+      .from('item_templates')
+      .select('*')
+      .eq('branch_id', branchId)
+      .order('name')
     return wrap(data, error)
   },
 
@@ -287,7 +322,8 @@ export const templatesApi = {
     const { data, error } = await supabase
       .from('item_templates')
       .insert([{ ...template, created_at: now() }])
-      .select().single()
+      .select()
+      .single()
     return wrap(data, error)
   },
 
@@ -296,7 +332,9 @@ export const templatesApi = {
     const { data, error } = await supabase
       .from('item_templates')
       .update({ ...safe, updated_at: now() })
-      .eq('id', id).select().single()
+      .eq('id', id)
+      .select()
+      .single()
     return wrap(data, error)
   },
 
@@ -306,13 +344,16 @@ export const templatesApi = {
   },
 }
 
-// ─── SUPPLIERS ────────────────────────────────────────────────────────────────
+/* ─── Suppliers ───────────────────────────────────────────────────────────── */
 
 export const suppliersApi = {
   async getAll(branchId) {
     if (!branchId) return wrap([], null)
     const { data, error } = await supabase
-      .from('suppliers').select('*').eq('branch_id', branchId).order('name')
+      .from('suppliers')
+      .select('*')
+      .eq('branch_id', branchId)
+      .order('name')
     return wrap(data, error)
   },
 
@@ -320,7 +361,8 @@ export const suppliersApi = {
     const { data, error } = await supabase
       .from('suppliers')
       .insert([{ ...supplier, created_at: now() }])
-      .select().single()
+      .select()
+      .single()
     return wrap(data, error)
   },
 
@@ -329,7 +371,9 @@ export const suppliersApi = {
     const { data, error } = await supabase
       .from('suppliers')
       .update({ ...safe, updated_at: now() })
-      .eq('id', id).select().single()
+      .eq('id', id)
+      .select()
+      .single()
     return wrap(data, error)
   },
 
@@ -339,7 +383,7 @@ export const suppliersApi = {
   },
 }
 
-// ─── TRANSACTIONS ─────────────────────────────────────────────────────────────
+/* ─── Transactions ───────────────────────────────────────────────────────── */
 
 export const transactionsApi = {
   async getAll(branchId) {
@@ -366,30 +410,31 @@ export const transactionsApi = {
     }
 
     const quantity = Math.abs(Number(qty))
-    const itemName = String(item).trim()
+    const itemName = String(item || '').trim()
 
-    console.log('[api] stockOut called:', { branchId, itemName, quantity, unit, type })
-
-    if (quantity <= 0) {
-      return wrap(null, { message: 'Quantity must be greater than 0' })
+    if (!itemName || quantity <= 0) {
+      return wrap(null, { message: 'Valid item name and quantity are required' })
     }
 
-    // 1. Check if item exists in inventory
-    const { data: existingItem, error: findError } = await supabase
-      .from('inventory')
-      .select('id, quantity, unit')
-      .eq('branch_id', branchId)
-      .ilike('name', itemName)
-      .maybeSingle()
+    console.log('[api] stockOut called:', { branchId, itemName, quantity, unit, type, userId })
 
-    if (findError) {
-      console.error('[api] stockOut findError:', findError)
-      return wrap(null, findError)
-    }
+    // Insert transaction record
+    const { data: txnData, error: txnError } = await supabase
+      .from('transactions')
+      .insert([
+        {
+          branch_id: branchId,
+          item: itemName,
+          qty: quantity,
+          unit,
+          type,
+          notes,
+          user_id: userId,
+          user_name: userName,
+        },
+      ])
 
-    if (!existingItem) {
-      return wrap(null, { message: `Item "${itemName}" not found in inventory` })
-    }
+    return wrap(txnData, txnError)
 
     // 2. Check if enough stock
     const currentQty = Number(existingItem.quantity || 0)
@@ -448,14 +493,14 @@ export const transactionsApi = {
       userId,
       userName,
       action: 'stock_out',
-      details: `${type || 'Stock OUT'}: ${quantity} ${unit || existingItem.unit} of ${itemName}`
+      details: `${type || 'Stock OUT'}: ${quantity} ${unit || existingItem?.unit || ''} of ${itemName}`,
     })
 
     return wrap(txnData, null)
   },
 }
 
-// ─── DEMANDS ──────────────────────────────────────────────────────────────────
+/* ─── Demands ────────────────────────────────────────────────────────────── */
 
 export const demandsApi = {
   async getAll(branchId) {
@@ -472,7 +517,8 @@ export const demandsApi = {
     const { data, error } = await supabase
       .from('demands')
       .insert([{ ...demand, status: 'Pending', created_at: now() }])
-      .select().single()
+      .select()
+      .single()
     return wrap(data, error)
   },
 
@@ -480,21 +526,28 @@ export const demandsApi = {
     const { data, error } = await supabase
       .from('demands')
       .update({ status: 'Approved', approved_by: approvedBy, approved_at: now() })
-      .eq('id', id).select().single()
+      .eq('id', id)
+      .select()
+      .single()
     return wrap(data, error)
   },
 
   async reject(id, rejectedBy, reason) {
     const { data, error } = await supabase
       .from('demands')
-      .update({ status: 'Rejected', rejected_by: rejectedBy, rejection_reason: reason, updated_at: now() })
-      .eq('id', id).select().single()
+      .update({
+        status: 'Rejected',
+        rejected_by: rejectedBy,
+        rejection_reason: reason,
+        updated_at: now(),
+      })
+      .eq('id', id)
+      .select()
+      .single()
     return wrap(data, error)
   },
 
-  // ✅ FIXED: Enhanced stockOut with proper inventory deduction
   async stockOut({ item, qty, unit, type = 'Stock OUT', notes, branchId, userId, userName }) {
-    // Validate required parameters
     if (!branchId) {
       console.error('[api] stockOut: branchId is required')
       return wrap(null, { message: 'Branch ID is required for stock out' })
@@ -503,13 +556,13 @@ export const demandsApi = {
     const quantity = Math.abs(Number(qty))
     const itemName = String(item).trim()
 
-    console.log('[api] stockOut called:', { branchId, itemName, quantity, unit, type })
-
-    if (quantity <= 0) {
-      return wrap(null, { message: 'Quantity must be greater than 0' })
+    if (!itemName || quantity <= 0) {
+      return wrap(null, { message: 'Valid item name and quantity are required' })
     }
 
-    // 1. Check if item exists in inventory
+    console.log('[api] stockOut:', { branchId, itemName, quantity, unit, type })
+
+    // 1. Verify item exists
     const { data: existingItem, error: findError } = await supabase
       .from('inventory')
       .select('id, quantity, unit')
@@ -526,28 +579,34 @@ export const demandsApi = {
       return wrap(null, { message: `Item "${itemName}" not found in inventory` })
     }
 
-    // 2. Check if enough stock
+    // 2. Verify sufficient stock
     const currentQty = Number(existingItem.quantity || 0)
     if (currentQty < quantity) {
-      return wrap(null, { 
-        message: `Insufficient stock. Available: ${currentQty} ${existingItem.unit || unit}`
+      return wrap(null, {
+        message: `Insufficient stock. Available: ${currentQty} ${existingItem.unit || unit}`,
       })
     }
 
     // 3. Insert transaction
     const { data: txnData, error: txnError } = await supabase
       .from('transactions')
-      .insert([{
-        branch_id: branchId,
-        item_name: itemName,
-        type: type || 'Stock OUT',
-        quantity: quantity,
-        unit: unit || existingItem.unit || 'pcs',
-        notes: notes || null,
-        recorded_by: userId,
-        recorded_by_name: userName,
-        created_at: now(),
-      }])
+      .insert([
+        {
+          branch_id: branchId,
+          item_name: itemName,
+          type,
+          quantity,
+          unit,
+          price_per_unit: 0,
+          total_amount: 0,
+          source: null,
+          category: null,
+          notes: notes ?? null,
+          recorded_by: userId,
+          recorded_by_name: userName,
+          created_at: now(),
+        },
+      ])
       .select()
       .single()
 
@@ -556,7 +615,7 @@ export const demandsApi = {
       return wrap(null, txnError)
     }
 
-    // 4. UPDATE INVENTORY — Subtract quantity
+    // 4. Deduct inventory
     const newQty = currentQty - quantity
     const { error: updateError } = await supabase
       .from('inventory')
@@ -571,26 +630,21 @@ export const demandsApi = {
       return wrap(null, updateError)
     }
 
-    console.log('[api] stockOut success:', { 
-      item: itemName, 
-      deducted: quantity, 
-      remaining: newQty 
-    })
+    console.log('[api] stockOut success:', { item: itemName, deducted: quantity, remaining: newQty })
 
-    // 5. Log activity
     logActivity({
       branchId,
       userId,
       userName,
       action: 'stock_out',
-      details: `${type || 'Stock OUT'}: ${quantity} ${unit || existingItem.unit} of ${itemName}`
+      details: `${type}: ${quantity} ${unit || existingItem.unit} of ${itemName}`,
     })
 
     return wrap(txnData, null)
   },
 }
 
-// ─── PROCUREMENT ──────────────────────────────────────────────────────────────
+/* ─── Procurement ────────────────────────────────────────────────────────── */
 
 export const procurementApi = {
   async getAll(branchId) {
@@ -607,7 +661,8 @@ export const procurementApi = {
     const { data, error } = await supabase
       .from('procurement_requests')
       .insert([{ ...req, status: 'Open', created_at: now() }])
-      .select().single()
+      .select()
+      .single()
     return wrap(data, error)
   },
 
@@ -615,7 +670,9 @@ export const procurementApi = {
     const { data, error } = await supabase
       .from('procurement_requests')
       .update({ status, updated_by: updatedBy, updated_at: now() })
-      .eq('id', id).select().single()
+      .eq('id', id)
+      .select()
+      .single()
     return wrap(data, error)
   },
 
@@ -625,7 +682,7 @@ export const procurementApi = {
   },
 }
 
-// ─── PURCHASE ORDERS ──────────────────────────────────────────────────────────
+/* ─── Purchase Orders ──────────────────────────────────────────────────────── */
 
 export const purchaseOrdersApi = {
   async getAll(branchId) {
@@ -642,16 +699,16 @@ export const purchaseOrdersApi = {
     const { data: poData, error: poError } = await supabase
       .from('purchase_orders')
       .insert([{ ...po, created_at: now() }])
-      .select().single()
+      .select()
+      .single()
     if (poError) return wrap(null, poError)
 
-    const lineItems = items.map(item => ({
+    const lineItems = items.map((item) => ({
       ...item,
-      po_id:      poData.id,
+      po_id: poData.id,
       created_at: now(),
     }))
-    const { error: itemsError } = await supabase
-      .from('purchase_order_items').insert(lineItems)
+    const { error: itemsError } = await supabase.from('purchase_order_items').insert(lineItems)
     return wrap(poData, itemsError)
   },
 
@@ -659,12 +716,14 @@ export const purchaseOrdersApi = {
     const { data, error } = await supabase
       .from('purchase_orders')
       .update({ status, updated_by: updatedBy, updated_at: now() })
-      .eq('id', id).select().single()
+      .eq('id', id)
+      .select()
+      .single()
     return wrap(data, error)
   },
 }
 
-// ─── FINANCIAL ────────────────────────────────────────────────────────────────
+/* ─── Financial ──────────────────────────────────────────────────────────── */
 
 export const financialApi = {
   async getAll(branchId) {
@@ -681,12 +740,14 @@ export const financialApi = {
     const { data, error } = await supabase
       .from('financial_transactions')
       .update({ payment_status: paymentStatus, updated_at: now() })
-      .eq('id', id).select().single()
+      .eq('id', id)
+      .select()
+      .single()
     return wrap(data, error)
   },
 }
 
-// ─── ACTIVITY LOG ─────────────────────────────────────────────────────────────
+/* ─── Activity Logs ───────────────────────────────────────────────────────── */
 
 export const activityApi = {
   async getAll(branchId, limit = 200) {
@@ -701,7 +762,7 @@ export const activityApi = {
   },
 }
 
-// ─── INVENTORY ───────────────────────────────────────────────────────────────
+/* ─── Inventory ──────────────────────────────────────────────────────────── */
 
 export const inventoryApi = {
   async getAll(branchId) {
@@ -722,9 +783,11 @@ export const inventoryApi = {
       .single()
     if (!error) {
       logActivity({
-        branchId, userId, userName,
+        branchId,
+        userId,
+        userName,
         action: 'Inventory Item Added',
-        details: `Added ${data.name} (${data.quantity} ${data.unit})`
+        details: `Added ${data.name} (${data.quantity} ${data.unit})`,
       })
     }
     return wrap(data, error)
@@ -740,9 +803,11 @@ export const inventoryApi = {
       .single()
     if (!error) {
       logActivity({
-        branchId, userId, userName,
+        branchId,
+        userId,
+        userName,
         action: 'Inventory Item Updated',
-        details: `Updated ${data.name}`
+        details: `Updated ${data.name}`,
       })
     }
     return wrap(data, error)
@@ -752,26 +817,13 @@ export const inventoryApi = {
     const { error } = await supabase.from('inventory').delete().eq('id', id)
     if (!error) {
       logActivity({
-        branchId, userId, userName,
+        branchId,
+        userId,
+        userName,
         action: 'Inventory Item Deleted',
-        details: `Deleted ${itemName}`
+        details: `Deleted ${itemName}`,
       })
     }
     return wrap(null, error)
   },
-}
-
-// ─── INTERNAL HELPER ──────────────────────────────────────────────────────────
-
-function logActivity({ branchId, userId, userName, action, details }) {
-  supabase.from('activity_logs').insert([{
-    branch_id:  branchId,
-    user_id:    userId,
-    user_name:  userName,
-    action,
-    details,
-    created_at: now(),
-  }]).then(({ error }) => {
-    if (error) console.warn('[api] activity log error:', error.message)
-  })
 }
