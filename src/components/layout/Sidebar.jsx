@@ -1,32 +1,61 @@
 import { useApp } from '../../context/AppContext'
-import { userCan } from '../../lib/constants'
 import { Ic } from '../ui'
 
 const navItems = [
-  { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard' },
-  { key: 'inventory',            label: 'Inventory',           icon: 'Package' },
-  { key: 'item-templates',       label: 'Item Templates',      icon: 'Box' },
-  { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight' },
-  { key: 'demands',              label: 'Demands',             icon: 'ClipboardList' },
-  { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle' },
-  { key: 'suppliers',            label: 'Suppliers',           icon: 'Users' },
-  { key: 'reports',              label: 'Reports',             icon: 'BarChart2' },
-  { key: 'user-management',      label: 'Users',               icon: 'UserPlus',   perm: 'manageUsers' },
-  { key: 'activity-log',         label: 'Activity Log',        icon: 'Activity' },
-  { key: 'settings',             label: 'Settings',            icon: 'Settings' },
+  { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard',  perm: 'canAccessDashboard' },
+  { key: 'inventory',            label: 'Inventory',           icon: 'Package',          perm: 'canAccessInventory' },
+  { key: 'item-templates',       label: 'Item Templates',      icon: 'Box',              perm: 'canAccessItemTemplates' },
+  { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight',   perm: 'canAccessStockMovement' },
+  { key: 'demands',              label: 'Demands',             icon: 'ClipboardList',    perm: 'canAccessDemands' },
+  { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle',      perm: 'canAccessFulfillment' },
+  { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
+  { key: 'reports',              label: 'Reports',             icon: 'BarChart2',          perm: 'canViewReports' },
+  { key: 'user-management',      label: 'Users',               icon: 'UserPlus',         perm: 'canAccessUserManagement' },
+  { key: 'activity-log',         label: 'Activity Log',        icon: 'Activity',         perm: 'canAccessActivityLog' },
+  { key: 'settings',             label: 'Settings',            icon: 'Settings',         perm: 'canAccessSettings' },
 ]
 
 export default function Sidebar() {
-  const { user, tab, setTab, sidebarOpen, setSidebar, dark, theme } = useApp()
+  const {
+    user, tab, setTab, sidebarOpen, setSidebar, dark, theme,
+    userRole,
+    canAccessDashboard,
+    canAccessInventory,
+    canAccessItemTemplates,
+    canAccessStockMovement,
+    canAccessDemands,
+    canAccessFulfillment,
+    canAccessSuppliers,
+    canViewReports,
+    canAccessUserManagement,
+    canAccessActivityLog,
+    canAccessSettings,
+  } = useApp()
 
   const go = (key) => {
     setTab(key)
     if (window.innerWidth <= 768) setSidebar(false)
   }
 
-  const visible = navItems.filter(item =>
-    !item.perm || userCan(item.perm, user?.role)
-  )
+  // Permission check map
+  const permChecks = {
+    canAccessDashboard,
+    canAccessInventory,
+    canAccessItemTemplates,
+    canAccessStockMovement,
+    canAccessDemands,
+    canAccessFulfillment,
+    canAccessSuppliers,
+    canViewReports,
+    canAccessUserManagement,
+    canAccessActivityLog,
+    canAccessSettings,
+  }
+
+  const visible = navItems.filter(item => {
+    const check = permChecks[item.perm]
+    return check ? check() : true
+  })
 
   return (
     <>
@@ -73,7 +102,7 @@ export default function Sidebar() {
         {/* Nav items */}
         <nav style={{
           padding: '12px 8px', overflowY: 'auto', flex: 1,
-          height: 'calc(100vh - 130px)'
+          height: 'calc(100vh - 160px)'
         }}>
           {visible.map(item => {
             const active = tab === item.key
@@ -109,6 +138,27 @@ export default function Sidebar() {
             )
           })}
         </nav>
+
+        {/* Role badge */}
+        {sidebarOpen && userRole && (
+          <div style={{
+            padding: '8px 12px',
+            borderTop: `1px solid ${theme.border}`,
+            fontSize: 11,
+            color: theme.textMuted,
+            textAlign: 'center',
+          }}>
+            <span style={{
+              display: 'inline-block',
+              padding: '2px 8px',
+              borderRadius: 10,
+              background: dark ? '#1e293b' : '#e5e7eb',
+              fontWeight: 600,
+            }}>
+              {userRole}
+            </span>
+          </div>
+        )}
 
         {/* Toggle */}
         <div style={{ padding: 8, borderTop: `1px solid ${theme.border}` }}>

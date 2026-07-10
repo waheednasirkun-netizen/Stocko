@@ -884,3 +884,30 @@ export const inventoryApi = {
     return wrap(null, error)
   },
 }
+// src/lib/api.js — Add at the bottom of your existing file
+
+// ─── User Roles (RBAC) ───
+export async function fetchUserRole(userId) {
+  const { data, error } = await supabase
+    .from('user_roles')
+    .select('role, organization_id, branch_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function upsertUserRole(record) {
+  const { data, error } = await supabase
+    .from('user_roles')
+    .upsert(record, { onConflict: 'user_id' })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteUserRole(userId) {
+  const { error } = await supabase.from('user_roles').delete().eq('user_id', userId);
+  if (error) throw error;
+}

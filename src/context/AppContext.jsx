@@ -1,4 +1,19 @@
-
+import {
+  ROLES,
+  isAdmin, isManager, isChief, isStoreKeeper,
+  hasRole, hasAnyRole,
+  canCreateUsers, canDeleteUsers, canAssignRoles,
+  canApproveRequests, canRejectRequests, canFulfillRequests,
+  canCreateDemand, canManageInventory, canManageSuppliers,
+  canManageProcurement, canManagePurchaseOrders, canManageFinancials,
+  canViewReports, canAccessSettings,
+  canAccessUserManagement, canAccessSuppliers, canAccessProcurement,
+  canAccessPurchaseOrders, canAccessFinancials, canAccessInventory,
+  canAccessStockMovement, canAccessFulfillment, canAccessDemands,
+  canAccessDashboard, canAccessActivityLog, canAccessItemTemplates,
+  SIDEBAR_PERMISSIONS,
+} from '../lib/constants'
+import { fetchUserRole } from '../lib/api'
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   authApi, usersApi, templatesApi, suppliersApi,
@@ -28,15 +43,19 @@ export function AppProvider({ children }) {
   const [authReady, setAuthReady] = useState(false)
   const [authError, setAuthError] = useState(null)
 
-  // ── Theme state ───────────────────────────────────────────────────────────
-const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true')
+  // ── RBAC state ──────────────────────────────────────────────────────────────
+  const [userRole, setUserRole] = useState(null)
+
+  // ── Theme state ─────────────────────────────────────────────────────────────
+  const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true')
 
   useEffect(() => {
     localStorage.setItem('rs_dark', dark)
   }, [dark])
 
   const theme = dark ? darkTheme : lightTheme
-  // ── UI state ──────────────────────────────────────────────────────────────
+
+  // ── UI state ────────────────────────────────────────────────────────────────
   const [tab,           setTab]           = useState('dashboard')
   const [sidebarOpen,   setSidebar]       = useState(window.innerWidth > 768)
   const [toasts,        setToasts]        = useState([])
@@ -47,7 +66,7 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
   const [loading,       setLoading]       = useState(false)
   const [categories,    setCategories]    = useState([])
 
-  // ── Business data ───────────────────────────────────────────────────────
+  // ── Business data ─────────────────────────────────────────────────────────
   const [transactions,          setTransactions]          = useState([])
   const [requests,              setRequests]              = useState([])
   const [inventory,             setInventory]             = useState([])
@@ -60,13 +79,40 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
   const [activityLogs,          setActivityLogs]          = useState([])
   const [dataLoaded,            setDataLoaded]            = useState(false)
 
-  // ── Derived: all units ──────────────────────────────────────────────────
+  // ── Derived: all units ────────────────────────────────────────────────────
   const allUnits = useMemo(
     () => [...new Set([...DEFAULT_UNITS, ...customUnits])],
     [customUnits]
   )
 
-  // ── Toast helpers ───────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RBAC: LOAD USER ROLE (uses auth.users.id, not custom users table id)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const loadUserRole = useCallback(async (authUserId) => {
+    console.log('[RBAC] loadUserRole called for userId:', authUserId)
+    if (!authUserId) {
+      console.log('[RBAC] No authUserId provided, defaulting to Store Keeper')
+      setUserRole(ROLES.STORE_KEEPER)
+      return
+    }
+    try {
+      const data = await fetchUserRole(authUserId)
+      console.log('[RBAC] fetchUserRole returned:', data)
+      if (data && data.role) {
+        console.log('[RBAC] Setting role to:', data.role)
+        setUserRole(data.role)
+      } else {
+        console.log('[RBAC] No role found in DB, defaulting to Store Keeper')
+        setUserRole(ROLES.STORE_KEEPER)
+      }
+    } catch (err) {
+      console.warn('[RBAC] Error loading role:', err)
+      setUserRole(ROLES.STORE_KEEPER)
+    }
+  }, [])
+
+  // ── Toast helpers ───────────────────────────────────────────────────────────
   const showToast = useCallback((type, title, msg, duration = 4500) => {
     const id = Date.now() + Math.random()
     setToasts(prev => [...prev.slice(-4), { id, type, title, msg }])
@@ -89,7 +135,7 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     setNotifications(prev => prev.map(n => ({ ...n, read: true })))
   }, [])
 
-  // ── Clear data on logout ────────────────────────────────────────────────
+  // ── Clear data on logout ──────────────────────────────────────────────────
   const clearData = useCallback(() => {
     setTransactions([])
     setRequests([])
@@ -103,11 +149,12 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     setActivityLogs([])
     setCategories([])
     setDataLoaded(false)
+    setUserRole(null)
   }, [])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // DATA FETCHING
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const getBranchId = useCallback((u) => {
     return u?.branch_id ?? u?.branchId ?? null
@@ -169,7 +216,7 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     }
   }, [showToast])
 
-  // ── Load all business data ────────────────────────────────────────────────
+  // ── Load all business data ──────────────────────────────────────────────────
   const loadAllData = useCallback(async (loggedInUser) => {
     if (!loggedInUser) {
       console.warn('[AppContext] loadAllData: no user provided')
@@ -228,13 +275,7 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
       await fetchCategories(branchId)
 
       setDataLoaded(true)
-      console.log('[AppContext] loadAllData complete ✓', {
-        transactions: txnRes.data?.length ?? 0,
-        inventory:    invRes.data?.length ?? 0,
-        requests:     requests.length,
-        templates:    tmplRes.data?.length ?? 0,
-        suppliers:    supRes.data?.length ?? 0,
-      })
+      console.log('[AppContext] loadAllData complete ✓')
     } catch (err) {
       console.error('[AppContext] loadAllData error:', err)
       showToast('error', 'Load Failed', 'Could not load data. Check console for details.')
@@ -242,18 +283,17 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     } finally {
       setLoading(false)
     }
-  }, [showToast, fetchRequests, fetchCategories, getBranchId, requests.length])
+  }, [showToast, fetchRequests, fetchCategories, getBranchId])
 
-  // ═════════════════════════════════════════════════════════════════════════
-  // REAL-TIME SUBSCRIPTIONS (single source of truth)
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REAL-TIME SUBSCRIPTIONS
+  // ═══════════════════════════════════════════════════════════════════════════
 
   useEffect(() => {
     if (!user?.branch_id) return
 
     const channels = []
 
-    // Inventory real-time updates
     const invChannel = supabase
       .channel(`inventory:${user.branch_id}`)
       .on('postgres_changes', {
@@ -261,14 +301,10 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
         schema: 'public',
         table: 'inventory',
         filter: `branch_id=eq.${user.branch_id}`,
-      }, (payload) => {
-        console.log('[AppContext] inventory realtime:', payload.eventType, payload.new?.name)
-        fetchInventory(user.branch_id)
-      })
+      }, () => { fetchInventory(user.branch_id) })
       .subscribe()
     channels.push(invChannel)
 
-    // Transactions real-time updates
     const txnChannel = supabase
       .channel(`transactions:${user.branch_id}`)
       .on('postgres_changes', {
@@ -277,13 +313,11 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
         table: 'transactions',
         filter: `branch_id=eq.${user.branch_id}`,
       }, (payload) => {
-        console.log('[AppContext] transaction realtime:', payload.new?.type, payload.new?.item_name)
         setTransactions(prev => [payload.new, ...prev])
       })
       .subscribe()
     channels.push(txnChannel)
 
-    // Requests real-time updates
     const reqChannel = supabase
       .channel(`requests:${user.branch_id}`)
       .on('postgres_changes', {
@@ -291,37 +325,27 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
         schema: 'public',
         table: 'requests',
         filter: `branch_id=eq.${user.branch_id}`,
-      }, () => {
-        fetchRequests(user.branch_id)
-      })
+      }, () => { fetchRequests(user.branch_id) })
       .subscribe()
     channels.push(reqChannel)
 
-    return () => {
-      channels.forEach(ch => supabase.removeChannel(ch))
-    }
+    return () => { channels.forEach(ch => supabase.removeChannel(ch)) }
   }, [user?.branch_id, fetchInventory, fetchRequests])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // AUTH LISTENER
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const loadAllDataRef  = useRef(loadAllData)
   const clearDataRef    = useRef(clearData)
-  const handledByLogin  = useRef(false)
 
   useEffect(() => { loadAllDataRef.current = loadAllData }, [loadAllData])
   useEffect(() => { clearDataRef.current   = clearData   }, [clearData])
 
   useEffect(() => {
     const finishAuth = async (session) => {
+      console.log('[Auth] finishAuth called, session exists:', !!session)
       if (!session) {
-        setAuthReady(true)
-        return
-      }
-
-      if (handledByLogin.current) {
-        handledByLogin.current = false
         setAuthReady(true)
         return
       }
@@ -329,20 +353,26 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
       const { data: restoredUser, error } = await authApi.userFromSession(session)
 
       if (error || !restoredUser) {
-        console.error('[AppContext] session profile failed:', error?.message)
+        console.error('[Auth] session profile failed:', error?.message)
         setAuthReady(true)
         return
       }
 
-      console.log('[AppContext] authenticated:', restoredUser.email)
+      console.log('[Auth] authenticated:', restoredUser.email, 'authId:', session.user?.id, 'profileId:', restoredUser.id)
       setUser(restoredUser)
+
+      // ── CRITICAL: Use auth.users.id for role lookup, not profile id ──
+      const authUserId = session.user?.id || restoredUser.auth_id || restoredUser.id
+      console.log('[Auth] Looking up role for authUserId:', authUserId)
+      await loadUserRole(authUserId)
+
       await loadAllDataRef.current(restoredUser)
       setAuthReady(true)
     }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
-        console.log('[AppContext] auth event:', event)
+        console.log('[Auth] auth event:', event)
 
         if (event === 'INITIAL_SESSION') {
           setTimeout(() => { void finishAuth(session) }, 0)
@@ -365,39 +395,50 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     )
 
     return () => subscription.unsubscribe()
-  }, [])
+  }, [loadUserRole])
 
-  // ── Login ─────────────────────────────────────────────────────────────────
+  // ── Login ───────────────────────────────────────────────────────────────────
   const login = useCallback(async (email, password) => {
-    console.log('[AppContext] login:', email)
+    console.log('[Auth] login:', email)
     setAuthError(null)
 
     const { data: loggedInUser, error } = await authApi.login(email, password)
 
     if (error) {
       setAuthError(error.message)
-      setAuthReady(true)
       return { error }
     }
 
     if (loggedInUser) {
-      handledByLogin.current = true
+      console.log('[Auth] login success, profile:', loggedInUser)
       setUser(loggedInUser)
+
+      // ── CRITICAL: Get auth user ID from session, not profile ──
+      const { data: { session } } = await supabase.auth.getSession()
+      const authUserId = session?.user?.id
+      console.log('[Auth] login authUserId from session:', authUserId)
+
+      if (authUserId) {
+        await loadUserRole(authUserId)
+      } else {
+        // Fallback: try profile id or auth_id field
+        await loadUserRole(loggedInUser.auth_id || loggedInUser.id)
+      }
+
       await loadAllData(loggedInUser)
-      setAuthReady(true)
     }
 
     return { data: loggedInUser }
-  }, [loadAllData])
+  }, [loadAllData, loadUserRole])
 
-  // ── Logout ────────────────────────────────────────────────────────────────
+  // ── Logout ──────────────────────────────────────────────────────────────────
   const logout = useCallback(async () => {
     await authApi.logout()
   }, [])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // ACTION LOCK
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const actionInProgress = useRef(false)
   const withActionLock = useCallback(async (fn) => {
@@ -417,9 +458,9 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     }
   }, [showToast])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // STOCK OPERATIONS
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const handleStockIn = useCallback(async (formData) => {
     const branchId = getBranchId(user)
@@ -440,7 +481,6 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
         return { success: false, error }
       }
       setTransactions(prev => [data, ...prev])
-      // Inventory is updated via real-time subscription, but optimistically:
       setInventory(prev => {
         const idx = prev.findIndex(i => i.name?.toLowerCase() === formData.item?.toLowerCase())
         if (idx >= 0) {
@@ -479,7 +519,6 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
         return { success: false, error }
       }
       setTransactions(prev => [data, ...prev])
-      // Optimistic inventory update
       setInventory(prev => {
         const idx = prev.findIndex(i => i.name?.toLowerCase() === formData.item?.toLowerCase())
         if (idx >= 0) {
@@ -499,9 +538,9 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     })
   }, [user, getBranchId, withActionLock, addNotification, showToast])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // REQUESTS SYSTEM
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const createRequest = useCallback(async ({ department, notes, items }) => {
     const branchId = getBranchId(user)
@@ -755,9 +794,9 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     }
   }, [user, getBranchId, showToast, fetchRequests])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // NOTIFICATIONS & ACTIVITY LOGS
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const createNotification = useCallback(async ({ type, title, message, link }) => {
     try {
@@ -787,11 +826,11 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     }
   }, [user, getBranchId])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // CRUD OPERATIONS
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  // ── Templates ─────────────────────────────────────────────────────────────
+  // ── Templates ───────────────────────────────────────────────────────────────
   const createTemplate = useCallback(async (tmpl) => {
     const { data, error } = await templatesApi.create({ ...tmpl, branch_id: getBranchId(user), created_by: user?.id })
     if (error) { showToast('error', 'Failed', error.message); return null }
@@ -811,7 +850,7 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     setTemplates(prev => prev.filter(t => t.id !== id))
   }, [showToast])
 
-  // ── Suppliers ────────────────────────────────────────────────────────────
+  // ── Suppliers ──────────────────────────────────────────────────────────────
   const createSupplier = useCallback(async (sup) => {
     const { data, error } = await suppliersApi.create({ ...sup, branch_id: getBranchId(user) })
     if (error) { showToast('error', 'Failed', error.message); return null }
@@ -831,23 +870,17 @@ const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true
     setSuppliers(prev => prev.filter(s => s.id !== id))
   }, [showToast])
 
-  // ── Users ─────────────────────────────────────────────────────────────────
-const createUser = useCallback(async (userData) => {
-  const payload = {
-    ...userData,
-    branch_id: getBranchId(user),
-  }
-
-  const { data, error } = await usersApi.create(payload)
-
-  if (error) {
-    showToast('error', 'Failed', error.message)
-    return null
-  }
-
-  setUsers(prev => [...prev, data])
-  return data
-}, [user, getBranchId, showToast])
+  // ── Users ──────────────────────────────────────────────────────────────────
+  const createUser = useCallback(async (userData) => {
+    const payload = {
+      ...userData,
+      branch_id: getBranchId(user),
+    }
+    const { data, error } = await usersApi.create(payload)
+    if (error) { showToast('error', 'Failed', error.message); return null }
+    setUsers(prev => [...prev, data])
+    return data
+  }, [user, getBranchId, showToast])
 
   const updateUser = useCallback(async (id, updates) => {
     const { data, error } = await usersApi.update(id, updates)
@@ -861,7 +894,7 @@ const createUser = useCallback(async (userData) => {
     setUsers(prev => prev.filter(u => u.id !== id))
   }, [showToast])
 
-  // ── Categories ──────────────────────────────────────────────────────────
+  // ── Categories ────────────────────────────────────────────────────────────
   const createCategory = useCallback(async (cat) => {
     try {
       const { data, error } = await supabase
@@ -904,7 +937,7 @@ const createUser = useCallback(async (userData) => {
     }
   }, [showToast])
 
-  // ── Procurement ───────────────────────────────────────────────────────────
+  // ── Procurement ────────────────────────────────────────────────────────────
   const createProcurement = useCallback(async (req) => {
     const { data, error } = await procurementApi.create({ ...req, branch_id: getBranchId(user), created_by: user?.id })
     if (error) { showToast('error', 'Failed', error.message); return null }
@@ -924,7 +957,7 @@ const createUser = useCallback(async (userData) => {
     setProcurements(prev => prev.filter(p => p.id !== id))
   }, [showToast])
 
-  // ── Purchase orders ───────────────────────────────────────────────────────
+  // ── Purchase orders ────────────────────────────────────────────────────────
   const createPurchaseOrder = useCallback(async ({ po, items }) => {
     const { data, error } = await purchaseOrdersApi.create({
       po: { ...po, branch_id: getBranchId(user), created_by: user?.id },
@@ -941,16 +974,16 @@ const createUser = useCallback(async (userData) => {
     setPurchaseOrders(prev => prev.map(p => p.id === id ? { ...p, ...data } : p))
   }, [user, showToast])
 
-  // ── Financial ────────────────────────────────────────────────────────────
+  // ── Financial ──────────────────────────────────────────────────────────────
   const updateFinancialTxnStatus = useCallback(async (id, paymentStatus) => {
     const { data, error } = await financialApi.updatePaymentStatus(id, paymentStatus)
     if (error) { showToast('error', 'Failed', error.message); return }
     setFinancialTransactions(prev => prev.map(f => f.id === id ? { ...f, ...data } : f))
   }, [showToast])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // STATS
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const stats = useMemo(() => {
     const safeInventory = Array.isArray(inventory) ? inventory : []
@@ -987,9 +1020,9 @@ const createUser = useCallback(async (userData) => {
     }
   }, [inventory, transactions, suppliers])
 
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
   // CONTEXT VALUE
-  // ═════════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const value = {
     // Auth
@@ -1038,6 +1071,44 @@ const createUser = useCallback(async (userData) => {
     // Utils
     withActionLock,
     loadAllData,
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // RBAC EXPORTS
+    // ═════════════════════════════════════════════════════════════════════════
+    userRole,
+    isAdmin: () => isAdmin(userRole),
+    isManager: () => isManager(userRole),
+    isChief: () => isChief(userRole),
+    isStoreKeeper: () => isStoreKeeper(userRole),
+    hasRole: (role) => hasRole(userRole, role),
+    hasAnyRole: (roles) => hasAnyRole(userRole, roles),
+    canCreateUsers: () => canCreateUsers(userRole),
+    canDeleteUsers: () => canDeleteUsers(userRole),
+    canAssignRoles: () => canAssignRoles(userRole),
+    canApproveRequests: () => canApproveRequests(userRole),
+    canRejectRequests: () => canRejectRequests(userRole),
+    canFulfillRequests: () => canFulfillRequests(userRole),
+    canCreateDemand: () => canCreateDemand(userRole),
+    canManageInventory: () => canManageInventory(userRole),
+    canManageSuppliers: () => canManageSuppliers(userRole),
+    canManageProcurement: () => canManageProcurement(userRole),
+    canManagePurchaseOrders: () => canManagePurchaseOrders(userRole),
+    canManageFinancials: () => canManageFinancials(userRole),
+    canViewReports: () => canViewReports(userRole),
+    canAccessSettings: () => canAccessSettings(userRole),
+    canAccessUserManagement: () => canAccessUserManagement(userRole),
+    canAccessSuppliers: () => canAccessSuppliers(userRole),
+    canAccessProcurement: () => canAccessProcurement(userRole),
+    canAccessPurchaseOrders: () => canAccessPurchaseOrders(userRole),
+    canAccessFinancials: () => canAccessFinancials(userRole),
+    canAccessInventory: () => canAccessInventory(userRole),
+    canAccessStockMovement: () => canAccessStockMovement(userRole),
+    canAccessFulfillment: () => canAccessFulfillment(userRole),
+    canAccessDemands: () => canAccessDemands(userRole),
+    canAccessDashboard: () => canAccessDashboard(userRole),
+    canAccessActivityLog: () => canAccessActivityLog(userRole),
+    canAccessItemTemplates: () => canAccessItemTemplates(userRole),
+    SIDEBAR_PERMISSIONS,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

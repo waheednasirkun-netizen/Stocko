@@ -229,3 +229,68 @@ export const fmtShort = (n) => {
   if (v >= 1_000)     return `PKR ${(v/1_000).toFixed(0)}K`
   return fmtPKR(v)
 }
+// src/lib/constants.js
+// ─── Add these at the bottom of your existing constants.js ───
+
+export const ROLES = {
+  ADMIN: 'Admin',
+  MANAGER: 'Manager',
+  CHIEF: 'Chief',
+  STORE_KEEPER: 'Store Keeper',
+};
+
+// ─── Role check helpers ───
+export const hasRole = (userRole, role) => userRole === role;
+export const hasAnyRole = (userRole, roles) => roles.includes(userRole);
+export const isAdmin = (userRole) => userRole === ROLES.ADMIN;
+export const isManager = (userRole) => userRole === ROLES.MANAGER;
+export const isChief = (userRole) => userRole === ROLES.CHief;
+export const isStoreKeeper = (userRole) => userRole === ROLES.STORE_KEEPER;
+
+// ─── Permission helpers ───
+export const canCreateUsers = (r) => isAdmin(r);
+export const canDeleteUsers = (r) => isAdmin(r);
+export const canAssignRoles = (r) => isAdmin(r);
+export const canApproveRequests = (r) => isAdmin(r) || isManager(r);
+export const canRejectRequests = (r) => isAdmin(r) || isManager(r);
+export const canFulfillRequests = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+export const canCreateDemand = (r) => isAdmin(r) || isManager(r) || isChief(r);
+export const canManageInventory = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+export const canManageSuppliers = (r) => isAdmin(r) || isManager(r);
+export const canManageProcurement = (r) => isAdmin(r) || isManager(r);
+export const canManagePurchaseOrders = (r) => isAdmin(r) || isManager(r);
+export const canManageFinancials = (r) => isAdmin(r) || isManager(r);
+export const canViewReports = (r) => isAdmin(r) || isManager(r) || isChief(r) || isStoreKeeper(r);
+export const canAccessSettings = (r) => isAdmin(r);
+
+// ─── Page access helpers ───
+export const canAccessUserManagement = (r) => isAdmin(r);
+export const canAccessSuppliers = (r) => isAdmin(r) || isManager(r);
+export const canAccessProcurement = (r) => isAdmin(r) || isManager(r);
+export const canAccessPurchaseOrders = (r) => isAdmin(r) || isManager(r);
+export const canAccessFinancials = (r) => isAdmin(r) || isManager(r);
+export const canAccessInventory = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+export const canAccessStockMovement = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+export const canAccessFulfillment = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+export const canAccessDemands = (r) => isAdmin(r) || isManager(r) || isChief(r);
+export const canAccessDashboard = () => true;
+export const canAccessActivityLog = (r) => isAdmin(r) || isManager(r);
+export const canAccessItemTemplates = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+
+// ─── Sidebar visibility map ───
+export const SIDEBAR_PERMISSIONS = {
+  'Dashboard': canAccessDashboard,
+  'Inventory': canAccessInventory,
+  'Stock Movement': canAccessStockMovement,
+  'Demands': canAccessDemands,
+  'Fulfillment Center': canAccessFulfillment,
+  'Item Templates': canAccessItemTemplates,
+  'Suppliers': canAccessSuppliers,
+  'Procurement Requests': canAccessProcurement,
+  'Purchase Orders': canAccessPurchaseOrders,
+  'User Management': canAccessUserManagement,
+  'Activity Log': canAccessActivityLog,
+  'Reports': canViewReports,
+  'Inventory Expenses': canAccessFinancials,
+  'Settings': canAccessSettings,
+};
