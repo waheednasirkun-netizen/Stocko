@@ -1,8 +1,9 @@
 /**
  * UI primitives — all shared components used across pages.
- * Ported directly from the HTML app's inline component definitions.
+ * Fully theme-aware for light/dark mode.
  */
 import { createContext, useContext, useState, useCallback } from 'react'
+import { useApp } from '../../context/AppContext'
 
 // ── ICONS ─────────────────────────────────────────────────────────────────────
 const iconPaths = {
@@ -74,53 +75,73 @@ export const Ic = ({ n, size = 18, color, style = {} }) => {
 }
 
 // ── BUTTON ────────────────────────────────────────────────────────────────────
-const variantStyles = {
-  primary:  { background:'#2563eb', color:'white', border:'none' },
-  success:  { background:'#16a34a', color:'white', border:'none' },
-  danger:   { background:'#dc2626', color:'white', border:'none' },
-  warning:  { background:'#d97706', color:'white', border:'none' },
-  outline:  { background:'transparent', color:'#374151', border:'1px solid #d1d5db' },
-  ghost:    { background:'transparent', color:'#374151', border:'none' },
-}
+export const Btn = ({ variant = 'primary', children, style = {}, disabled, onClick, id, className = '' }) => {
+  const { theme } = useApp()
 
-export const Btn = ({ variant = 'primary', children, style = {}, disabled, onClick, id, className = '' }) => (
-  <button
-    id={id}
-    onClick={onClick}
-    disabled={disabled}
-    className={className}
-    style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6,
-      padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-      cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1,
-      transition: 'all 0.15s',
-      ...variantStyles[variant],
-      ...style,
-    }}
-  >
-    {children}
-  </button>
-)
+  const variantStyles = {
+    primary:  { background: theme.primary, color: theme.primaryText, border: 'none' },
+    success:  { background: theme.success, color: theme.successText, border: 'none' },
+    danger:   { background: theme.danger, color: theme.dangerText, border: 'none' },
+    warning:  { background: theme.warning, color: theme.warningText, border: 'none' },
+    outline:  { background: 'transparent', color: theme.text, border: `1px solid ${theme.border}` },
+    ghost:    { background: 'transparent', color: theme.textMuted, border: 'none' },
+  }
+
+  return (
+    <button
+      id={id}
+      onClick={onClick}
+      disabled={disabled}
+      className={className}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.6 : 1,
+        transition: 'all 0.15s',
+        ...variantStyles[variant],
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
 
 // ── MODAL ─────────────────────────────────────────────────────────────────────
 export const Modal = ({ open, onClose, title, children, width = 520 }) => {
+  const { theme } = useApp()
   if (!open) return null
+
   return (
     <div
-      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000,
-        display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}
+      style={{
+        position: 'fixed', inset: 0,
+        background: theme.overlayBg,
+        zIndex: 1000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+      }}
       onClick={onClose}
     >
       <div
-        style={{ background:'white', borderRadius:14, padding:28, width:'100%', maxWidth:width,
-          maxHeight:'90vh', overflowY:'auto', boxShadow:'0 24px 60px rgba(0,0,0,0.25)',
-          animation:'fadeIn 0.2s ease' }}
+        style={{
+          background: theme.cardBg,
+          borderRadius: 14, padding: 28, width: '100%', maxWidth: width,
+          maxHeight: '90vh', overflowY: 'auto',
+          boxShadow: theme.shadowLg,
+          border: `1px solid ${theme.border}`,
+          animation: 'fadeIn 0.2s ease'
+        }}
         onClick={e => e.stopPropagation()}
       >
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
-          <h3 style={{ fontSize:17, fontWeight:700, color:'#111827' }}>{title}</h3>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20
+        }}>
+          <h3 style={{ fontSize: 17, fontWeight: 700, color: theme.text }}>{title}</h3>
           <button onClick={onClose}
-            style={{ background:'none', border:'none', cursor:'pointer', color:'#6b7280', padding:4 }}>
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: theme.textMuted, padding: 4
+            }}>
             <Ic n="X" size={18}/>
           </button>
         </div>
@@ -131,28 +152,53 @@ export const Modal = ({ open, onClose, title, children, width = 520 }) => {
 }
 
 // ── TOAST CONTAINER ───────────────────────────────────────────────────────────
-export const ToastContainer = ({ toasts, onDismiss }) => (
-  <div id="toast-container">
-    {toasts.map(t => (
-      <div key={t.id} className={`toast ${t.type}`}>
-        <span style={{ fontSize:16, flexShrink:0, marginTop:1 }}>
-          {t.type==='success'?'✅':t.type==='error'?'❌':t.type==='warning'?'⚠️':'ℹ️'}
-        </span>
-        <div style={{ flex:1 }}>
-          <div style={{ fontWeight:600, marginBottom:2 }}>{t.title}</div>
-          <div style={{ opacity:0.85, lineHeight:1.4 }}>{t.msg}</div>
-        </div>
-        <button onClick={() => onDismiss(t.id)}
-          style={{ background:'none', border:'none', cursor:'pointer', opacity:0.6, fontSize:16 }}>✕</button>
-      </div>
-    ))}
-  </div>
-)
+export const ToastContainer = ({ toasts, onDismiss }) => {
+  const { theme } = useApp()
+
+  const toastMeta = {
+    success: { icon: '✅', bg: theme.toastSuccessBg, border: theme.toastSuccessBorder, color: theme.toastSuccessText },
+    error:   { icon: '❌', bg: theme.toastErrorBg, border: theme.toastErrorBorder, color: theme.toastErrorText },
+    warning: { icon: '⚠️', bg: theme.toastWarningBg, border: theme.toastWarningBorder, color: theme.toastWarningText },
+    info:    { icon: 'ℹ️', bg: theme.toastInfoBg, border: theme.toastInfoBorder, color: theme.toastInfoText },
+  }
+
+  return (
+    <div id="toast-container">
+      {toasts.map(t => {
+        const meta = toastMeta[t.type] || toastMeta.info
+        return (
+          <div
+            key={t.id}
+            className={`toast ${t.type}`}
+            style={{
+              background: meta.bg,
+              border: `1px solid ${meta.border}`,
+              color: meta.color,
+            }}
+          >
+            <span style={{ fontSize: 16, flexShrink: 0, marginTop: 1 }}>
+              {meta.icon}
+            </span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>{t.title}</div>
+              <div style={{ opacity: 0.85, lineHeight: 1.4 }}>{t.msg}</div>
+            </div>
+            <button onClick={() => onDismiss(t.id)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.6, fontSize: 16 }}>
+              ✕
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 // ── CONFIRM DIALOG ────────────────────────────────────────────────────────────
 const ConfirmContext = createContext(null)
 
 export const ConfirmProvider = ({ children }) => {
+  const { theme } = useApp()
   const [state, setState] = useState(null)
 
   const confirm = useCallback(({
@@ -167,21 +213,34 @@ export const ConfirmProvider = ({ children }) => {
     setState(null)
   }
 
+  const alertColors = {
+    danger:  { bg: theme.rejected,       iconBg: theme.rejected,       icon: theme.rejectedText },
+    warning: { bg: theme.pending,        iconBg: theme.pending,        icon: theme.pendingText },
+    primary: { bg: theme.approved,       iconBg: theme.approved,       icon: theme.approvedText },
+  }
+
+  const ac = alertColors[state?.variant] || alertColors.danger
+
   return (
     <ConfirmContext.Provider value={{ confirm }}>
       {children}
       {state && (
         <div className="confirm-overlay" onClick={() => handle(false)}>
           <div className="confirm-box" onClick={e => e.stopPropagation()}>
-            <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:12 }}>
-              <div style={{ width:38, height:38, borderRadius:10, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center',
-                background: state.variant==='danger'?'#fee2e2':state.variant==='warning'?'#fef9c3':'#dbeafe' }}>
-                <Ic n="AlertTriangle" size={20} color={state.variant==='danger'?'#dc2626':state.variant==='warning'?'#ca8a04':'#2563eb'}/>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <div style={{
+                width: 38, height: 38, borderRadius: 10, flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: ac.bg
+              }}>
+                <Ic n="AlertTriangle" size={20} color={ac.icon}/>
               </div>
-              <p style={{ fontSize:16, fontWeight:700, color:'#111827' }}>{state.title}</p>
+              <p style={{ fontSize: 16, fontWeight: 700, color: theme.text }}>{state.title}</p>
             </div>
-            <p style={{ fontSize:14, color:'#6b7280', marginBottom:20, lineHeight:1.6 }}>{state.message}</p>
-            <div style={{ display:'flex', justifyContent:'flex-end', gap:8 }}>
+            <p style={{ fontSize: 14, color: theme.textMuted, marginBottom: 20, lineHeight: 1.6 }}>
+              {state.message}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Btn variant="outline" onClick={() => handle(false)}>{state.cancelLabel}</Btn>
               <Btn
                 variant={state.variant === 'danger' ? 'danger' : state.variant === 'warning' ? 'warning' : 'primary'}
@@ -198,23 +257,61 @@ export const ConfirmProvider = ({ children }) => {
 export const useConfirm = () => useContext(ConfirmContext)
 
 // ── CARD ──────────────────────────────────────────────────────────────────────
-export const Card = ({ children, style = {}, className = '' }) => (
-  <div className={`card-hover ${className}`}
-    style={{ background:'white', borderRadius:12, border:'1px solid #e5e7eb',
-      padding:20, ...style }}>
-    {children}
-  </div>
-)
+export const Card = ({ children, style = {}, className = '' }) => {
+  const { theme } = useApp()
+  return (
+    <div className={`card-hover ${className}`}
+      style={{
+        background: theme.cardBg,
+        borderRadius: 12,
+        border: `1px solid ${theme.border}`,
+        padding: 20,
+        ...style
+      }}>
+      {children}
+    </div>
+  )
+}
 
 // ── SEARCH DROPDOWN ───────────────────────────────────────────────────────────
 export const SearchDropdown = ({ items, onSelect, show }) => {
+  const { theme } = useApp()
   if (!show || !items.length) return null
+
   return (
-    <div className="search-dropdown">
+    <div className="search-dropdown" style={{
+      position: 'absolute',
+      top: 'calc(100% + 4px)',
+      left: 0,
+      right: 0,
+      background: theme.cardBg,
+      border: `1px solid ${theme.border}`,
+      borderRadius: 8,
+      boxShadow: theme.shadowMd,
+      zIndex: 100,
+      maxHeight: 240,
+      overflowY: 'auto',
+    }}>
       {items.map((item, i) => (
-        <div key={i} className="search-result-item" onClick={() => onSelect(item)}>
-          <div style={{ fontWeight:500, fontSize:13 }}>{item.name}</div>
-          {item.category && <div style={{ fontSize:11, color:'#9ca3af' }}>{item.category} · {item.unit}</div>}
+        <div
+          key={i}
+          className="search-result-item"
+          onClick={() => onSelect(item)}
+          style={{
+            padding: '10px 14px',
+            cursor: 'pointer',
+            borderBottom: `1px solid ${theme.borderLight}`,
+            transition: 'background 0.15s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = theme.navHover}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+        >
+          <div style={{ fontWeight: 500, fontSize: 13, color: theme.text }}>{item.name}</div>
+          {item.category && (
+            <div style={{ fontSize: 11, color: theme.textMuted }}>
+              {item.category} · {item.unit}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -223,47 +320,332 @@ export const SearchDropdown = ({ items, onSelect, show }) => {
 
 // ── STATUS PILL ───────────────────────────────────────────────────────────────
 export const StatusPill = ({ status }) => {
-  const colors = {
-    Active:    '#dcfce7,#166534',
-    Inactive:  '#fee2e2,#991b1b',
-    Good:      '#dcfce7,#166534',
-    Low:       '#fef9c3,#854d0e',
-    Critical:  '#fee2e2,#991b1b',
-    Pending:   '#fef9c3,#854d0e',
-    Fulfilled: '#dcfce7,#166534',
-    Rejected:  '#fee2e2,#991b1b',
-    Approved:  '#dbeafe,#1e40af',
-    Open:      '#dbeafe,#1e40af',
-    Closed:    '#f3f4f6,#374151',
-    Ordered:   '#f3e8ff,#7c3aed',
-    Received:  '#dcfce7,#166534',
-    paid:      '#dcfce7,#166534',
-    unpaid:    '#fee2e2,#991b1b',
-    credit:    '#fef9c3,#854d0e',
+  const { theme } = useApp()
+
+  const statusMap = {
+    Active:    { bg: theme.success,       text: theme.successText },
+    Inactive:  { bg: theme.danger,        text: theme.dangerText },
+    Good:      { bg: theme.success,       text: theme.successText },
+    Low:       { bg: theme.warning,       text: theme.warningText },
+    Critical:  { bg: theme.danger,        text: theme.dangerText },
+    Pending:   { bg: theme.pending,       text: theme.pendingText },
+    Fulfilled: { bg: theme.completed,     text: theme.completedText },
+    Rejected:  { bg: theme.rejected,      text: theme.rejectedText },
+    Approved:  { bg: theme.approved,      text: theme.approvedText },
+    Open:      { bg: theme.approved,      text: theme.approvedText },
+    Closed:    { bg: theme.cardHover,     text: theme.textMuted },
+    Ordered:   { bg: '#f3e8ff',           text: '#7c3aed' },
+    Received:  { bg: theme.success,       text: theme.successText },
+    paid:      { bg: theme.success,       text: theme.successText },
+    unpaid:    { bg: theme.danger,        text: theme.dangerText },
+    credit:    { bg: theme.warning,       text: theme.warningText },
   }
-  const [bg, color] = (colors[status] || '#f3f4f6,#374151').split(',')
+
+  const s = statusMap[status] || { bg: theme.cardHover, text: theme.textMuted }
+
   return (
-    <span style={{ padding:'3px 10px', borderRadius:999, fontSize:12, fontWeight:600,
-      background:bg, color, display:'inline-block' }}>
+    <span style={{
+      padding: '3px 10px',
+      borderRadius: 999,
+      fontSize: 12,
+      fontWeight: 600,
+      background: s.bg,
+      color: s.text,
+      display: 'inline-block'
+    }}>
       {status}
     </span>
   )
 }
 
 // ── LOADING SCREEN ────────────────────────────────────────────────────────────
-export const LoadingScreen = ({ message = 'Loading...' }) => (
-  <div className="loading-screen">
-    <div className="spinner"/>
-    <p style={{ color:'#2563eb', fontWeight:600, fontSize:18 }}>RestoStock</p>
-    <p style={{ color:'#6b7280', fontSize:13 }}>{message}</p>
-  </div>
-)
+export const LoadingScreen = ({ message = 'Loading...' }) => {
+  const { theme } = useApp()
+  return (
+    <div className="loading-screen">
+      <div className="spinner"/>
+      <p style={{ color: theme.primary, fontWeight: 600, fontSize: 18 }}>RestoStock</p>
+      <p style={{ color: theme.textMuted, fontSize: 13 }}>{message}</p>
+    </div>
+  )
+}
 
 // ── EMPTY STATE ───────────────────────────────────────────────────────────────
-export const EmptyState = ({ icon = 'Package', title = 'No data', message = '' }) => (
-  <div style={{ textAlign:'center', padding:'60px 20px', color:'#9ca3af' }}>
-    <Ic n={icon} size={48} color="#d1d5db" style={{ display:'block', margin:'0 auto 16px' }}/>
-    <p style={{ fontSize:16, fontWeight:600, color:'#374151', marginBottom:8 }}>{title}</p>
-    {message && <p style={{ fontSize:13 }}>{message}</p>}
-  </div>
-)
+export const EmptyState = ({ icon = 'Package', title = 'No data', message = '' }) => {
+  const { theme } = useApp()
+  return (
+    <div style={{ textAlign: 'center', padding: '60px 20px', color: theme.textMuted }}>
+      <Ic n={icon} size={48} color={theme.border} style={{ display: 'block', margin: '0 auto 16px' }}/>
+      <p style={{ fontSize: 16, fontWeight: 600, color: theme.text, marginBottom: 8 }}>{title}</p>
+      {message && <p style={{ fontSize: 13 }}>{message}</p>}
+    </div>
+  )
+}
+
+// ── KPI CARD ──────────────────────────────────────────────────────────────────
+export const KpiCard = ({ label, value, icon, trend, trendUp }) => {
+  const { theme } = useApp()
+  return (
+    <div style={{
+      background: theme.kpiBg,
+      border: `1px solid ${theme.kpiBorder}`,
+      borderRadius: 12,
+      padding: 20,
+      boxShadow: theme.shadow,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: theme.textMuted, fontWeight: 500 }}>{label}</span>
+        <span style={{ fontSize: 20 }}>{icon}</span>
+      </div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: theme.text, marginBottom: 4 }}>
+        {value}
+      </div>
+      {trend && (
+        <div style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: trendUp ? theme.success : theme.danger
+        }}>
+          {trendUp ? '↑' : '↓'} {trend}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── INPUT FIELD ───────────────────────────────────────────────────────────────
+export const Input = ({ label, error, ...props }) => {
+  const { theme } = useApp()
+  return (
+    <div style={{ marginBottom: 12 }}>
+      {label && (
+        <label style={{
+          display: 'block',
+          fontSize: 12,
+          fontWeight: 600,
+          color: theme.text,
+          marginBottom: 6
+        }}>
+          {label}
+        </label>
+      )}
+      <input
+        {...props}
+        style={{
+          width: '100%',
+          background: theme.inputBg,
+          color: theme.text,
+          border: `1px solid ${error ? theme.danger : theme.inputBorder}`,
+          borderRadius: 8,
+          padding: '8px 12px',
+          fontSize: 14,
+          transition: 'border-color 0.15s, box-shadow 0.15s',
+          ...props.style,
+        }}
+      />
+      {error && (
+        <div className="field-error" style={{ color: theme.danger }}>
+          {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── SELECT FIELD ──────────────────────────────────────────────────────────────
+export const Select = ({ label, error, children, ...props }) => {
+  const { theme } = useApp()
+  return (
+    <div style={{ marginBottom: 12 }}>
+      {label && (
+        <label style={{
+          display: 'block',
+          fontSize: 12,
+          fontWeight: 600,
+          color: theme.text,
+          marginBottom: 6
+        }}>
+          {label}
+        </label>
+      )}
+      <select
+        {...props}
+        style={{
+          width: '100%',
+          background: theme.inputBg,
+          color: theme.text,
+          border: `1px solid ${error ? theme.danger : theme.inputBorder}`,
+          borderRadius: 8,
+          padding: '8px 12px',
+          fontSize: 14,
+          ...props.style,
+        }}
+      >
+        {children}
+      </select>
+      {error && (
+        <div className="field-error" style={{ color: theme.danger }}>
+          {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── BADGE ─────────────────────────────────────────────────────────────────────
+export const Badge = ({ children, variant = 'default' }) => {
+  const { theme } = useApp()
+
+  const variants = {
+    default: { bg: theme.cardHover, text: theme.textMuted },
+    primary: { bg: theme.navActive, text: theme.primary },
+    success: { bg: theme.success, text: theme.successText },
+    danger:  { bg: theme.danger, text: theme.dangerText },
+    warning: { bg: theme.warning, text: theme.warningText },
+  }
+
+  const v = variants[variant] || variants.default
+
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: '2px 8px',
+      borderRadius: 6,
+      fontSize: 11,
+      fontWeight: 600,
+      background: v.bg,
+      color: v.text,
+    }}>
+      {children}
+    </span>
+  )
+}
+
+// ── DIVIDER ───────────────────────────────────────────────────────────────────
+export const Divider = ({ style = {} }) => {
+  const { theme } = useApp()
+  return (
+    <hr style={{
+      border: 'none',
+      borderTop: `1px solid ${theme.border}`,
+      margin: '16px 0',
+      ...style
+    }}/>
+  )
+}
+
+// ── PAGE HEADER ───────────────────────────────────────────────────────────────
+export const PageHeader = ({ title, subtitle, actions }) => {
+  const { theme } = useApp()
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      marginBottom: 24,
+      flexWrap: 'wrap',
+      gap: 12,
+    }}>
+      <div>
+        <h1 style={{ fontSize: 20, fontWeight: 700, color: theme.text, margin: 0 }}>
+          {title}
+        </h1>
+        {subtitle && (
+          <p style={{ fontSize: 13, color: theme.textMuted, margin: '4px 0 0 0' }}>
+            {subtitle}
+          </p>
+        )}
+      </div>
+      {actions && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {actions}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── TABLE CONTAINER ───────────────────────────────────────────────────────────
+export const TableContainer = ({ children, style = {} }) => {
+  const { theme } = useApp()
+  return (
+    <div style={{
+      background: theme.cardBg,
+      border: `1px solid ${theme.border}`,
+      borderRadius: 12,
+      overflow: 'hidden',
+      boxShadow: theme.shadow,
+      ...style
+    }}>
+      {children}
+    </div>
+  )
+}
+
+// ── PAGINATION ────────────────────────────────────────────────────────────────
+export const Pagination = ({ page, totalPages, onChange }) => {
+  const { theme } = useApp()
+  const pages = Array.from({ length: totalPages }, (_, i) => i + 1)
+
+  return (
+    <div className="pagination" style={{
+      display: 'flex',
+      gap: 4,
+      justifyContent: 'center',
+      padding: '12px 0',
+    }}>
+      <button
+        onClick={() => onChange(Math.max(1, page - 1))}
+        disabled={page === 1}
+        style={{
+          padding: '6px 12px',
+          borderRadius: 6,
+          border: `1px solid ${theme.border}`,
+          background: theme.cardBg,
+          color: theme.textMuted,
+          fontSize: 13,
+          cursor: page === 1 ? 'not-allowed' : 'pointer',
+          opacity: page === 1 ? 0.5 : 1,
+        }}
+      >
+        Prev
+      </button>
+      {pages.map(p => (
+        <button
+          key={p}
+          onClick={() => onChange(p)}
+          className={p === page ? 'active' : ''}
+          style={{
+            padding: '6px 12px',
+            borderRadius: 6,
+            border: `1px solid ${p === page ? theme.primary : theme.border}`,
+            background: p === page ? theme.primary : theme.cardBg,
+            color: p === page ? theme.primaryText : theme.text,
+            fontSize: 13,
+            fontWeight: p === page ? 600 : 400,
+            cursor: 'pointer',
+          }}
+        >
+          {p}
+        </button>
+      ))}
+      <button
+        onClick={() => onChange(Math.min(totalPages, page + 1))}
+        disabled={page === totalPages}
+        style={{
+          padding: '6px 12px',
+          borderRadius: 6,
+          border: `1px solid ${theme.border}`,
+          background: theme.cardBg,
+          color: theme.textMuted,
+          fontSize: 13,
+          cursor: page === totalPages ? 'not-allowed' : 'pointer',
+          opacity: page === totalPages ? 0.5 : 1,
+        }}
+      >
+        Next
+      </button>
+    </div>
+  )
+}

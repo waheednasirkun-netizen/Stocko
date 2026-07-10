@@ -64,15 +64,27 @@ function MobileBottomNav() {
 }
 
 function SystemDisabledOverlay() {
-  const { systemMsg } = useApp()
+  const { systemMsg, theme, dark } = useApp()
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 99999,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-      <div style={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 16,
-        padding: 40, textAlign: 'center', maxWidth: 400, width: '100%' }}>
+    <div style={{
+      position: 'fixed', inset: 0,
+      background: dark ? 'rgba(0,0,0,0.85)' : 'rgba(0,0,0,0.55)',
+      zIndex: 99999,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+    }}>
+      <div className="system-disabled-box" style={{
+        background: theme.modalBg,
+        border: `1px solid ${theme.border}`,
+        borderRadius: 16,
+        padding: 40, textAlign: 'center', maxWidth: 400, width: '100%'
+      }}>
         <div style={{ fontSize: 40, marginBottom: 16 }}>🔒</div>
-        <h2 style={{ color: 'white', fontSize: 20, fontWeight: 700, marginBottom: 8 }}>System Disabled</h2>
-        <p style={{ color: '#9ca3af', fontSize: 14, lineHeight: 1.6 }}>{systemMsg}</p>
+        <h2 style={{ color: theme.text, fontSize: 20, fontWeight: 700, marginBottom: 8 }}>
+          System Disabled
+        </h2>
+        <p style={{ color: theme.textMuted, fontSize: 14, lineHeight: 1.6 }}>
+          {systemMsg}
+        </p>
       </div>
     </div>
   )
@@ -106,11 +118,20 @@ function KeyboardShortcuts() {
 function AppContent() {
   const {
     user, tab, sidebarOpen, theme, toasts, dismissToast,
-    systemEnabled, loading, dataLoaded, authReady,
+    systemEnabled, loading, dataLoaded, authReady, dark,
   } = useApp()
 
+  // Apply dark-mode class to body for CSS overrides
+  useEffect(() => {
+    if (dark) {
+      document.body.classList.add('dark-mode')
+    } else {
+      document.body.classList.remove('dark-mode')
+    }
+    return () => document.body.classList.remove('dark-mode')
+  }, [dark])
+
   // Step 1: Wait for Supabase to check existing session.
-  // Without this guard, every page refresh shows a Login flash.
   if (!authReady) {
     return <LoadingScreen message="Checking session…"/>
   }
@@ -123,32 +144,42 @@ function AppContent() {
     return <LoadingScreen message={`Loading ${user.branch_name ?? 'branch'} data…`}/>
   }
 
-  // Step 4: User has no branch mapping — show actionable error
+  // Step 4: User has no branch mapping
   if (!user.branch_id) {
     return (
-      <div style={{ minHeight: '100vh', background: '#f8fafc',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-        <div style={{ background: 'white', borderRadius: 16, padding: 40,
+      <div className="no-branch-page" style={{
+        minHeight: '100vh', background: theme.bg,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+      }}>
+        <div className="no-branch-card" style={{
+          background: theme.cardBg,
+          borderRadius: 16, padding: 40,
           maxWidth: 480, width: '100%', textAlign: 'center',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.08)', border: '1px solid #e5e7eb' }}>
+          boxShadow: theme.shadowLg, border: `1px solid ${theme.border}`
+        }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>🏢</div>
-          <h2 style={{ fontSize: 20, fontWeight: 700, color: '#111827', marginBottom: 8 }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: theme.text, marginBottom: 8 }}>
             No Branch Assigned
           </h2>
-          <p style={{ color: '#6b7280', fontSize: 14, lineHeight: 1.7, marginBottom: 8 }}>
+          <p style={{ color: theme.textMuted, fontSize: 14, lineHeight: 1.7, marginBottom: 8 }}>
             Logged in as <strong>{user.email}</strong>
           </p>
-          <p style={{ color: '#6b7280', fontSize: 13, lineHeight: 1.7, marginBottom: 8 }}>
-            public.users.id: <code style={{ background: '#f3f4f6', padding: '2px 6px', borderRadius: 4, fontSize: 11 }}>{user.id}</code>
+          <p style={{ color: theme.textMuted, fontSize: 13, lineHeight: 1.7, marginBottom: 8 }}>
+            public.users.id: <code style={{
+              background: theme.cardHover, padding: '2px 6px', borderRadius: 4, fontSize: 11,
+              color: theme.textLight, border: `1px solid ${theme.borderLight}`
+            }}>{user.id}</code>
           </p>
-          <p style={{ color: '#6b7280', fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>
+          <p style={{ color: theme.textMuted, fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>
             Set <code>branch_id</code> on your user row in the <code>users</code> table
             to a valid branch, then refresh the page.
           </p>
           <button
             onClick={async () => { const { authApi: a } = await import('./lib/api'); await a.logout() }}
-            style={{ padding: '10px 28px', background: '#2563eb', color: 'white',
-              border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+            style={{
+              padding: '10px 28px', background: theme.primary, color: theme.primaryText,
+              border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'
+            }}>
             Sign Out
           </button>
         </div>
@@ -156,7 +187,7 @@ function AppContent() {
     )
   }
 
-  // Step 5: Everything ready — render the app
+  // Step 5: Everything ready
   return (
     <div style={{ minHeight: '100vh', background: theme.bg }}>
       {!systemEnabled && <SystemDisabledOverlay/>}
