@@ -1,5 +1,5 @@
 import {
-  ROLES,
+  ROLES, ALL_ROLES,
   isAdmin, isManager, isChief, isStoreKeeper,
   hasRole, hasAnyRole,
   canCreateUsers, canDeleteUsers, canAssignRoles,
@@ -13,7 +13,6 @@ import {
   canAccessDashboard, canAccessActivityLog, canAccessItemTemplates,
   SIDEBAR_PERMISSIONS,
 } from '../lib/constants'
-import { fetchUserRole } from '../lib/api'
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   authApi, usersApi, templatesApi, suppliersApi,
@@ -86,30 +85,32 @@ export function AppProvider({ children }) {
   )
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // RBAC: LOAD USER ROLE (uses auth.users.id, not custom users table id)
+  // RBAC: LOAD USER ROLE
   // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // NOTE: Role is read directly from the user's own profile (`users.role`),
+  // which is the same field UserManagement writes to when a role is assigned
+  // and the same field already shown in the UI. Previously this looked up a
+  // separate `user_roles` table via fetchUserRole(), but nothing in the app
+  // ever wrote to that table on user creation/edit — so every new account
+  // silently fell back to the Store Keeper default below, regardless of the
+  // role actually assigned. Keeping a single source of truth for role avoids
+  // that class of bug entirely.
 
-  const loadUserRole = useCallback(async (authUserId) => {
-    console.log('[RBAC] loadUserRole called for userId:', authUserId)
-    if (!authUserId) {
-      console.log('[RBAC] No authUserId provided, defaulting to Store Keeper')
+  const loadUserRole = useCallback(async (profileUser) => {
+    console.log('[RBAC] loadUserRole called for user:', profileUser?.email, 'role:', profileUser?.role)
+    if (!profileUser?.role) {
+      console.log('[RBAC] No role on profile, defaulting to Store Keeper')
       setUserRole(ROLES.STORE_KEEPER)
       return
     }
-    try {
-      const data = await fetchUserRole(authUserId)
-      console.log('[RBAC] fetchUserRole returned:', data)
-      if (data && data.role) {
-        console.log('[RBAC] Setting role to:', data.role)
-        setUserRole(data.role)
-      } else {
-        console.log('[RBAC] No role found in DB, defaulting to Store Keeper')
-        setUserRole(ROLES.STORE_KEEPER)
-      }
-    } catch (err) {
-      console.warn('[RBAC] Error loading role:', err)
+    if (!ALL_ROLES.includes(profileUser.role)) {
+      console.warn('[RBAC] Unrecognized role on profile:', profileUser.role, '— defaulting to Store Keeper')
       setUserRole(ROLES.STORE_KEEPER)
+      return
     }
+    console.log('[RBAC] Setting role to:', profileUser.role)
+    setUserRole(profileUser.role)
   }, [])
 
   // ── Toast helpers ───────────────────────────────────────────────────────────
@@ -361,10 +362,7 @@ export function AppProvider({ children }) {
       console.log('[Auth] authenticated:', restoredUser.email, 'authId:', session.user?.id, 'profileId:', restoredUser.id)
       setUser(restoredUser)
 
-      // ── CRITICAL: Use auth.users.id for role lookup, not profile id ──
-      const authUserId = session.user?.id || restoredUser.auth_id || restoredUser.id
-      console.log('[Auth] Looking up role for authUserId:', authUserId)
-      await loadUserRole(authUserId)
+      await loadUserRole(restoredUser)
 
       await loadAllDataRef.current(restoredUser)
       setAuthReady(true)
@@ -412,19 +410,7 @@ export function AppProvider({ children }) {
     if (loggedInUser) {
       console.log('[Auth] login success, profile:', loggedInUser)
       setUser(loggedInUser)
-
-      // ── CRITICAL: Get auth user ID from session, not profile ──
-      const { data: { session } } = await supabase.auth.getSession()
-      const authUserId = session?.user?.id
-      console.log('[Auth] login authUserId from session:', authUserId)
-
-      if (authUserId) {
-        await loadUserRole(authUserId)
-      } else {
-        // Fallback: try profile id or auth_id field
-        await loadUserRole(loggedInUser.auth_id || loggedInUser.id)
-      }
-
+      await loadUserRole(loggedInUser)
       await loadAllData(loggedInUser)
     }
 

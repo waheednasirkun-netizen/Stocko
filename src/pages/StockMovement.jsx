@@ -9,10 +9,10 @@ import { transactionsApi } from '../lib/api'
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const TRANSACTION_TYPES = [
-  { key: 'Stock IN',    label: 'Stock IN',    variant: 'primary',  icon: 'Plus' },
-  { key: 'Stock OUT',   label: 'Stock OUT',   variant: 'danger',   icon: 'Minus' },
-  { key: 'Wastage',     label: 'Wastage',     variant: 'warning',  icon: 'Trash2' },
-  { key: 'Fulfillment', label: 'Fulfillment', variant: 'purple',   icon: 'CheckCircle' },
+  { key: 'Stock IN',    label: 'Stock IN',    variant: 'primary',  icon: 'Plus',        perm: 'stockIn' },
+  { key: 'Stock OUT',   label: 'Stock OUT',   variant: 'danger',   icon: 'Minus',       perm: 'stockOut' },
+  { key: 'Wastage',     label: 'Wastage',     variant: 'warning',  icon: 'Trash2',      perm: 'recordWastage' },
+  { key: 'Fulfillment', label: 'Fulfillment', variant: 'purple',   icon: 'CheckCircle', perm: 'recordFulfillmentTxn' },
 ]
 
 const TYPE_FILTERS = ['All', 'Stock IN', 'Stock OUT', 'Wastage', 'Fulfillment']
@@ -390,8 +390,8 @@ export default function StockMovement() {
       return
     }
 
-    if (!userCan('stockIn', user?.role) && !userCan('stockOut', user?.role)) {
-      showToast('error', 'Permission Denied', 'You do not have permission to record stock movements.')
+    if (!userCan(TRANSACTION_TYPES.find(t => t.key === txnType)?.perm, user?.role)) {
+      showToast('error', 'Permission Denied', 'You do not have permission to record this type of stock movement.')
       return
     }
 
@@ -526,7 +526,8 @@ export default function StockMovement() {
     return TYPE_STYLES[type] || { bg: '#f3f4f6', color: '#374151', sign: '' }
   }, [])
 
-  const canRecord = userCan('stockIn', user?.role) || userCan('stockOut', user?.role)
+  const allowedTransactionTypes = TRANSACTION_TYPES.filter(t => userCan(t.perm, user?.role))
+  const canRecord = allowedTransactionTypes.length > 0
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
@@ -550,7 +551,7 @@ export default function StockMovement() {
         </div>
         {canRecord && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {TRANSACTION_TYPES.map(t => (
+            {allowedTransactionTypes.map(t => (
               <Btn
                 key={t.key}
                 variant={t.variant}
@@ -787,7 +788,7 @@ export default function StockMovement() {
       >
         {/* Type Selector */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
-          {TRANSACTION_TYPES.map(t => (
+          {allowedTransactionTypes.map(t => (
             <button
               key={t.key}
               onClick={() => { setTxnType(t.key); resetForm() }}

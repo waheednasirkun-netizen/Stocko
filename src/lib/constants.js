@@ -1,6 +1,11 @@
 // ─── ROLES & PERMISSIONS ─────────────────────────────────────────────────────
 export const ROLE_CAN = {
   stockIn:             ['Developer','Admin','Manager','Store Keeper'],
+  // Store Keeper is restricted to Stock IN only on the Stock Movement page —
+  // Stock OUT / Wastage / manual Fulfillment entries there are Admin/Manager only.
+  stockOut:            ['Developer','Admin','Manager'],
+  recordWastage:       ['Developer','Admin','Manager'],
+  recordFulfillmentTxn: ['Developer','Admin','Manager'],
   fulfillDemand:       ['Developer','Admin','Manager','Store Keeper'],
   createDemand:        ['Developer','Admin','Manager','Store Keeper','Kitchen Staff'],
   createTemplate:      ['Developer','Admin','Manager'],
@@ -237,45 +242,61 @@ export const ROLES = {
   MANAGER: 'Manager',
   CHIEF: 'Chief',
   STORE_KEEPER: 'Store Keeper',
+  KITCHEN_STAFF: 'Kitchen Staff',
+  VIEWER: 'Viewer',
 };
+
+// Every selectable role, in the order they should appear in dropdowns.
+// IMPORTANT: this is the single source of truth for role options — any
+// "create/edit user" form must import this instead of hardcoding its own
+// list. A hardcoded list that drifts from ROLES is what caused new users
+// (e.g. "Kitchen Staff") to silently fall back to Store Keeper permissions.
+export const ALL_ROLES = Object.values(ROLES);
 
 // ─── Role check helpers ───
 export const hasRole = (userRole, role) => userRole === role;
 export const hasAnyRole = (userRole, roles) => roles.includes(userRole);
 export const isAdmin = (userRole) => userRole === ROLES.ADMIN;
 export const isManager = (userRole) => userRole === ROLES.MANAGER;
-export const isChief = (userRole) => userRole === ROLES.CHief;
+export const isChief = (userRole) => userRole === ROLES.CHIEF;
 export const isStoreKeeper = (userRole) => userRole === ROLES.STORE_KEEPER;
+export const isKitchenStaff = (userRole) => userRole === ROLES.KITCHEN_STAFF;
+export const isViewer = (userRole) => userRole === ROLES.VIEWER;
 
 // ─── Permission helpers ───
-export const canCreateUsers = (r) => isAdmin(r);
-export const canDeleteUsers = (r) => isAdmin(r);
-export const canAssignRoles = (r) => isAdmin(r);
+export const canCreateUsers = (r) => isAdmin(r) || isManager(r);
+export const canDeleteUsers = (r) => isAdmin(r) || isManager(r);
+export const canAssignRoles = (r) => isAdmin(r) || isManager(r);
 export const canApproveRequests = (r) => isAdmin(r) || isManager(r);
 export const canRejectRequests = (r) => isAdmin(r) || isManager(r);
 export const canFulfillRequests = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
-export const canCreateDemand = (r) => isAdmin(r) || isManager(r) || isChief(r);
+export const canCreateDemand = (r) => isAdmin(r) || isManager(r) || isChief(r) || isKitchenStaff(r);
 export const canManageInventory = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
 export const canManageSuppliers = (r) => isAdmin(r) || isManager(r);
 export const canManageProcurement = (r) => isAdmin(r) || isManager(r);
 export const canManagePurchaseOrders = (r) => isAdmin(r) || isManager(r);
 export const canManageFinancials = (r) => isAdmin(r) || isManager(r);
 export const canViewReports = (r) => isAdmin(r) || isManager(r) || isChief(r) || isStoreKeeper(r);
-export const canAccessSettings = (r) => isAdmin(r);
+export const canAccessSettings = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r);
 
 // ─── Page access helpers ───
-export const canAccessUserManagement = (r) => isAdmin(r);
+// Access matrix:
+//   Admin / Manager   → full access to everything
+//   Store Keeper      → Dashboard, Inventory, Stock Movement (Stock IN only),
+//                        Fulfillment, Reports, Activity Log, Settings
+//   Kitchen Staff     → Dashboard, Inventory, Demands, Activity Log, Settings
+export const canAccessUserManagement = (r) => isAdmin(r) || isManager(r);
 export const canAccessSuppliers = (r) => isAdmin(r) || isManager(r);
 export const canAccessProcurement = (r) => isAdmin(r) || isManager(r);
 export const canAccessPurchaseOrders = (r) => isAdmin(r) || isManager(r);
 export const canAccessFinancials = (r) => isAdmin(r) || isManager(r);
-export const canAccessInventory = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+export const canAccessInventory = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r);
 export const canAccessStockMovement = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
 export const canAccessFulfillment = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
-export const canAccessDemands = (r) => isAdmin(r) || isManager(r) || isChief(r);
+export const canAccessDemands = (r) => isAdmin(r) || isManager(r) || isChief(r) || isKitchenStaff(r);
 export const canAccessDashboard = () => true;
-export const canAccessActivityLog = (r) => isAdmin(r) || isManager(r);
-export const canAccessItemTemplates = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
+export const canAccessActivityLog = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r);
+export const canAccessItemTemplates = (r) => isAdmin(r) || isManager(r);
 
 // ─── Sidebar visibility map ───
 export const SIDEBAR_PERMISSIONS = {

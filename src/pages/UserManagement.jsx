@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useApp } from '../context/AppContext'
 import { Ic, Btn, Modal, Card, StatusPill } from '../components/ui'
 import { useConfirm } from '../components/ui'
+import { ALL_ROLES } from '../lib/constants'
 
 export default function UserManagement() {
   const { users, createUser, updateUser, deleteUser, theme, user: currentUser, showToast } = useApp()
@@ -33,7 +34,7 @@ export default function UserManagement() {
     } finally { setLoading(false) }
   }
 
-  const ROLES = ['Admin','Manager','Store Keeper','Kitchen Staff','Viewer']
+  const ROLES = ALL_ROLES
 
   return (
     <div className="animate-fade-in">
