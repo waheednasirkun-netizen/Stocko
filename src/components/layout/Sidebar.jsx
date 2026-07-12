@@ -90,7 +90,7 @@ export default function Sidebar() {
           {sidebarOpen && (
             <div>
               <div className="sidebar-logo-text" style={{ fontWeight: 800, fontSize: 15, color: theme.text }}>
-                RestoStock
+                Stocko
               </div>
               <div className="sidebar-version" style={{ fontSize: 10, color: theme.textMuted }}>
                 v5 · Supabase

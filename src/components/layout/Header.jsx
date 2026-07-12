@@ -87,7 +87,7 @@ export default function Header() {
       <h2 className="header-title" style={{
         fontSize: 16, fontWeight: 700, color: theme.text, flex: 1
       }}>
-        {PAGE_TITLES[tab] || 'RestoStock'}
+        {PAGE_TITLES[tab] || 'Stocko'}
       </h2>
 
       {/* Dark mode toggle */}

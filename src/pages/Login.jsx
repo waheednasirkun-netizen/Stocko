@@ -1,4 +1,4 @@
-console.log('[RestoStock] Login.jsx loaded')
+console.log('[Stocko] Login.jsx loaded')
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
@@ -515,7 +515,7 @@ export default function Login() {
             margin: '0 0 6px 0',
             letterSpacing: '-0.5px',
           }}>
-            RestoStock
+            Stocko
           </h1>
           <p style={{
             color: mutedColor,
@@ -785,7 +785,7 @@ export default function Login() {
             Secure login powered by Supabase
           </p>
           <p style={{ fontSize: 11, color: dark ? 'rgba(148,163,184,0.5)' : '#cbd5e1', margin: 0 }}>
-            &copy; 2026 RestoStock. All rights reserved.
+            &copy; 2026 Stocko. All rights reserved.
           </p>
         </div>
       </div>

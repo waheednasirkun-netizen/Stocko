@@ -1,5 +1,6 @@
-console.log('[RestoStock] App.jsx loaded')
+console.log('[stocko] App.jsx loaded')
 
+import NotFound from './pages/NotFound'
 import { useEffect } from 'react'
 import { useApp } from './context/AppContext'
 import { ToastContainer, LoadingScreen } from './components/ui'
@@ -196,7 +197,7 @@ function AppContent() {
       <div id="main-content" className={sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}>
         <Header/>
         <main style={{ padding: 20 }} className="mobile-p">
-          {PAGES[tab] || <Dashboard/>}
+          {PAGES[tab] || <NotFound/>}
         </main>
       </div>
       <MobileBottomNav/>

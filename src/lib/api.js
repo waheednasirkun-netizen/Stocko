@@ -1,4 +1,4 @@
-console.log('[RestoStock] api.js loaded')
+console.log('[Stocko] api.js loaded')
 
 /**
  * Stocko — src/lib/api.js

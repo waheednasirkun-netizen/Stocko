@@ -364,7 +364,7 @@ export const LoadingScreen = ({ message = 'Loading...' }) => {
   return (
     <div className="loading-screen">
       <div className="spinner"/>
-      <p style={{ color: theme.primary, fontWeight: 600, fontSize: 18 }}>RestoStock</p>
+      <p style={{ color: theme.primary, fontWeight: 600, fontSize: 18 }}>Stocko</p>
       <p style={{ color: theme.textMuted, fontSize: 13 }}>{message}</p>
     </div>
   )

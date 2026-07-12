@@ -53,7 +53,7 @@ export default function Sidebar() {
           </div>
           {sidebarOpen && (
             <div>
-              <div style={{ fontWeight:800, fontSize:15, color:theme.text }}>RestoStock</div>
+              <div style={{ fontWeight:800, fontSize:15, color:theme.text }}>Stocko</div>
               <div style={{ fontSize:10, color:theme.textMuted }}>v5 · Supabase</div>
             </div>
           )}

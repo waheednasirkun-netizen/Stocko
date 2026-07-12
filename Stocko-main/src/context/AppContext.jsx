@@ -36,6 +36,62 @@ export function AppProvider({ children }) {
   const [customUnits,   setCustomUnits]   = useState([])
   const [loading,       setLoading]       = useState(false)
 
+  // ── NEW: Settings state (added for redesigned Settings page) ─────────────────
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+    const saved = localStorage.getItem('rs_notifs_enabled')
+    return saved === null ? true : saved === 'true'
+  })
+  const [lowStockAlerts, setLowStockAlerts] = useState(() => {
+    const saved = localStorage.getItem('rs_low_stock_alerts')
+    return saved === null ? true : saved === 'true'
+  })
+  const [requestAlerts, setRequestAlerts] = useState(() => {
+    const saved = localStorage.getItem('rs_request_alerts')
+    return saved === null ? true : saved === 'true'
+  })
+  const [fulfillmentAlerts, setFulfillmentAlerts] = useState(() => {
+    const saved = localStorage.getItem('rs_fulfillment_alerts')
+    return saved === null ? true : saved === 'true'
+  })
+  const [browserNotifs, setBrowserNotifs] = useState(() => {
+    const saved = localStorage.getItem('rs_browser_notifs')
+    return saved === null ? false : saved === 'true'
+  })
+  const [autoRefresh, setAutoRefresh] = useState(() => {
+    const saved = localStorage.getItem('rs_auto_refresh')
+    return saved === null ? false : saved === 'true'
+  })
+  const [lowThreshold, setLowThreshold] = useState(() => {
+    const saved = localStorage.getItem('rs_low_threshold')
+    return saved === null ? 10 : Number(saved)
+  })
+  const [restaurantName, setRestaurantName] = useState(() => {
+    return localStorage.getItem('rs_restaurant_name') || 'RestoStock'
+  })
+  const [branchName, setBranchName] = useState(() => {
+    return localStorage.getItem('rs_branch_name') || 'Main Branch'
+  })
+  const [language, setLanguage] = useState(() => {
+    return localStorage.getItem('rs_language') || 'en'
+  })
+  const [timezone, setTimezone] = useState(() => {
+    return localStorage.getItem('rs_timezone') || 'UTC'
+  })
+
+  // Persist new settings to localStorage
+  useEffect(() => { localStorage.setItem('rs_dark', dark) }, [dark])
+  useEffect(() => { localStorage.setItem('rs_notifs_enabled', notificationsEnabled) }, [notificationsEnabled])
+  useEffect(() => { localStorage.setItem('rs_low_stock_alerts', lowStockAlerts) }, [lowStockAlerts])
+  useEffect(() => { localStorage.setItem('rs_request_alerts', requestAlerts) }, [requestAlerts])
+  useEffect(() => { localStorage.setItem('rs_fulfillment_alerts', fulfillmentAlerts) }, [fulfillmentAlerts])
+  useEffect(() => { localStorage.setItem('rs_browser_notifs', browserNotifs) }, [browserNotifs])
+  useEffect(() => { localStorage.setItem('rs_auto_refresh', autoRefresh) }, [autoRefresh])
+  useEffect(() => { localStorage.setItem('rs_low_threshold', String(lowThreshold)) }, [lowThreshold])
+  useEffect(() => { localStorage.setItem('rs_restaurant_name', restaurantName) }, [restaurantName])
+  useEffect(() => { localStorage.setItem('rs_branch_name', branchName) }, [branchName])
+  useEffect(() => { localStorage.setItem('rs_language', language) }, [language])
+  useEffect(() => { localStorage.setItem('rs_timezone', timezone) }, [timezone])
+
   // ── Business data ──────────────────────────────────────────────────────────
   const [transactions,          setTransactions]          = useState([])
   const [requests,              setRequests]              = useState([])
@@ -50,8 +106,6 @@ export function AppProvider({ children }) {
 
   const theme = dark ? darkTheme : lightTheme
 
-  useEffect(() => { localStorage.setItem('rs_dark', dark) }, [dark])
-
   // ── Inventory — derived, never stored ─────────────────────────────────────
   const inventory = useMemo(
     () => {
@@ -64,11 +118,10 @@ export function AppProvider({ children }) {
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
-    // Safety checks - ensure we have arrays
     const safeInventory = Array.isArray(inventory) ? inventory : []
     const safeTransactions = Array.isArray(transactions) ? transactions : []
     const safeSuppliers = Array.isArray(suppliers) ? suppliers : []
-    
+
     const lowStock = safeInventory.filter(i => i.quantity <= (i.minQty || 0) && i.minQty > 0)
     const critical = safeInventory.filter(i => i.status === 'Critical')
     const stockInTotal = safeTransactions.filter(t => t.type === 'Stock IN')
@@ -76,7 +129,7 @@ export function AppProvider({ children }) {
     const stockOutTotal = safeTransactions.filter(t => ['Stock OUT', 'Wastage'].includes(t.type))
       .reduce((s, t) => s + Math.abs(Number(t.quantity || t.qty) || 0), 0)
     const invValue = safeInventory.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.cost) || 0), 0)
-    
+
     return {
       totalItems: safeInventory.length,
       lowStockCount: lowStock.length,
@@ -87,10 +140,12 @@ export function AppProvider({ children }) {
       inventoryValue: invValue,
     }
   }, [inventory, transactions, suppliers])
+
   const allUnits = useMemo(
     () => [...new Set([...DEFAULT_UNITS, ...customUnits])],
     [customUnits]
   )
+
   // ── Toast helpers ──────────────────────────────────────────────────────────
   const showToast = useCallback((type, title, msg, duration = 4500) => {
     const id = Date.now() + Math.random()
@@ -147,7 +202,6 @@ export function AppProvider({ children }) {
 
       if (error) throw error
 
-      // Flatten for table display (primary item info)
       const flattened = (data || []).map(r => {
         const primaryItem = r.request_items?.[0] || {}
         return {
@@ -203,7 +257,6 @@ export function AppProvider({ children }) {
 
       if (itemsError) throw itemsError
 
-      // Create notification
       await createNotification({
         type: 'request_created',
         title: 'New Request',
@@ -211,7 +264,6 @@ export function AppProvider({ children }) {
         link: '/requests',
       })
 
-      // Create activity log
       await createActivityLog({
         action: 'REQUEST_CREATED',
         description: `${department} created a request with ${items.length} item(s)`,
@@ -320,7 +372,6 @@ export function AppProvider({ children }) {
         throw new Error('No items found on this request')
       }
 
-      // Deduct inventory for each item before updating request status
       for (const item of items) {
         const qty = Number(item.qty) || 0
         if (qty <= 0) continue
@@ -596,7 +647,6 @@ export function AppProvider({ children }) {
       if (finRes.data)  setFinancialTransactions(finRes.data)
       if (actRes.data)  setActivityLogs(actRes.data)
 
-      // Load requests from Supabase
       await fetchRequests()
 
       setDataLoaded(true)
@@ -875,6 +925,18 @@ export function AppProvider({ children }) {
     updateFinancialTxnStatus,
     withActionLock,
     loadAllData,
+    // NEW: Settings state (added for redesigned Settings page)
+    notificationsEnabled, setNotificationsEnabled,
+    lowStockAlerts, setLowStockAlerts,
+    requestAlerts, setRequestAlerts,
+    fulfillmentAlerts, setFulfillmentAlerts,
+    browserNotifs, setBrowserNotifs,
+    autoRefresh, setAutoRefresh,
+    lowThreshold, setLowThreshold,
+    restaurantName, setRestaurantName,
+    branchName, setBranchName,
+    language, setLanguage,
+    timezone, setTimezone,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
