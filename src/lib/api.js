@@ -303,14 +303,23 @@ export const usersApi = {
       body: userData,
     })
 
-    console.log("FULL RESPONSE:", response)
-    console.log("DATA:", response.data)
-    console.log("ERROR:", response.error)
-
     if (response.error) {
-      const text = await response.error.context?.text?.()
-      console.log("FUNCTION RESPONSE:", text)
-      return wrap(null, response.error)
+      // supabase-js's FunctionsHttpError.message is always the generic
+      // "Edge Function returned a non-2xx status code" — the real reason
+      // (Postgres/Auth error) is only in the response body, which has to
+      // be read separately. Surface it so the UI/toast shows the truth.
+      let detail = response.error.message
+      try {
+        const text = await response.error.context?.text?.()
+        if (text) {
+          const parsed = JSON.parse(text)
+          detail = parsed.error || parsed.message || text
+        }
+      } catch {
+        // context wasn't JSON/text-readable — fall back to the generic message
+      }
+      console.error('[usersApi.create] failed:', detail, response.error)
+      return wrap(null, { ...response.error, message: detail })
     }
 
     return wrap(normalizeUser(response.data), null)
