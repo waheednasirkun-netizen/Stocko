@@ -1,12 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
 import { supabase } from '../lib/supabase'
 import { Ic, Btn, Modal, Card, StatusPill } from '../components/ui'
 import { useConfirm } from '../components/ui'
 
-// Define roles here (in case constants doesn't have it)
-const ALL_ROLES = [
-  'Developer',
+// Roles visible to ALL users (Developer hidden)
+const ROLES = [
   'Admin',
   'Manager',
   'Store Keeper',
@@ -17,29 +16,64 @@ const ALL_ROLES = [
 export default function UserManagement() {
   const { users, setUsers, theme, user: currentUser, showToast } = useApp()
   const { confirm } = useConfirm()
-  
+
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [branches, setBranches] = useState([])
   const [form, setForm] = useState({ 
     name: '', 
     email: '', 
     password: '', 
     role: 'Store Keeper', 
     status: 'Active', 
-    phone: '' 
+    phone: '',
+    branch_id: ''
   })
   const [errors, setErrors] = useState({})
 
+  // Determine if current user is a Developer
+  const showBranchField = currentUser?.role === 'Developer'
+
+  // Fetch branches (only needed for Developers)
+  useEffect(() => {
+    if (showBranchField) {
+      fetchBranches()
+    }
+  }, [showBranchField])
+
+  const fetchBranches = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('branches')
+        .select('id, name')
+        .order('name')
+
+      if (error) throw error
+      setBranches(data || [])
+    } catch (err) {
+      console.error('Error fetching branches:', err)
+      showToast('error', 'Error', 'Failed to load branches')
+    }
+  }
+
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
-  
+
   const openCreate = () => {
     setEditing(null)
-    setForm({ name: '', email: '', password: '', role: 'Store Keeper', status: 'Active', phone: '' })
+    setForm({ 
+      name: '', 
+      email: '', 
+      password: '', 
+      role: 'Store Keeper', 
+      status: 'Active', 
+      phone: '',
+      branch_id: showBranchField ? '' : (currentUser?.branch_id || '')
+    })
     setShowModal(true)
     setErrors({})
   }
-  
+
   const openEdit = (u) => {
     setEditing(u)
     setForm({
@@ -48,60 +82,63 @@ export default function UserManagement() {
       password: '',
       role: u.role || 'Store Keeper',
       status: u.status || 'Active',
-      phone: u.phone || ''
+      phone: u.phone || '',
+      branch_id: u.branch_id || ''
     })
     setShowModal(true)
     setErrors({})
   }
 
   // ── Create User Function ──────────────────────────────────────────────
- const createUser = async (userData) => {
-  try {
-    const { data, error } = await supabase.functions.invoke("create-user", {
-      body: userData,
-    })
+  const createUser = async (userData) => {
+    try {
+      const { data, error } = await supabase.functions.invoke("create-user", {
+        body: userData,
+      })
 
-    if (error) throw error
+      if (error) throw error
 
-    setUsers(prev => [...prev, data.user])
+      setUsers(prev => [...prev, data.user])
 
-    return {
-      success: true,
-      user: data.user,
-    }
-  } catch (err) {
-    console.error(err)
-
-    return {
-      success: false,
-      error: err.message,
+      return {
+        success: true,
+        user: data.user,
+      }
+    } catch (err) {
+      console.error(err)
+      return {
+        success: false,
+        error: err.message,
+      }
     }
   }
-}
-
-
 
   // ── Update User Function ──────────────────────────────────────────────
   const updateUser = async (id, userData) => {
     try {
-      // Update public users table
+      const updatePayload = {
+        name: userData.name,
+        email: userData.email,
+        role: userData.role,
+        status: userData.status,
+        phone: userData.phone || '',
+        updated_at: new Date().toISOString()
+      }
+
+      // Only include branch_id if the current user is a Developer
+      if (showBranchField && userData.branch_id) {
+        updatePayload.branch_id = userData.branch_id
+      }
+
       const { data, error } = await supabase
         .from('users')
-        .update({
-          name: userData.name,
-          email: userData.email,
-          role: userData.role,
-          status: userData.status,
-          phone: userData.phone || '',
-          updated_at: new Date().toISOString()
-        })
+        .update(updatePayload)
         .eq('id', id)
         .select()
         .single()
 
       if (error) throw error
 
-      // Update local state
       setUsers(prev => prev.map(u => u.id === id ? { ...u, ...data } : u))
       return { success: true, user: data }
 
@@ -114,7 +151,6 @@ export default function UserManagement() {
   // ── Delete User Function ──────────────────────────────────────────────
   const deleteUser = async (id) => {
     try {
-      // Delete from public.users
       const { error: publicError } = await supabase
         .from('users')
         .delete()
@@ -122,13 +158,10 @@ export default function UserManagement() {
 
       if (publicError) throw publicError
 
-      // Delete from auth.users (requires admin)
-     await supabase.functions.invoke("delete-user", {
-  body: {
-    id,
-  },
-});
-      // Update local state
+      await supabase.functions.invoke("delete-user", {
+        body: { id },
+      })
+
       setUsers(prev => prev.filter(u => u.id !== id))
       return { success: true }
 
@@ -140,13 +173,12 @@ export default function UserManagement() {
 
   // ── Handle Save ──────────────────────────────────────────────────────
   const handleSave = async () => {
-    // Validate
     const errs = {}
     if (!form.name.trim()) errs.name = 'Name required'
     if (!form.email.trim()) errs.email = 'Email required'
     if (!editing && !form.password.trim()) errs.password = 'Password required'
     if (!editing && form.password && form.password.length < 6) errs.password = 'Password must be at least 6 characters'
-    
+
     if (Object.keys(errs).length) {
       setErrors(errs)
       return
@@ -156,21 +188,20 @@ export default function UserManagement() {
     setErrors({})
 
     try {
-      const branchId = currentUser?.branch_id
-
-      if (!branchId) {
-        showToast('error', 'Branch Error', 'No branch assigned to your account')
-        setLoading(false)
-        return
-      }
-
       const data = {
         name: form.name.trim(),
         email: form.email.trim().toLowerCase(),
         role: form.role,
         status: form.status,
         phone: form.phone || '',
-        branch_id: branchId,
+      }
+
+      // For non-Developers, always use their own branch_id
+      // For Developers, use the selected branch_id (or current user's branch as fallback)
+      if (showBranchField) {
+        data.branch_id = form.branch_id || currentUser?.branch_id
+      } else {
+        data.branch_id = currentUser?.branch_id
       }
 
       if (form.password) data.password = form.password
@@ -272,6 +303,16 @@ export default function UserManagement() {
                     }}>
                       {u.role}
                     </div>
+                    {u.branch_id && (
+                      <div style={{
+                        fontSize: 10,
+                        color: theme.textMuted,
+                        marginTop: 2,
+                        opacity: 0.8
+                      }}>
+                        Branch: {branches.find(b => b.id === u.branch_id)?.name || 'Unknown'}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -456,7 +497,7 @@ export default function UserManagement() {
           </div>
 
           {/* Role & Status */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
             <div>
               <label style={{
                 display: 'block',
@@ -481,8 +522,8 @@ export default function UserManagement() {
                   outline: 'none',
                 }}
               >
-                {ALL_ROLES.map(r => (
-                  <option key={r}>{r}</option>
+                {ROLES.map(r => (
+                  <option key={r} value={r}>{r}</option>
                 ))}
               </select>
             </div>
@@ -510,11 +551,50 @@ export default function UserManagement() {
                   outline: 'none',
                 }}
               >
-                <option>Active</option>
-                <option>Inactive</option>
+                <option value="Active">Active</option>
+                <option value="Inactive">Inactive</option>
               </select>
             </div>
           </div>
+
+          {/* Branch Assignment (Developers Only) */}
+          {showBranchField && (
+            <div style={{ marginBottom: 14 }}>
+              <label style={{
+                display: 'block',
+                fontSize: 13,
+                fontWeight: 500,
+                color: '#374151',
+                marginBottom: 5
+              }}>
+                Branch <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <select
+                value={form.branch_id}
+                onChange={e => set('branch_id', e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  background: theme.inputBg,
+                  color: theme.text,
+                  outline: 'none',
+                }}
+              >
+                <option value="">Select a branch</option>
+                {branches.map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+              {branches.length === 0 && (
+                <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
+                  Loading branches...
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Phone (Optional) */}
           <div style={{ marginBottom: 18 }}>
@@ -595,7 +675,3 @@ export default function UserManagement() {
     </div>
   )
 }
-
-// ── Import createClient for admin operations ──────────────────────────────
-// Add this at the top if not already imported:
-// import { createClient } from '@supabase/supabase-js'

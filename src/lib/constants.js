@@ -1,8 +1,6 @@
 // ─── ROLES & PERMISSIONS ─────────────────────────────────────────────────────
 export const ROLE_CAN = {
   stockIn:             ['Developer','Admin','Manager','Store Keeper'],
-  // Store Keeper is restricted to Stock IN only on the Stock Movement page —
-  // Stock OUT / Wastage / manual Fulfillment entries there are Admin/Manager only.
   stockOut:            ['Developer','Admin','Manager'],
   recordWastage:       ['Developer','Admin','Manager'],
   recordFulfillmentTxn: ['Developer','Admin','Manager'],
@@ -54,27 +52,27 @@ export const lightTheme = {
   card: '#ffffff',
   cardBg: '#ffffff',
   cardHover: '#f1f5f9',
-  
+
   // Text
   text: '#111827',
   textMuted: '#6b7280',
   textLight: '#4b5563',
-  
+
   // Borders
   border: '#e5e7eb',
   borderLight: '#f3f4f6',
-  
+
   // Inputs
   inputBg: '#ffffff',
   inputBorder: '#d1d5db',
   inputFocus: '#3b82f6',
   inputPlaceholder: '#9ca3af',
-  
+
   // Navigation
   navActive: 'rgba(37,99,235,0.1)',
   navHover: '#f3f4f6',
   rowHover: '#f9fafb',
-  
+
   // Buttons
   primary: '#3b82f6',
   primaryHover: '#2563eb',
@@ -88,12 +86,12 @@ export const lightTheme = {
   warning: '#f59e0b',
   warningHover: '#d97706',
   warningText: '#ffffff',
-  
+
   // Shadows
   shadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
   shadowMd: '0 4px 12px rgba(0, 0, 0, 0.08)',
   shadowLg: '0 8px 32px rgba(0, 0, 0, 0.10)',
-  
+
   // Status colors
   pending: '#fef3c7',
   pendingText: '#92400e',
@@ -103,33 +101,33 @@ export const lightTheme = {
   completedText: '#065f46',
   rejected: '#fee2e2',
   rejectedText: '#991b1b',
-  
+
   // Scrollbar
   scrollbarTrack: '#f1f1f1',
   scrollbarThumb: '#c1c1c1',
-  
+
   // Overlay
   overlayBg: 'rgba(0,0,0,0.55)',
   modalBg: '#ffffff',
-  
+
   // Avatar
   avatarAdminBg: '#fee2e2',    avatarAdminText: '#dc2626',
   avatarManagerBg: '#fef9c3',  avatarManagerText: '#854d0e',
   avatarSkBg: '#dcfce7',       avatarSkText: '#166534',
   avatarKitchenBg: '#f3e8ff',  avatarKitchenText: '#7c3aed',
   avatarViewerBg: '#dbeafe',   avatarViewerText: '#1d4ed8',
-  avatarDevBg: '#f1f5f9',      avatarDevText: '#475569',
-  
+  avatarDevBg: '#ede9fe',      avatarDevText: '#6d28d9',
+
   // Toast
   toastSuccessBg: '#dcfce7',   toastSuccessBorder: '#86efac',   toastSuccessText: '#166534',
   toastErrorBg: '#fee2e2',     toastErrorBorder: '#fca5a5',     toastErrorText: '#991b1b',
   toastWarningBg: '#fef9c3',   toastWarningBorder: '#fde68a',   toastWarningText: '#854d0e',
   toastInfoBg: '#dbeafe',      toastInfoBorder: '#93c5fd',      toastInfoText: '#1e40af',
-  
+
   // KPI / Stats
   kpiBg: '#ffffff',
   kpiBorder: '#e5e7eb',
-  
+
   // Table
   tableHeaderBg: '#f9fafb',
   tableHeaderText: '#374151',
@@ -142,27 +140,27 @@ export const darkTheme = {
   card: '#1e293b',
   cardBg: '#1e293b',
   cardHover: '#26354d',
-  
+
   // Text — Warm off-white for readability
   text: '#f1f5f9',
   textMuted: '#94a3b8',
   textLight: '#cbd5e1',
-  
+
   // Borders — Subtle
   border: '#334155',
   borderLight: '#475569',
-  
+
   // Inputs
   inputBg: '#1e293b',
   inputBorder: '#475569',
   inputFocus: '#3b82f6',
   inputPlaceholder: '#64748b',
-  
+
   // Navigation
   navActive: 'rgba(59,130,246,0.15)',
   navHover: '#26354d',
   rowHover: '#26354d',
-  
+
   // Buttons (same vibrant colors, work great on dark)
   primary: '#3b82f6',
   primaryHover: '#2563eb',
@@ -176,12 +174,12 @@ export const darkTheme = {
   warning: '#f59e0b',
   warningHover: '#d97706',
   warningText: '#ffffff',
-  
+
   // Shadows — Light-tinted shadows for depth on dark
   shadow: '0 1px 3px 0 rgba(0, 0, 0, 0.4)',
   shadowMd: '0 4px 16px rgba(0, 0, 0, 0.5)',
   shadowLg: '0 8px 40px rgba(0, 0, 0, 0.6)',
-  
+
   // Status colors — Slightly muted for dark mode comfort
   pending: '#451a03',
   pendingText: '#fbbf24',
@@ -191,33 +189,33 @@ export const darkTheme = {
   completedText: '#6ee7b7',
   rejected: '#450a0a',
   rejectedText: '#fca5a5',
-  
+
   // Scrollbar
   scrollbarTrack: '#1e293b',
   scrollbarThumb: '#475569',
-  
+
   // Overlay
   overlayBg: 'rgba(0,0,0,0.75)',
   modalBg: '#1e293b',
-  
+
   // Avatar (slightly muted backgrounds)
   avatarAdminBg: '#450a0a',    avatarAdminText: '#fca5a5',
   avatarManagerBg: '#451a03',  avatarManagerText: '#fcd34d',
   avatarSkBg: '#064e3b',       avatarSkText: '#6ee7b7',
   avatarKitchenBg: '#3b0764',  avatarKitchenText: '#d8b4fe',
   avatarViewerBg: '#1e3a5f',   avatarViewerText: '#93c5fd',
-  avatarDevBg: '#1e293b',      avatarDevText: '#94a3b8',
-  
+  avatarDevBg: '#2e1065',      avatarDevText: '#c4b5fd',
+
   // Toast — Dark themed
   toastSuccessBg: '#064e3b',   toastSuccessBorder: '#16a34a',   toastSuccessText: '#86efac',
   toastErrorBg: '#450a0a',     toastErrorBorder: '#dc2626',     toastErrorText: '#fca5a5',
   toastWarningBg: '#451a03',   toastWarningBorder: '#d97706',   toastWarningText: '#fcd34d',
   toastInfoBg: '#1e3a5f',      toastInfoBorder: '#3b82f6',      toastInfoText: '#93c5fd',
-  
+
   // KPI / Stats
   kpiBg: '#1e293b',
   kpiBorder: '#334155',
-  
+
   // Table
   tableHeaderBg: '#1e293b',
   tableHeaderText: '#cbd5e1',
@@ -234,69 +232,74 @@ export const fmtShort = (n) => {
   if (v >= 1_000)     return `PKR ${(v/1_000).toFixed(0)}K`
   return fmtPKR(v)
 }
-// src/lib/constants.js
-// ─── Add these at the bottom of your existing constants.js ───
 
+// ─── ROLES ───────────────────────────────────────────────────────────────────
 export const ROLES = {
+  DEVELOPER: 'Developer',
   ADMIN: 'Admin',
   MANAGER: 'Manager',
   CHIEF: 'Chief',
   STORE_KEEPER: 'Store Keeper',
   KITCHEN_STAFF: 'Kitchen Staff',
   VIEWER: 'Viewer',
-};
+}
 
-// Every selectable role, in the order they should appear in dropdowns.
-// IMPORTANT: this is the single source of truth for role options — any
-// "create/edit user" form must import this instead of hardcoding its own
-// list. A hardcoded list that drifts from ROLES is what caused new users
-// (e.g. "Kitchen Staff") to silently fall back to Store Keeper permissions.
-export const ALL_ROLES = Object.values(ROLES);
+// ALL_ROLES - Full list including Developer (for validation / role checks)
+export const ALL_ROLES = ['Developer', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer']
+
+// ALL_ROLES_UI - Excludes Developer (for UI dropdowns where you can't create Developers)
+export const ALL_ROLES_UI = ['Admin', 'Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer']
 
 // ─── Role check helpers ───
-export const hasRole = (userRole, role) => userRole === role;
-export const hasAnyRole = (userRole, roles) => roles.includes(userRole);
-export const isAdmin = (userRole) => userRole === ROLES.ADMIN;
-export const isManager = (userRole) => userRole === ROLES.MANAGER;
-export const isChief = (userRole) => userRole === ROLES.CHIEF;
-export const isStoreKeeper = (userRole) => userRole === ROLES.STORE_KEEPER;
-export const isKitchenStaff = (userRole) => userRole === ROLES.KITCHEN_STAFF;
-export const isViewer = (userRole) => userRole === ROLES.VIEWER;
+export const hasRole = (userRole, role) => userRole === role
+export const hasAnyRole = (userRole, roles) => roles.includes(userRole)
+export const isDeveloper = (r) => r === ROLES.DEVELOPER
+export const isAdmin = (r) => r === ROLES.ADMIN
+export const isManager = (r) => r === ROLES.MANAGER
+export const isChief = (r) => r === ROLES.CHIEF
+export const isStoreKeeper = (r) => r === ROLES.STORE_KEEPER
+export const isKitchenStaff = (r) => r === ROLES.KITCHEN_STAFF
+export const isViewer = (r) => r === ROLES.VIEWER
+
+// ─── Role Colors ───
+export const ROLE_COLORS = {
+  'Developer': '#8b5cf6',      // Purple
+  'Admin': '#3b82f6',          // Blue
+  'Manager': '#f59e0b',        // Amber
+  'Store Keeper': '#10b981',   // Emerald
+  'Kitchen Staff': '#ef4444',  // Red
+  'Viewer': '#6b7280',         // Gray
+}
 
 // ─── Permission helpers ───
-export const canCreateUsers = (r) => isAdmin(r) || isManager(r);
-export const canDeleteUsers = (r) => isAdmin(r) || isManager(r);
-export const canAssignRoles = (r) => isAdmin(r) || isManager(r);
-export const canApproveRequests = (r) => isAdmin(r) || isManager(r);
-export const canRejectRequests = (r) => isAdmin(r) || isManager(r);
-export const canFulfillRequests = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
-export const canCreateDemand = (r) => isAdmin(r) || isManager(r) || isChief(r) || isKitchenStaff(r);
-export const canManageInventory = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
-export const canManageSuppliers = (r) => isAdmin(r) || isManager(r);
-export const canManageProcurement = (r) => isAdmin(r) || isManager(r);
-export const canManagePurchaseOrders = (r) => isAdmin(r) || isManager(r);
-export const canManageFinancials = (r) => isAdmin(r) || isManager(r);
-export const canViewReports = (r) => isAdmin(r) || isManager(r) || isChief(r) || isStoreKeeper(r);
-export const canAccessSettings = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r);
+export const canCreateUsers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canDeleteUsers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canAssignRoles = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canApproveRequests = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canRejectRequests = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canFulfillRequests = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r)
+export const canCreateDemand = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isChief(r) || isKitchenStaff(r)
+export const canManageInventory = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r)
+export const canManageSuppliers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canManageProcurement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canManagePurchaseOrders = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canManageFinancials = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canViewReports = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r)
+export const canAccessSettings = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r)
 
 // ─── Page access helpers ───
-// Access matrix:
-//   Admin / Manager   → full access to everything
-//   Store Keeper      → Dashboard, Inventory, Stock Movement (Stock IN only),
-//                        Fulfillment, Reports, Activity Log, Settings
-//   Kitchen Staff     → Dashboard, Inventory, Demands, Activity Log, Settings
-export const canAccessUserManagement = (r) => isAdmin(r) || isManager(r);
-export const canAccessSuppliers = (r) => isAdmin(r) || isManager(r);
-export const canAccessProcurement = (r) => isAdmin(r) || isManager(r);
-export const canAccessPurchaseOrders = (r) => isAdmin(r) || isManager(r);
-export const canAccessFinancials = (r) => isAdmin(r) || isManager(r);
-export const canAccessInventory = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r);
-export const canAccessStockMovement = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
-export const canAccessFulfillment = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r);
-export const canAccessDemands = (r) => isAdmin(r) || isManager(r) || isChief(r) || isKitchenStaff(r);
-export const canAccessDashboard = () => true;
-export const canAccessActivityLog = (r) => isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r);
-export const canAccessItemTemplates = (r) => isAdmin(r) || isManager(r);
+export const canAccessUserManagement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canAccessSuppliers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canAccessProcurement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canAccessPurchaseOrders = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canAccessFinancials = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canAccessInventory = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r)
+export const canAccessStockMovement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r)
+export const canAccessFulfillment = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r)
+export const canAccessDemands = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isChief(r) || isKitchenStaff(r)
+export const canAccessDashboard = () => true
+export const canAccessActivityLog = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r)
+export const canAccessItemTemplates = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 
 // ─── Sidebar visibility map ───
 export const SIDEBAR_PERMISSIONS = {
@@ -314,4 +317,4 @@ export const SIDEBAR_PERMISSIONS = {
   'Reports': canViewReports,
   'Inventory Expenses': canAccessFinancials,
   'Settings': canAccessSettings,
-};
+}

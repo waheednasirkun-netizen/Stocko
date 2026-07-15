@@ -1,6 +1,6 @@
 import {
-  ROLES, ALL_ROLES,
-  isAdmin, isManager, isChief, isStoreKeeper,
+  ROLES, ALL_ROLES, ALL_ROLES_UI,
+  isAdmin, isManager, isChief, isStoreKeeper, isDeveloper,
   hasRole, hasAnyRole,
   canCreateUsers, canDeleteUsers, canAssignRoles,
   canApproveRequests, canRejectRequests, canFulfillRequests,
@@ -87,28 +87,32 @@ export function AppProvider({ children }) {
   // ═══════════════════════════════════════════════════════════════════════════
   // RBAC: LOAD USER ROLE
   // ═══════════════════════════════════════════════════════════════════════════
-  //
-  // NOTE: Role is read directly from the user's own profile (`users.role`),
-  // which is the same field UserManagement writes to when a role is assigned
-  // and the same field already shown in the UI. Previously this looked up a
-  // separate `user_roles` table via fetchUserRole(), but nothing in the app
-  // ever wrote to that table on user creation/edit — so every new account
-  // silently fell back to the Store Keeper default below, regardless of the
-  // role actually assigned. Keeping a single source of truth for role avoids
-  // that class of bug entirely.
+  // NOTE: Role is read directly from the user's own profile (users.role).
+  // Developer is explicitly checked first, then ALL_ROLES validates all others.
 
   const loadUserRole = useCallback(async (profileUser) => {
     console.log('[RBAC] loadUserRole called for user:', profileUser?.email, 'role:', profileUser?.role)
+
+    // Developer is a valid role — set it directly
+    if (profileUser?.role === 'Developer') {
+      console.log('[RBAC] Developer role detected')
+      setUserRole('Developer')
+      return
+    }
+
     if (!profileUser?.role) {
       console.log('[RBAC] No role on profile, defaulting to Store Keeper')
       setUserRole(ROLES.STORE_KEEPER)
       return
     }
+
+    // Check against ALL_ROLES (includes Developer, Admin, Manager, etc.)
     if (!ALL_ROLES.includes(profileUser.role)) {
       console.warn('[RBAC] Unrecognized role on profile:', profileUser.role, '— defaulting to Store Keeper')
       setUserRole(ROLES.STORE_KEEPER)
       return
     }
+
     console.log('[RBAC] Setting role to:', profileUser.role)
     setUserRole(profileUser.role)
   }, [])
@@ -1066,6 +1070,7 @@ export function AppProvider({ children }) {
     isManager: () => isManager(userRole),
     isChief: () => isChief(userRole),
     isStoreKeeper: () => isStoreKeeper(userRole),
+    isDeveloper: () => isDeveloper(userRole),
     hasRole: (role) => hasRole(userRole, role),
     hasAnyRole: (roles) => hasAnyRole(userRole, roles),
     canCreateUsers: () => canCreateUsers(userRole),

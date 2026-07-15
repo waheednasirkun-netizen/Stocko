@@ -1,4 +1,5 @@
 import { useApp } from '../../context/AppContext'
+import { ROLE_COLORS } from '../../lib/constants'
 import { Ic } from '../ui'
 
 const navItems = [
@@ -56,6 +57,9 @@ export default function Sidebar() {
     const check = permChecks[item.perm]
     return check ? check() : true
   })
+
+  // Get role color for the badge
+  const roleColor = ROLE_COLORS[userRole] || theme.textMuted
 
   return (
     <>
@@ -150,10 +154,13 @@ export default function Sidebar() {
           }}>
             <span style={{
               display: 'inline-block',
-              padding: '2px 8px',
+              padding: '3px 10px',
               borderRadius: 10,
-              background: dark ? '#1e293b' : '#e5e7eb',
-              fontWeight: 600,
+              background: `${roleColor}20`,
+              color: roleColor,
+              fontWeight: 700,
+              fontSize: 11,
+              letterSpacing: 0.3,
             }}>
               {userRole}
             </span>
