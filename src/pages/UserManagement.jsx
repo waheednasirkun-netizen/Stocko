@@ -32,10 +32,17 @@ export default function UserManagement() {
   })
   const [errors, setErrors] = useState({})
 
+  // Branch management state (Developer only)
+  const [showBranchModal, setShowBranchModal] = useState(false)
+  const [editingBranch, setEditingBranch] = useState(null)
+  const [branchForm, setBranchForm] = useState({ name: '', address: '', phone: '', domain: '' })
+  const [branchErrors, setBranchErrors] = useState({})
+  const [branchLoading, setBranchLoading] = useState(false)
+
   // Determine if current user is a Developer
   const showBranchField = currentUser?.role === 'Developer'
 
-  // Fetch branches (only needed for Developers)
+  // Fetch branches (needed for Developers and for branch management)
   useEffect(() => {
     if (showBranchField) {
       fetchBranches()
@@ -46,7 +53,7 @@ export default function UserManagement() {
     try {
       const { data, error } = await supabase
         .from('branches')
-        .select('id, name')
+        .select('id, name, address, phone, domain')
         .order('name')
 
       if (error) throw error
@@ -87,6 +94,118 @@ export default function UserManagement() {
     })
     setShowModal(true)
     setErrors({})
+  }
+
+  // ── Branch Management Functions (Developer Only) ───────────────────
+  const openBranchModal = () => {
+    setEditingBranch(null)
+    setBranchForm({ name: '', address: '', phone: '', domain: '' })
+    setBranchErrors({})
+    setShowBranchModal(true)
+  }
+
+  const openEditBranch = (branch) => {
+    setEditingBranch(branch)
+    setBranchForm({
+      name: branch.name || '',
+      address: branch.address || '',
+      phone: branch.phone || '',
+      domain: branch.domain || ''
+    })
+    setBranchErrors({})
+    setShowBranchModal(true)
+  }
+
+  const validateDomain = (domain) => {
+    if (!domain) return true
+    // Must be like "stockofsd.com" — no @, no spaces, must have a dot
+    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9\-]*(\.[a-zA-Z0-9][a-zA-Z0-9\-]*)+$/
+    return domainRegex.test(domain.trim())
+  }
+
+  const handleSaveBranch = async () => {
+    const errs = {}
+    if (!branchForm.name.trim()) errs.name = 'Branch name required'
+    if (branchForm.domain && !validateDomain(branchForm.domain)) {
+      errs.domain = 'Invalid domain format (e.g. stockofsd.com)'
+    }
+
+    if (Object.keys(errs).length) {
+      setBranchErrors(errs)
+      return
+    }
+
+    setBranchLoading(true)
+    setBranchErrors({})
+
+    try {
+      const payload = {
+        name: branchForm.name.trim(),
+        address: branchForm.address.trim() || null,
+        phone: branchForm.phone.trim() || null,
+        domain: branchForm.domain.trim().toLowerCase() || null,
+      }
+
+      let result
+      if (editingBranch) {
+        const { data, error } = await supabase
+          .from('branches')
+          .update(payload)
+          .eq('id', editingBranch.id)
+          .select()
+          .single()
+        if (error) throw error
+        result = { success: true, branch: data }
+        setBranches(prev => prev.map(b => b.id === editingBranch.id ? { ...b, ...data } : b))
+        showToast('success', 'Branch Updated', branchForm.name)
+      } else {
+        const { data, error } = await supabase
+          .from('branches')
+          .insert(payload)
+          .select()
+          .single()
+        if (error) throw error
+        result = { success: true, branch: data }
+        setBranches(prev => [...prev, data])
+        showToast('success', 'Branch Created', branchForm.name)
+      }
+
+      setShowBranchModal(false)
+      setEditingBranch(null)
+      setBranchForm({ name: '', address: '', phone: '', domain: '' })
+    } catch (error) {
+      console.error('Branch save error:', error)
+      showToast('error', 'Failed', error.message)
+    } finally {
+      setBranchLoading(false)
+    }
+  }
+
+  const handleDeleteBranch = async (branch) => {
+    const ok = await confirm({
+      title: 'Delete Branch',
+      message: `Delete "${branch.name}"? Users assigned to this branch will become unassigned.`,
+      variant: 'danger',
+      confirmLabel: 'Delete'
+    })
+    if (!ok) return
+
+    try {
+      const { error } = await supabase
+        .from('branches')
+        .delete()
+        .eq('id', branch.id)
+
+      if (error) throw error
+
+      setBranches(prev => prev.filter(b => b.id !== branch.id))
+      // Also update users that had this branch
+      setUsers(prev => prev.map(u => u.branch_id === branch.id ? { ...u, branch_id: null } : u))
+      showToast('info', 'Branch Deleted', branch.name)
+    } catch (error) {
+      console.error('Delete branch error:', error)
+      showToast('error', 'Delete Failed', error.message)
+    }
   }
 
   // ── Create User Function ──────────────────────────────────────────────
@@ -248,9 +367,16 @@ export default function UserManagement() {
             {users?.length || 0} users · Manage roles and permissions
           </p>
         </div>
-        <Btn variant="primary" onClick={openCreate}>
-          <Ic n="UserPlus" size={14} color="white" /> Add User
-        </Btn>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {showBranchField && (
+            <Btn variant="outline" onClick={openBranchModal}>
+              <Ic n="Building2" size={14} /> Manage Branches
+            </Btn>
+          )}
+          <Btn variant="primary" onClick={openCreate}>
+            <Ic n="UserPlus" size={14} color="white" /> Add User
+          </Btn>
+        </div>
       </div>
 
       {/* ── User Cards ── */}
@@ -387,7 +513,7 @@ export default function UserManagement() {
         )}
       </div>
 
-      {/* ── Modal ── */}
+      {/* ── User Modal ── */}
       <Modal
         open={showModal}
         onClose={() => {
@@ -585,7 +711,7 @@ export default function UserManagement() {
               >
                 <option value="">Select a branch</option>
                 {branches.map(b => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
+                  <option key={b.id} value={b.id}>{b.name} {b.domain ? `(@${b.domain})` : ''}</option>
                 ))}
               </select>
               {branches.length === 0 && (
@@ -662,6 +788,367 @@ export default function UserManagement() {
                 editing ? 'Update User' : 'Create User'
               )}
             </Btn>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Branch Management Modal (Developer Only) ── */}
+      <Modal
+        open={showBranchModal}
+        onClose={() => {
+          setShowBranchModal(false)
+          setBranchErrors({})
+          setEditingBranch(null)
+          setBranchForm({ name: '', address: '', phone: '', domain: '' })
+        }}
+        title="Manage Branches"
+      >
+        <div style={{ maxWidth: '100%' }}>
+          {/* Branch List */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 12
+            }}>
+              <h3 style={{ fontSize: 14, fontWeight: 600, color: theme.text }}>
+                Existing Branches ({branches.length})
+              </h3>
+              <Btn variant="primary" size="sm" onClick={() => {
+                setEditingBranch(null)
+                setBranchForm({ name: '', address: '', phone: '', domain: '' })
+                setBranchErrors({})
+              }}>
+                <Ic n="Plus" size={12} color="white" /> New Branch
+              </Btn>
+            </div>
+
+            {branches.length > 0 ? (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8
+              }}>
+                {branches.map(branch => (
+                  <div
+                    key={branch.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '12px 14px',
+                      borderRadius: 8,
+                      border: `1px solid ${theme.border}`,
+                      background: theme.cardBg || theme.inputBg,
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: theme.text,
+                        marginBottom: 2
+                      }}>
+                        {branch.name}
+                        {branch.domain && (
+                          <span style={{
+                            fontSize: 11,
+                            color: '#2563eb',
+                            fontWeight: 500,
+                            marginLeft: 8,
+                            background: '#eff6ff',
+                            padding: '2px 8px',
+                            borderRadius: 4
+                          }}>
+                            @{branch.domain}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{
+                        fontSize: 12,
+                        color: theme.textMuted,
+                        display: 'flex',
+                        gap: 12,
+                        flexWrap: 'wrap'
+                      }}>
+                        {branch.address && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Ic n="MapPin" size={11} /> {branch.address}
+                          </span>
+                        )}
+                        {branch.phone && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Ic n="Phone" size={11} /> {branch.phone}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
+                      <button
+                        onClick={() => openEditBranch(branch)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: '#6b7280',
+                          padding: '6px',
+                          borderRadius: 6,
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6' }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                        title="Edit branch"
+                      >
+                        <Ic n="Edit" size={14} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteBranch(branch)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: '#dc2626',
+                          padding: '6px',
+                          borderRadius: 6,
+                          transition: 'all 0.15s ease',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2' }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                        title="Delete branch"
+                      >
+                        <Ic n="Trash2" size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{
+                textAlign: 'center',
+                padding: '24px',
+                color: theme.textMuted,
+                border: `1px dashed ${theme.border}`,
+                borderRadius: 8
+              }}>
+                <Ic n="Building2" size={24} style={{ opacity: 0.4, marginBottom: 8 }} />
+                <p style={{ fontSize: 13 }}>No branches yet</p>
+                <p style={{ fontSize: 12, opacity: 0.7 }}>Create your first branch below</p>
+              </div>
+            )}
+          </div>
+
+          {/* Branch Form */}
+          <div style={{
+            borderTop: `1px solid ${theme.border}`,
+            paddingTop: 16
+          }}>
+            <h3 style={{
+              fontSize: 14,
+              fontWeight: 600,
+              color: theme.text,
+              marginBottom: 14
+            }}>
+              {editingBranch ? `Edit: ${editingBranch.name}` : 'Create New Branch'}
+            </h3>
+
+            {/* Branch Name */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{
+                display: 'block',
+                fontSize: 13,
+                fontWeight: 500,
+                color: '#374151',
+                marginBottom: 5
+              }}>
+                Branch Name <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <input
+                type="text"
+                value={branchForm.name}
+                onChange={e => setBranchForm(p => ({ ...p, name: e.target.value }))}
+                placeholder="Main Branch, Downtown, etc."
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: `1px solid ${branchErrors.name ? '#ef4444' : theme.inputBorder}`,
+                  borderRadius: 8,
+                  fontSize: 14,
+                  background: theme.inputBg,
+                  color: theme.text,
+                  outline: 'none',
+                  transition: 'border-color 0.2s ease',
+                }}
+                onFocus={e => { e.target.style.borderColor = '#3b82f6' }}
+                onBlur={e => { e.target.style.borderColor = branchErrors.name ? '#ef4444' : theme.inputBorder }}
+              />
+              {branchErrors.name && (
+                <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>
+                  {branchErrors.name}
+                </div>
+              )}
+            </div>
+
+            {/* Domain */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{
+                display: 'block',
+                fontSize: 13,
+                fontWeight: 500,
+                color: '#374151',
+                marginBottom: 5
+              }}>
+                Domain <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 400 }}>(optional, e.g. stockofsd.com)</span>
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <span style={{
+                  padding: '10px 0 10px 12px',
+                  fontSize: 14,
+                  color: '#6b7280',
+                  background: theme.inputBg,
+                  border: `1px solid ${branchErrors.domain ? '#ef4444' : theme.inputBorder}`,
+                  borderRight: 'none',
+                  borderRadius: '8px 0 0 8px',
+                  fontWeight: 500
+                }}>@</span>
+                <input
+                  type="text"
+                  value={branchForm.domain}
+                  onChange={e => setBranchForm(p => ({ ...p, domain: e.target.value }))}
+                  placeholder="stockofsd.com"
+                  style={{
+                    flex: 1,
+                    padding: '10px 12px',
+                    border: `1px solid ${branchErrors.domain ? '#ef4444' : theme.inputBorder}`,
+                    borderLeft: 'none',
+                    borderRadius: '0 8px 8px 0',
+                    fontSize: 14,
+                    background: theme.inputBg,
+                    color: theme.text,
+                    outline: 'none',
+                    transition: 'border-color 0.2s ease',
+                  }}
+                  onFocus={e => { 
+                    e.target.style.borderColor = '#3b82f6'
+                    e.target.previousSibling.style.borderColor = '#3b82f6'
+                  }}
+                  onBlur={e => { 
+                    const color = branchErrors.domain ? '#ef4444' : theme.inputBorder
+                    e.target.style.borderColor = color
+                    e.target.previousSibling.style.borderColor = color
+                  }}
+                />
+              </div>
+              {branchErrors.domain && (
+                <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>
+                  {branchErrors.domain}
+                </div>
+              )}
+            </div>
+
+            {/* Branch Address */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{
+                display: 'block',
+                fontSize: 13,
+                fontWeight: 500,
+                color: '#374151',
+                marginBottom: 5
+              }}>
+                Address <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 400 }}>(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={branchForm.address}
+                onChange={e => setBranchForm(p => ({ ...p, address: e.target.value }))}
+                placeholder="123 Main St, City"
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 8,
+                  fontSize: 14,
+                  background: theme.inputBg,
+                  color: theme.text,
+                  outline: 'none',
+                  transition: 'border-color 0.2s ease',
+                }}
+                onFocus={e => { e.target.style.borderColor = '#3b82f6' }}
+                onBlur={e => { e.target.style.borderColor = theme.inputBorder }}
+              />
+            </div>
+
+            {/* Branch Phone */}
+            <div style={{ marginBottom: 18 }}>
+              <label style={{
+                display: 'block',
+                fontSize: 13,
+                fontWeight: 500,
+                color: '#374151',
+                marginBottom: 5
+              }}>
+                Phone <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 400 }}>(optional)</span>
+              </label>
+              <input
+                type="tel"
+                value={branchForm.phone}
+                onChange={e => setBranchForm(p => ({ ...p, phone: e.target.value }))}
+                placeholder="+92 300 1234567"
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 8,
+                  fontSize: 14,
+                  background: theme.inputBg,
+                  color: theme.text,
+                  outline: 'none',
+                  transition: 'border-color 0.2s ease',
+                }}
+                onFocus={e => { e.target.style.borderColor = '#3b82f6' }}
+                onBlur={e => { e.target.style.borderColor = theme.inputBorder }}
+              />
+            </div>
+
+            {/* Buttons */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              {editingBranch && (
+                <Btn
+                  variant="outline"
+                  onClick={() => {
+                    setEditingBranch(null)
+                    setBranchForm({ name: '', address: '', phone: '', domain: '' })
+                    setBranchErrors({})
+                  }}
+                >
+                  Cancel Edit
+                </Btn>
+              )}
+              <Btn
+                variant="primary"
+                onClick={handleSaveBranch}
+                disabled={branchLoading}
+                style={{ minWidth: 120 }}
+              >
+                {branchLoading ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{
+                      width: 16,
+                      height: 16,
+                      border: '2px solid rgba(255,255,255,0.3)',
+                      borderTop: '2px solid white',
+                      borderRadius: '50%',
+                      display: 'inline-block',
+                      animation: 'spin 0.8s linear infinite',
+                    }} />
+                    {editingBranch ? 'Updating...' : 'Creating...'}
+                  </span>
+                ) : (
+                  editingBranch ? 'Update Branch' : 'Create Branch'
+                )}
+              </Btn>
+            </div>
           </div>
         </div>
       </Modal>

@@ -3,8 +3,8 @@
 // This enables autocomplete, go to definition, etc.
 
 // Setup type definitions for built-in Supabase Runtime APIs
-import "@supabase/functions-js/edge-runtime.d.ts";
-import { withSupabase } from "@supabase/server";
+// Use the Deno-compatible URL import for Supabase Functions runtime
+import { withSupabase } from "https://deno.land/x/supabase_functions@0.1.0/mod.ts";
 
 console.log("Hello from Functions!");
 
@@ -12,7 +12,7 @@ console.log("Hello from Functions!");
 // Use publishable for Client-facing, key-validated endpoints
 // Use secret for Server-to-server, internal calls
 export default {
-  fetch: withSupabase({ auth: ["publishable", "secret"] }, async (req, ctx) => {
+  fetch: withSupabase({ auth: ["publishable", "secret"] }, async (req: Request, ctx: any) => {
     // Called by another service with a secret key
     // ctx.supabaseAdmin bypasses RLS — use for privileged operations
     /*
