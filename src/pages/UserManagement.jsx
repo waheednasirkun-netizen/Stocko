@@ -21,12 +21,12 @@ export default function UserManagement() {
   const [editing, setEditing] = useState(null)
   const [loading, setLoading] = useState(false)
   const [branches, setBranches] = useState([])
-  const [form, setForm] = useState({ 
-    name: '', 
-    email: '', 
-    password: '', 
-    role: 'Store Keeper', 
-    status: 'Active', 
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    password: '',
+    role: 'Store Keeper',
+    status: 'Active',
     phone: '',
     branch_id: ''
   })
@@ -40,14 +40,19 @@ export default function UserManagement() {
   const [branchLoading, setBranchLoading] = useState(false)
 
   // Determine if current user is a Developer
-  const showBranchField = currentUser?.role === 'Developer'
+  const isDeveloper = currentUser?.role === 'Developer'
+
+  // Filter users by branch - Developers see all, others see only their branch
+  const visibleUsers = isDeveloper
+    ? users
+    : users?.filter(u => u.branch_id === currentUser?.branch_id)
 
   // Fetch branches (needed for Developers and for branch management)
   useEffect(() => {
-    if (showBranchField) {
+    if (isDeveloper) {
       fetchBranches()
     }
-  }, [showBranchField])
+  }, [isDeveloper])
 
   const fetchBranches = async () => {
     try {
@@ -68,14 +73,14 @@ export default function UserManagement() {
 
   const openCreate = () => {
     setEditing(null)
-    setForm({ 
-      name: '', 
-      email: '', 
-      password: '', 
-      role: 'Store Keeper', 
-      status: 'Active', 
+    setForm({
+      name: '',
+      email: '',
+      password: '',
+      role: 'Store Keeper',
+      status: 'Active',
       phone: '',
-      branch_id: showBranchField ? '' : (currentUser?.branch_id || '')
+      branch_id: isDeveloper ? '' : (currentUser?.branch_id || '')
     })
     setShowModal(true)
     setErrors({})
@@ -118,7 +123,6 @@ export default function UserManagement() {
 
   const validateDomain = (domain) => {
     if (!domain) return true
-    // Must be like "stockofsd.com" — no @, no spaces, must have a dot
     const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9\-]*(\.[a-zA-Z0-9][a-zA-Z0-9\-]*)+$/
     return domainRegex.test(domain.trim())
   }
@@ -146,7 +150,6 @@ export default function UserManagement() {
         domain: branchForm.domain.trim().toLowerCase() || null,
       }
 
-      let result
       if (editingBranch) {
         const { data, error } = await supabase
           .from('branches')
@@ -155,7 +158,6 @@ export default function UserManagement() {
           .select()
           .single()
         if (error) throw error
-        result = { success: true, branch: data }
         setBranches(prev => prev.map(b => b.id === editingBranch.id ? { ...b, ...data } : b))
         showToast('success', 'Branch Updated', branchForm.name)
       } else {
@@ -165,7 +167,6 @@ export default function UserManagement() {
           .select()
           .single()
         if (error) throw error
-        result = { success: true, branch: data }
         setBranches(prev => [...prev, data])
         showToast('success', 'Branch Created', branchForm.name)
       }
@@ -199,7 +200,6 @@ export default function UserManagement() {
       if (error) throw error
 
       setBranches(prev => prev.filter(b => b.id !== branch.id))
-      // Also update users that had this branch
       setUsers(prev => prev.map(u => u.branch_id === branch.id ? { ...u, branch_id: null } : u))
       showToast('info', 'Branch Deleted', branch.name)
     } catch (error) {
@@ -208,30 +208,37 @@ export default function UserManagement() {
     }
   }
 
-  // ── Create User Function ──────────────────────────────────────────────
-  const createUser = async (userData) => {
-    try {
-      const { data, error } = await supabase.functions.invoke("create-user", {
-        body: userData,
-      })
+  // ── Create User via RPC (bypasses Edge Function CORS issues) ─────────
+// ── Create User via RPC ───────────────────────────────────────────────
+const createUser = async (userData) => {
+  try {
+    const { data, error } = await supabase.rpc("create_app_user", {
+      user_email: userData.email,
+      user_password: userData.password,
+      user_name: userData.name,
+      user_role: userData.role,
+      user_status: userData.status,
+      user_phone: userData.phone,
+      user_branch_id: userData.branch_id,
+    });
 
-      if (error) throw error
+    if (error) throw error;
 
-      setUsers(prev => [...prev, data.user])
+    setUsers(prev => [...prev, data]);
 
-      return {
-        success: true,
-        user: data.user,
-      }
-    } catch (err) {
-      console.error(err)
-      return {
-        success: false,
-        error: err.message,
-      }
-    }
+    return {
+      success: true,
+      user: data,
+    };
+  } catch (err) {
+    console.error("createUser error:", err);
+
+    return {
+      success: false,
+      error: err.message,
+    };
   }
-
+};
   // ── Update User Function ──────────────────────────────────────────────
   const updateUser = async (id, userData) => {
     try {
@@ -244,8 +251,7 @@ export default function UserManagement() {
         updated_at: new Date().toISOString()
       }
 
-      // Only include branch_id if the current user is a Developer
-      if (showBranchField && userData.branch_id) {
+      if (isDeveloper && userData.branch_id !== undefined) {
         updatePayload.branch_id = userData.branch_id
       }
 
@@ -270,6 +276,7 @@ export default function UserManagement() {
   // ── Delete User Function ──────────────────────────────────────────────
   const deleteUser = async (id) => {
     try {
+      // Delete from public.users first
       const { error: publicError } = await supabase
         .from('users')
         .delete()
@@ -277,9 +284,15 @@ export default function UserManagement() {
 
       if (publicError) throw publicError
 
-      await supabase.functions.invoke("delete-user", {
-        body: { id },
+      // Then delete auth user via RPC (avoids Edge Function CORS)
+      const { error: rpcError } = await supabase.rpc('delete_auth_user', {
+        p_user_id: id
       })
+
+      if (rpcError) {
+        console.warn('Auth user deletion warning:', rpcError.message)
+        // Don't throw - the public user is already deleted
+      }
 
       setUsers(prev => prev.filter(u => u.id !== id))
       return { success: true }
@@ -298,6 +311,10 @@ export default function UserManagement() {
     if (!editing && !form.password.trim()) errs.password = 'Password required'
     if (!editing && form.password && form.password.length < 6) errs.password = 'Password must be at least 6 characters'
 
+    if (isDeveloper && !editing && !form.branch_id) {
+      errs.branch_id = 'Please select a branch'
+    }
+
     if (Object.keys(errs).length) {
       setErrors(errs)
       return
@@ -315,12 +332,10 @@ export default function UserManagement() {
         phone: form.phone || '',
       }
 
-      // For non-Developers, always use their own branch_id
-      // For Developers, use the selected branch_id (or current user's branch as fallback)
-      if (showBranchField) {
-        data.branch_id = form.branch_id || currentUser?.branch_id
+      if (isDeveloper) {
+        data.branch_id = form.branch_id || currentUser?.branch_id || ''
       } else {
-        data.branch_id = currentUser?.branch_id
+        data.branch_id = currentUser?.branch_id || ''
       }
 
       if (form.password) data.password = form.password
@@ -364,11 +379,11 @@ export default function UserManagement() {
             User Management
           </h2>
           <p style={{ fontSize: 12, color: theme.textMuted }}>
-            {users?.length || 0} users · Manage roles and permissions
+            {visibleUsers?.length || 0} users · Manage roles and permissions
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {showBranchField && (
+          {isDeveloper && (
             <Btn variant="outline" onClick={openBranchModal}>
               <Ic n="Building2" size={14} /> Manage Branches
             </Btn>
@@ -385,8 +400,8 @@ export default function UserManagement() {
         gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
         gap: 12
       }}>
-        {users && users.length > 0 ? (
-          users.filter(u => !u._hidden).map(u => (
+        {visibleUsers && visibleUsers.length > 0 ? (
+          visibleUsers.filter(u => !u._hidden).map(u => (
             <Card key={u.id} style={{
               padding: '16px 18px',
               transition: 'all 0.2s ease',
@@ -684,7 +699,7 @@ export default function UserManagement() {
           </div>
 
           {/* Branch Assignment (Developers Only) */}
-          {showBranchField && (
+          {isDeveloper && (
             <div style={{ marginBottom: 14 }}>
               <label style={{
                 display: 'block',
@@ -701,7 +716,7 @@ export default function UserManagement() {
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: `1px solid ${theme.inputBorder}`,
+                  border: `1px solid ${errors.branch_id ? '#ef4444' : theme.inputBorder}`,
                   borderRadius: 8,
                   fontSize: 13,
                   background: theme.inputBg,
@@ -714,6 +729,11 @@ export default function UserManagement() {
                   <option key={b.id} value={b.id}>{b.name} {b.domain ? `(@${b.domain})` : ''}</option>
                 ))}
               </select>
+              {errors.branch_id && (
+                <div style={{ color: '#ef4444', fontSize: 12, marginTop: 4 }}>
+                  {errors.branch_id}
+                </div>
+              )}
               {branches.length === 0 && (
                 <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
                   Loading branches...
@@ -1029,11 +1049,11 @@ export default function UserManagement() {
                     outline: 'none',
                     transition: 'border-color 0.2s ease',
                   }}
-                  onFocus={e => { 
+                  onFocus={e => {
                     e.target.style.borderColor = '#3b82f6'
                     e.target.previousSibling.style.borderColor = '#3b82f6'
                   }}
-                  onBlur={e => { 
+                  onBlur={e => {
                     const color = branchErrors.domain ? '#ef4444' : theme.inputBorder
                     e.target.style.borderColor = color
                     e.target.previousSibling.style.borderColor = color

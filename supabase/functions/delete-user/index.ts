@@ -1,32 +1,59 @@
-// Follow this setup guide to integrate the Deno language server with your editor:
-// https://deno.land/manual/getting_started/setup_your_environment
-// This enables autocomplete, go to definition, etc.
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.35.0?target=deno";
 
-// Setup type definitions for built-in Supabase Runtime APIs
-/// <reference types="@supabase/functions-js" />
-
-console.log("Hello from Functions!");
-
-// This endpoint uses 'publishable' | 'secret' access, apiKey is required.
-// Use publishable for Client-facing, key-validated endpoints
-// Use secret for Server-to-server, internal calls
-export default {
-  fetch: async (req: Request) => {
-    const { name } = await req.json();
-
-    return Response.json({
-      message: `Hello ${name}!`,
-    });
-  },
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-/* To invoke locally:
+serve(async (req: Request) => {
+  // Handle CORS preflight request
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
 
-  1. Run `supabase start` (see: https://supabase.com/docs/reference/cli/supabase-start)
-  2. Make an HTTP request:
+  try {
+    const { id } = await req.json();
 
-  curl -i --location --request POST 'http://127.0.0.1:54321/functions/v1/delete-user' \
-    --header 'apiKey: sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH' \
-    --data '{"name":"Functions"}'
+    if (!id) {
+      return new Response(
+        JSON.stringify({ error: "User ID is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-*/
+    const supabase = createClient(
+      (globalThis as any).Deno?.env?.get("SUPABASE_URL")!,
+      (globalThis as any).Deno?.env?.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    const { error } = await supabase.auth.admin.deleteUser(id);
+
+    if (error) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: error.message,
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: "User deleted successfully",
+      }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (e) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: e instanceof Error ? e.message : String(e),
+      }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+});
