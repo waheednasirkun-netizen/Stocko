@@ -22,6 +22,220 @@ const statusColors = {
   Rejected: '#fee2e2,#991b1b',
 }
 
+/* ─── Thermal Printer Receipt ─── */
+function printDispatchReceipt({ request, item, qty, notes, user, fulfilled, remaining, newStatus, timestamp, branchName }) {
+  const receiptWindow = window.open('', '_blank', 'width=320,height=600')
+  if (!receiptWindow) {
+    console.warn('Print popup blocked — please allow popups for auto-print')
+    return
+  }
+
+  const dateStr = timestamp.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  const timeStr = timestamp.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const refId = request.id?.slice(-8)?.toUpperCase() || 'N/A'
+  const branch = branchName || request.branch_name || 'Main Branch'
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Dispatch Receipt</title>
+  <style>
+    @page { size: 80mm auto; margin: 0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 80mm;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 6mm 8mm;
+      color: #000;
+      background: #fff;
+    }
+    .center { text-align: center; }
+    .bold { font-weight: bold; }
+    .divider {
+      border-top: 1px dashed #000;
+      margin: 4px 0;
+    }
+    .double-divider {
+      border-top: 2px solid #000;
+      margin: 4px 0;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      margin: 1px 0;
+    }
+    .label { color: #333; }
+    .value { font-weight: bold; }
+    .status-box {
+      border: 2px solid #000;
+      padding: 3px 6px;
+      text-align: center;
+      font-weight: bold;
+      font-size: 13px;
+      margin: 4px 0;
+    }
+    .status-completed { border-color: #16a34a; color: #16a34a; }
+    .status-partial { border-color: #ca8a04; color: #ca8a04; }
+    .barcode {
+      font-family: 'Libre Barcode 39', 'Code 39', monospace;
+      font-size: 28px;
+      text-align: center;
+      letter-spacing: 2px;
+      margin: 2px 0;
+    }
+    .software-by {
+      font-size: 9px;
+      text-align: center;
+      color: #999;
+      margin-top: 6px;
+      padding-top: 4px;
+      border-top: 1px dashed #ccc;
+    }
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Branch Header -->
+  <div class="center">
+    <div class="bold" style="font-size:18px; letter-spacing:1px;">${branch}</div>
+    <div style="font-size:10px; color:#666; margin-top:2px;">DISPATCH RECEIPT</div>
+  </div>
+
+  <div class="double-divider"></div>
+
+  <!-- Ref & Date -->
+  <div class="row">
+    <span class="label">Ref #</span>
+    <span class="value">${refId}</span>
+  </div>
+  <div class="row">
+    <span class="label">Date</span>
+    <span class="value">${dateStr}</span>
+  </div>
+  <div class="row">
+    <span class="label">Time</span>
+    <span class="value">${timeStr}</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- People -->
+  <div class="row">
+    <span class="label">Department</span>
+    <span class="value">${request.department || 'N/A'}</span>
+  </div>
+  <div class="row">
+    <span class="label">Requested By</span>
+    <span class="value">${request.created_by_name || request.createdBy || 'N/A'}</span>
+  </div>
+  <div class="row">
+    <span class="label">Fulfilled By</span>
+    <span class="value">${user?.name || user?.email || 'N/A'}</span>
+  </div>
+
+  <div class="double-divider"></div>
+
+  <!-- Item Details -->
+  <div class="center bold" style="font-size:12px; margin:2px 0;">ITEM DETAILS</div>
+
+  <div class="row" style="margin-top:2px;">
+    <span class="label">Item</span>
+    <span class="value" style="max-width:45mm; text-align:right;">${item._displayName}</span>
+  </div>
+  <div class="row">
+    <span class="label">Category</span>
+    <span class="value">${request.category || 'N/A'}</span>
+  </div>
+  <div class="row">
+    <span class="label">Unit</span>
+    <span class="value">${item._unit}</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Quantities -->
+  <div class="row">
+    <span class="label">Total Requested</span>
+    <span class="value">${item._qty}</span>
+  </div>
+  <div class="row">
+    <span class="label">Previously Fulfilled</span>
+    <span class="value">${item._fulfilledQty}</span>
+  </div>
+  <div class="row">
+    <span class="label" style="color:#dc2626;">This Dispatch</span>
+    <span class="value" style="color:#dc2626; font-size:13px;">+ ${qty}</span>
+  </div>
+  <div class="row">
+    <span class="label">Now Fulfilled</span>
+    <span class="value">${fulfilled}</span>
+  </div>
+  <div class="row">
+    <span class="label">Remaining</span>
+    <span class="value">${remaining}</span>
+  </div>
+
+  <div class="double-divider"></div>
+
+  <!-- Status -->
+  <div class="status-box ${newStatus === 'Completed' ? 'status-completed' : 'status-partial'}">
+    ${newStatus === 'Completed' ? '✓ FULLY FULFILLED' : '◐ PARTIALLY FULFILLED'}
+  </div>
+
+  ${notes ? `
+  <div class="divider"></div>
+  <div style="font-size:9px; color:#666;">
+    <span class="label">Notes:</span> ${notes}
+  </div>
+  ` : ''}
+
+  <div class="divider"></div>
+
+  <!-- Barcode -->
+  <div class="barcode">*${refId}*</div>
+  <div class="center" style="font-size:8px; color:#999;">${refId}</div>
+
+  <div class="double-divider"></div>
+
+  <!-- Footer -->
+  <div class="center" style="font-size:9px; color:#666;">
+    <div>Printed: ${dateStr} ${timeStr}</div>
+  </div>
+
+  <div class="software-by">
+    <div>Software by Stocko</div>
+  </div>
+
+  <!-- Print Controls -->
+  <div class="no-print" style="margin-top:16px; text-align:center;">
+    <button onclick="window.print()" style="padding:6px 16px; font-size:11px; cursor:pointer; border:1px solid #ccc; border-radius:4px; background:#fff;">🖨️ Print Again</button>
+    <button onclick="window.close()" style="padding:6px 16px; font-size:11px; cursor:pointer; border:1px solid #ccc; border-radius:4px; background:#fff; margin-left:6px;">✕ Close</button>
+  </div>
+
+  <script>
+    window.onload = function() {
+      setTimeout(function() {
+        window.print()
+        setTimeout(function() { window.close() }, 3000)
+      }, 300)
+    }
+  </script>
+</body>
+</html>
+  `
+
+  receiptWindow.document.open()
+  receiptWindow.document.write(html)
+  receiptWindow.document.close()
+}
+
 export default function FulfillmentCenter() {
   const {
     requests = [],
@@ -297,6 +511,21 @@ export default function FulfillmentCenter() {
       }
 
       showToast('success', 'Dispatched', `${fmtNum(qty)} ${item._unit} of ${item._displayName}`)
+
+      // 5. Auto-print dispatch receipt for thermal printer
+      printDispatchReceipt({
+        request,
+        item,
+        qty,
+        notes,
+        user,
+        fulfilled: newFulfilled,
+        remaining,
+        newStatus,
+        timestamp: new Date(),
+        branchName: request.branch_name || request.branchName,
+      })
+
       resetDispatch()
     } catch (err) {
       console.error('Dispatch error:', err)

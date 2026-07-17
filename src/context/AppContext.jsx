@@ -45,6 +45,11 @@ export function AppProvider({ children }) {
   // ── RBAC state ──────────────────────────────────────────────────────────────
   const [userRole, setUserRole] = useState(null)
 
+  // ── Branch state (NEW: multi-branch support) ───────────────────────────────
+  const [branches, setBranches] = useState([])
+  const [currentBranch, setCurrentBranch] = useState(null)
+  const [isLoadingBranchData, setIsLoadingBranchData] = useState(false)
+
   // ── Theme state ─────────────────────────────────────────────────────────────
   const [dark, setDark] = useState(() => localStorage.getItem('rs_dark') === 'true')
 
@@ -85,15 +90,98 @@ export function AppProvider({ children }) {
   )
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // BRANCH MANAGEMENT (NEW)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Fetch user's accessible branches
+  const fetchUserBranches = useCallback(async (userId, userProfile) => {
+    if (!userId) return []
+
+    const branchesList = []
+
+    // ── Method 1: Try branch_members table (multi-branch) ──
+    try {
+      const { data: memberships, error: memError } = await supabase
+        .from('branch_members')
+        .select('branch_id, branches(*)')
+        .eq('user_id', userId)
+
+      if (!memError && memberships && memberships.length > 0) {
+        for (const m of memberships) {
+          if (m.branches) {
+            branchesList.push({
+              id: m.branch_id,
+              ...m.branches,
+            })
+          }
+        }
+      }
+    } catch (err) {
+      console.log('[AppContext] branch_members not available, falling back to user.branch_id')
+    }
+
+    // ── Method 2: Fallback to user.profile.branch_id (legacy single-branch) ──
+    if (branchesList.length === 0 && userProfile?.branch_id) {
+      try {
+        const { data: branch, error: branchError } = await supabase
+          .from('branches')
+          .select('id, name, address')
+          .eq('id', userProfile.branch_id)
+          .maybeSingle()
+
+        if (!branchError && branch) {
+          branchesList.push(branch)
+          console.log('[AppContext] Loaded branch from user.branch_id:', branch.name)
+        }
+      } catch (err) {
+        console.log('[AppContext] Could not fetch branch by user.branch_id')
+      }
+    }
+
+    // ── Method 3: Create a default branch if nothing found ──
+    if (branchesList.length === 0 && userProfile?.branch_id) {
+      branchesList.push({
+        id: userProfile.branch_id,
+        name: userProfile.branch_name || 'Default Branch',
+      })
+    }
+
+    setBranches(branchesList)
+    return branchesList
+  }, [])
+
+  // Switch active branch
+  const switchBranch = useCallback(async (branch) => {
+    if (!branch || branch.id === currentBranch?.id) return
+
+    console.log('[AppContext] Switching branch to:', branch.name)
+    setIsLoadingBranchData(true)
+    setCurrentBranch(branch)
+
+    // Clear old branch data to prevent flash of wrong data
+    setTransactions([])
+    setRequests([])
+    setInventory([])
+    setTemplates([])
+    setSuppliers([])
+    setProcurements([])
+    setPurchaseOrders([])
+    setFinancialTransactions([])
+    setActivityLogs([])
+    setCategories([])
+
+    // Load new branch data
+    await loadBranchData(branch.id)
+    setIsLoadingBranchData(false)
+  }, [currentBranch])
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // RBAC: LOAD USER ROLE
   // ═══════════════════════════════════════════════════════════════════════════
-  // NOTE: Role is read directly from the user's own profile (users.role).
-  // Developer is explicitly checked first, then ALL_ROLES validates all others.
 
   const loadUserRole = useCallback(async (profileUser) => {
     console.log('[RBAC] loadUserRole called for user:', profileUser?.email, 'role:', profileUser?.role)
 
-    // Developer is a valid role — set it directly
     if (profileUser?.role === 'Developer') {
       console.log('[RBAC] Developer role detected')
       setUserRole('Developer')
@@ -106,7 +194,6 @@ export function AppProvider({ children }) {
       return
     }
 
-    // Check against ALL_ROLES (includes Developer, Admin, Manager, etc.)
     if (!ALL_ROLES.includes(profileUser.role)) {
       console.warn('[RBAC] Unrecognized role on profile:', profileUser.role, '— defaulting to Store Keeper')
       setUserRole(ROLES.STORE_KEEPER)
@@ -155,15 +242,18 @@ export function AppProvider({ children }) {
     setCategories([])
     setDataLoaded(false)
     setUserRole(null)
+    setBranches([])
+    setCurrentBranch(null)
   }, [])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // DATA FETCHING
+  // DATA FETCHING (branch-scoped)
   // ═══════════════════════════════════════════════════════════════════════════
 
   const getBranchId = useCallback((u) => {
-    return u?.branch_id ?? u?.branchId ?? null
-  }, [])
+    // Prefer currentBranch if set, fallback to user's default branch
+    return currentBranch?.id ?? u?.branch_id ?? u?.branchId ?? null
+  }, [currentBranch])
 
   const fetchInventory = useCallback(async (branchId) => {
     if (!branchId) return
@@ -221,24 +311,15 @@ export function AppProvider({ children }) {
     }
   }, [showToast])
 
-  // ── Load all business data ──────────────────────────────────────────────────
-  const loadAllData = useCallback(async (loggedInUser) => {
-    if (!loggedInUser) {
-      console.warn('[AppContext] loadAllData: no user provided')
-      setDataLoaded(true)
-      return
-    }
-
-    const branchId = getBranchId(loggedInUser)
-
+  // ── Load branch-specific data ───────────────────────────────────────────────
+  const loadBranchData = useCallback(async (branchId) => {
     if (!branchId) {
-      console.warn('[AppContext] loadAllData: no branch_id — user:', loggedInUser)
-      showToast('error', 'Branch Error', 'No branch assigned to your account. Please contact administrator.')
+      console.warn('[AppContext] loadBranchData: no branchId')
       setDataLoaded(true)
       return
     }
 
-    console.log('[AppContext] loadAllData start — branch:', branchId)
+    console.log('[AppContext] loadBranchData start — branch:', branchId)
     setLoading(true)
     try {
       const [
@@ -280,43 +361,63 @@ export function AppProvider({ children }) {
       await fetchCategories(branchId)
 
       setDataLoaded(true)
-      console.log('[AppContext] loadAllData complete ✓')
+      console.log('[AppContext] loadBranchData complete ✓')
     } catch (err) {
-      console.error('[AppContext] loadAllData error:', err)
-      showToast('error', 'Load Failed', 'Could not load data. Check console for details.')
+      console.error('[AppContext] loadBranchData error:', err)
+      showToast('error', 'Load Failed', 'Could not load branch data. Check console for details.')
       setDataLoaded(true)
     } finally {
       setLoading(false)
     }
-  }, [showToast, fetchRequests, fetchCategories, getBranchId])
+  }, [showToast, fetchRequests, fetchCategories])
+
+  // ── Legacy loadAllData (redirects to loadBranchData) ──────────────────────
+  const loadAllData = useCallback(async (loggedInUser) => {
+    if (!loggedInUser) {
+      console.warn('[AppContext] loadAllData: no user provided')
+      setDataLoaded(true)
+      return
+    }
+
+    const branchId = getBranchId(loggedInUser)
+
+    if (!branchId) {
+      console.warn('[AppContext] loadAllData: no branch_id — user:', loggedInUser)
+      showToast('error', 'Branch Error', 'No branch assigned to your account. Please contact administrator.')
+      setDataLoaded(true)
+      return
+    }
+
+    await loadBranchData(branchId)
+  }, [getBranchId, loadBranchData, showToast])
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // REAL-TIME SUBSCRIPTIONS
+  // REAL-TIME SUBSCRIPTIONS (branch-scoped)
   // ═══════════════════════════════════════════════════════════════════════════
 
   useEffect(() => {
-    if (!user?.branch_id) return
+    if (!currentBranch?.id) return
 
     const channels = []
 
     const invChannel = supabase
-      .channel(`inventory:${user.branch_id}`)
+      .channel(`inventory:${currentBranch.id}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
         table: 'inventory',
-        filter: `branch_id=eq.${user.branch_id}`,
-      }, () => { fetchInventory(user.branch_id) })
+        filter: `branch_id=eq.${currentBranch.id}`,
+      }, () => { fetchInventory(currentBranch.id) })
       .subscribe()
     channels.push(invChannel)
 
     const txnChannel = supabase
-      .channel(`transactions:${user.branch_id}`)
+      .channel(`transactions:${currentBranch.id}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'transactions',
-        filter: `branch_id=eq.${user.branch_id}`,
+        filter: `branch_id=eq.${currentBranch.id}`,
       }, (payload) => {
         setTransactions(prev => [payload.new, ...prev])
       })
@@ -324,18 +425,18 @@ export function AppProvider({ children }) {
     channels.push(txnChannel)
 
     const reqChannel = supabase
-      .channel(`requests:${user.branch_id}`)
+      .channel(`requests:${currentBranch.id}`)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
         table: 'requests',
-        filter: `branch_id=eq.${user.branch_id}`,
-      }, () => { fetchRequests(user.branch_id) })
+        filter: `branch_id=eq.${currentBranch.id}`,
+      }, () => { fetchRequests(currentBranch.id) })
       .subscribe()
     channels.push(reqChannel)
 
     return () => { channels.forEach(ch => supabase.removeChannel(ch)) }
-  }, [user?.branch_id, fetchInventory, fetchRequests])
+  }, [currentBranch?.id, fetchInventory, fetchRequests])
 
   // ═══════════════════════════════════════════════════════════════════════════
   // AUTH LISTENER
@@ -343,9 +444,11 @@ export function AppProvider({ children }) {
 
   const loadAllDataRef  = useRef(loadAllData)
   const clearDataRef    = useRef(clearData)
+  const fetchUserBranchesRef = useRef(fetchUserBranches)
 
   useEffect(() => { loadAllDataRef.current = loadAllData }, [loadAllData])
   useEffect(() => { clearDataRef.current   = clearData   }, [clearData])
+  useEffect(() => { fetchUserBranchesRef.current = fetchUserBranches }, [fetchUserBranches])
 
   useEffect(() => {
     const finishAuth = async (session) => {
@@ -368,7 +471,17 @@ export function AppProvider({ children }) {
 
       await loadUserRole(restoredUser)
 
-      await loadAllDataRef.current(restoredUser)
+      // NEW: Fetch user's branches and set default
+      const userBranches = await fetchUserBranchesRef.current(restoredUser.id, restoredUser)
+      if (userBranches.length > 0) {
+        // Set current branch to user's default or first available
+        const defaultBranch = userBranches.find(b => b.id === restoredUser.branch_id) || userBranches[0]
+        setCurrentBranch(defaultBranch)
+        await loadAllDataRef.current(restoredUser)
+      } else {
+        showToast('warning', 'No Branches', 'You have not been assigned to any branches.')
+      }
+
       setAuthReady(true)
     }
 
@@ -397,7 +510,7 @@ export function AppProvider({ children }) {
     )
 
     return () => subscription.unsubscribe()
-  }, [loadUserRole])
+  }, [loadUserRole, showToast])
 
   // ── Login ───────────────────────────────────────────────────────────────────
   const login = useCallback(async (email, password) => {
@@ -415,11 +528,18 @@ export function AppProvider({ children }) {
       console.log('[Auth] login success, profile:', loggedInUser)
       setUser(loggedInUser)
       await loadUserRole(loggedInUser)
-      await loadAllData(loggedInUser)
+
+      // NEW: Fetch branches and set default
+      const userBranches = await fetchUserBranches(loggedInUser.id, loggedInUser)
+      if (userBranches.length > 0) {
+        const defaultBranch = userBranches.find(b => b.id === loggedInUser.branch_id) || userBranches[0]
+        setCurrentBranch(defaultBranch)
+        await loadAllData(loggedInUser)
+      }
     }
 
     return { data: loggedInUser }
-  }, [loadAllData, loadUserRole])
+  }, [loadAllData, loadUserRole, fetchUserBranches])
 
   // ── Logout ──────────────────────────────────────────────────────────────────
   const logout = useCallback(async () => {
@@ -1061,6 +1181,14 @@ export function AppProvider({ children }) {
     // Utils
     withActionLock,
     loadAllData,
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BRANCH EXPORTS (NEW)
+    // ═════════════════════════════════════════════════════════════════════════
+    currentBranch,
+    branches,
+    switchBranch,
+    isLoadingBranchData,
 
     // ═════════════════════════════════════════════════════════════════════════
     // RBAC EXPORTS

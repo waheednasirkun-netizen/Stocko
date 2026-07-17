@@ -255,7 +255,7 @@ export const authApi = {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   BRANCH API
+   BRANCH API (NEW: multi-branch support)
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export const branchApi = {
@@ -268,19 +268,116 @@ export const branchApi = {
   },
 
   async getForUser(userId) {
-    const { data: userRow, error: userError } = await supabase
-      .from('users')
-      .select('branch_id')
-      .eq('id', userId)
-      .maybeSingle()
-    if (userError) return wrap(null, userError)
-    if (!userRow?.branch_id) return wrap([], null)
+    if (!userId) return wrap([], null)
+    try {
+      // Fetch branches via branch_members table
+      const { data: memberships, error: memError } = await supabase
+        .from('branch_members')
+        .select('branch_id, role')
+        .eq('user_id', userId)
 
+      if (memError) throw memError
+      if (!memberships || memberships.length === 0) return wrap([], null)
+
+      const branchIds = memberships.map(m => m.branch_id)
+      const { data: branches, error: branchError } = await supabase
+        .from('branches')
+        .select('id, name, address')
+        .in('id', branchIds)
+        .order('name')
+
+      if (branchError) throw branchError
+
+      // Merge role from membership into branch data
+      const enriched = (branches || []).map(b => {
+        const m = memberships.find(m => m.branch_id === b.id)
+        return { ...b, memberRole: m?.role || 'member' }
+      })
+
+      return wrap(enriched, null)
+    } catch (err) {
+      console.error('[api] branchApi.getForUser error:', err)
+      return wrap([], err)
+    }
+  },
+
+  async getById(id) {
+    if (!id) return wrap(null, null)
     const { data, error } = await supabase
       .from('branches')
-      .select('id, name, address')
-      .eq('id', userRow.branch_id)
-    return wrap(data ?? [], error)
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+    return wrap(data, error)
+  },
+
+  async create(branch) {
+    const { data, error } = await supabase
+      .from('branches')
+      .insert([{ ...branch, created_at: now() }])
+      .select()
+      .single()
+    return wrap(data, error)
+  },
+
+  async update(id, updates) {
+    const { id: _id, created_at: _ca, ...safe } = updates
+    const { data, error } = await supabase
+      .from('branches')
+      .update({ ...safe, updated_at: now() })
+      .eq('id', id)
+      .select()
+      .single()
+    return wrap(data, error)
+  },
+
+  async remove(id) {
+    const { error } = await supabase.from('branches').delete().eq('id', id)
+    return wrap(null, error)
+  },
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BRANCH MEMBERS API (NEW)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+export const branchMembersApi = {
+  async getMembers(branchId) {
+    if (!branchId) return wrap([], null)
+    const { data, error } = await supabase
+      .from('branch_members')
+      .select('*, users(id, name, email, role)')
+      .eq('branch_id', branchId)
+    return wrap(data, error)
+  },
+
+  async addMember({ branchId, userId, role = 'member' }) {
+    const { data, error } = await supabase
+      .from('branch_members')
+      .insert([{ branch_id: branchId, user_id: userId, role, created_at: now() }])
+      .select()
+      .single()
+    return wrap(data, error)
+  },
+
+  async removeMember(branchId, userId) {
+    const { error } = await supabase
+      .from('branch_members')
+      .delete()
+      .eq('branch_id', branchId)
+      .eq('user_id', userId)
+    return wrap(null, error)
+  },
+
+  async updateRole(branchId, userId, role) {
+    const { data, error } = await supabase
+      .from('branch_members')
+      .update({ role, updated_at: now() })
+      .eq('branch_id', branchId)
+      .eq('user_id', userId)
+      .select()
+      .single()
+    return wrap(data, error)
   },
 }
 
@@ -304,10 +401,6 @@ export const usersApi = {
     })
 
     if (response.error) {
-      // supabase-js's FunctionsHttpError.message is always the generic
-      // "Edge Function returned a non-2xx status code" — the real reason
-      // (Postgres/Auth error) is only in the response body, which has to
-      // be read separately. Surface it so the UI/toast shows the truth.
       let detail = response.error.message
       try {
         const text = await response.error.context?.text?.()
@@ -316,7 +409,7 @@ export const usersApi = {
           detail = parsed.error || parsed.message || text
         }
       } catch {
-        // context wasn't JSON/text-readable — fall back to the generic message
+        // context wasn't JSON/text-readable
       }
       console.error('[usersApi.create] failed:', detail, response.error)
       return wrap(null, { ...response.error, message: detail })
@@ -484,7 +577,7 @@ export const transactionsApi = {
       return wrap(null, txnError)
     }
 
-    // 2. Upsert inventory — use normalized name to prevent duplicates
+    // 2. Upsert inventory
     const normalizedName = itemName.toLowerCase()
     const { data: existingItem } = await supabase
       .from('inventory')
@@ -682,7 +775,6 @@ export const demandsApi = {
   },
 
   async stockOut({ item, qty, unit, type = ACTIVITY_ACTIONS.STOCK_OUT, notes, branchId, userId, userName }) {
-    // Delegate to transactionsApi.stockOut for consistency
     return transactionsApi.stockOut({ item, qty, unit, type, notes, branchId, userId, userName })
   },
 }
@@ -829,7 +921,6 @@ export const inventoryApi = {
   },
 
   async create({ itemData, branchId, userId, userName }) {
-    // Check for duplicates first
     const { data: existing } = await supabase
       .from('inventory')
       .select('id')
@@ -893,17 +984,19 @@ export const inventoryApi = {
     return wrap(null, error)
   },
 }
-// src/lib/api.js — Add at the bottom of your existing file
 
-// ─── User Roles (RBAC) ───
+/* ═══════════════════════════════════════════════════════════════════════════
+   USER ROLES / RBAC API
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 export async function fetchUserRole(userId) {
   const { data, error } = await supabase
     .from('user_roles')
     .select('role, organization_id, branch_id')
     .eq('user_id', userId)
-    .maybeSingle();
-  if (error) throw error;
-  return data;
+    .maybeSingle()
+  if (error) throw error
+  return data
 }
 
 export async function upsertUserRole(record) {
@@ -911,12 +1004,12 @@ export async function upsertUserRole(record) {
     .from('user_roles')
     .upsert(record, { onConflict: 'user_id' })
     .select()
-    .single();
-  if (error) throw error;
-  return data;
+    .single()
+  if (error) throw error
+  return data
 }
 
 export async function deleteUserRole(userId) {
-  const { error } = await supabase.from('user_roles').delete().eq('user_id', userId);
-  if (error) throw error;
+  const { error } = await supabase.from('user_roles').delete().eq('user_id', userId)
+  if (error) throw error
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, memo } from 'react'
+import { useState, useEffect, useMemo, useCallback, memo, useRef } from 'react'
 import { useApp } from '../context/AppContext'
 import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum } from '../lib/constants'
@@ -54,6 +54,39 @@ const getStockStatus = (qty, minThreshold) => {
   if (q === 0) return STOCK_STATUS.critical
   if (t > 0 && q <= t) return STOCK_STATUS.near
   return STOCK_STATUS.ok
+}
+
+/* ─── Export to CSV ─── */
+const exportToCSV = (items, filename) => {
+  if (!items || items.length === 0) return
+
+  const headers = ['Name', 'Category', 'Stock', 'Unit', 'Threshold', 'Status', 'Last Updated']
+  const rows = items.map(i => {
+    const status = getStockStatus(i.quantity, i.min_threshold)
+    return [
+      i.name || '',
+      i.category || '',
+      i.quantity || 0,
+      i.unit || 'pcs',
+      i.min_threshold ?? '',
+      status.label,
+      i.updated_at ? new Date(i.updated_at).toLocaleString() : '',
+    ]
+  })
+
+  const csvContent = [headers, ...rows]
+    .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+    .join('\n')
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -192,12 +225,109 @@ const HistoryRow = memo(({ tx, isLast, theme, itemUnit }) => {
 })
 HistoryRow.displayName = 'HistoryRow'
 
+/* ─── Branch Selector ─── */
+const BranchSelector = memo(({ branches, currentBranch, onSwitch, theme }) => {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  if (!branches || branches.length <= 1) return null
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(p => !p)}
+        style={{
+          padding: '8px 12px',
+          border: `1px solid ${theme.inputBorder || '#d1d5db'}`,
+          borderRadius: 8,
+          fontSize: 13,
+          background: theme.inputBg || '#ffffff',
+          color: theme.text || '#374151',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontWeight: 500
+        }}
+      >
+        <Ic n="Building" size={14} color={theme.primary || '#3b82f6'} />
+        <span>{currentBranch?.name || 'Select Branch'}</span>
+        <Ic n={open ? 'ChevronUp' : 'ChevronDown'} size={12} color="#9ca3af" />
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 4px)',
+          right: 0,
+          minWidth: 200,
+          background: theme.inputBg || '#ffffff',
+          border: `1px solid ${theme.inputBorder || '#d1d5db'}`,
+          borderRadius: 8,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+          zIndex: 50,
+          overflow: 'hidden'
+        }}>
+          {branches.map(branch => (
+            <div
+              key={branch.id}
+              onClick={() => { onSwitch(branch); setOpen(false) }}
+              style={{
+                padding: '10px 14px',
+                fontSize: 13,
+                cursor: 'pointer',
+                color: theme.text || '#374151',
+                background: currentBranch?.id === branch.id ? (theme.primaryBg || '#eff6ff') : 'transparent',
+                fontWeight: currentBranch?.id === branch.id ? 600 : 400,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8
+              }}
+              onMouseEnter={e => { if (currentBranch?.id !== branch.id) e.currentTarget.style.background = '#f3f4f6' }}
+              onMouseLeave={e => { if (currentBranch?.id !== branch.id) e.currentTarget.style.background = 'transparent' }}
+            >
+              <Ic n="Building" size={12} color={currentBranch?.id === branch.id ? (theme.primary || '#3b82f6') : '#9ca3af'} />
+              {branch.name}
+              {currentBranch?.id === branch.id && (
+                <Ic n="Check" size={12} color={theme.primary || '#3b82f6'} style={{ marginLeft: 'auto' }} />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+})
+BranchSelector.displayName = 'BranchSelector'
+
 /* ═══════════════════════════════════════════════════════════════════════════
    MAIN INVENTORY COMPONENT
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export default function Inventory() {
-  const { user, theme, showToast, transactions } = useApp()
+  const app = useApp()
+
+  const {
+    user,
+    theme,
+    showToast,
+    transactions,
+    currentBranch,
+    branches,
+    switchBranch,
+    isLoadingBranchData,
+  } = app || {}
 
   // ── Local State ─────────────────────────────────────────────────────────
   const [items, setItems] = useState([])
@@ -207,13 +337,14 @@ export default function Inventory() {
   const [statusFilter, setStatusFilter] = useState('All')
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' })
   const [historyItem, setHistoryItem] = useState(null)
+  const [exporting, setExporting] = useState(false)
 
   // ── Data Fetching ───────────────────────────────────────────────────────
   const loadItems = useCallback(async () => {
-    if (!user?.branch_id) return
+    if (!currentBranch?.id) return
     setLoading(true)
     try {
-      const { data, error } = await inventoryApi.getAll(user.branch_id)
+      const { data, error } = await inventoryApi.getAll(currentBranch.id)
       if (error) {
         showToast('error', 'Load Failed', error.message)
       } else {
@@ -224,9 +355,8 @@ export default function Inventory() {
     } finally {
       setLoading(false)
     }
-  }, [user?.branch_id, showToast])
+  }, [currentBranch?.id, showToast])
 
-  // Single effect for initial load — transactions change triggers via parent context
   useEffect(() => {
     loadItems()
   }, [loadItems])
@@ -259,7 +389,6 @@ export default function Inventory() {
       }
     }
 
-    // Sort history for each item
     for (const entry of map.values()) {
       entry.history.sort((a, b) =>
         new Date(b.created_at || b.date || 0) - new Date(a.created_at || a.date || 0)
@@ -372,6 +501,33 @@ export default function Inventory() {
 
   const hasActiveFilters = search || categoryFilter !== 'All' || statusFilter !== 'All'
 
+  // ── Export Handler ──────────────────────────────────────────────────────
+  const handleExport = useCallback(() => {
+    if (!filteredItems.length) {
+      showToast('info', 'Nothing to Export', 'No items match the current filters.')
+      return
+    }
+    setExporting(true)
+    const filename = `inventory-report-${currentBranch?.name || 'branch'}-${new Date().toISOString().split('T')[0]}.csv`
+    exportToCSV(filteredItems, filename)
+    showToast('success', 'Report Exported', `${filteredItems.length} items exported to ${filename}`)
+    setTimeout(() => setExporting(false), 800)
+  }, [filteredItems, currentBranch, showToast])
+
+  // ── Branch Switch ─────────────────────────────────────────────────────
+  const handleSwitchBranch = useCallback((branch) => {
+    if (switchBranch) {
+      switchBranch(branch)
+      setSearch('')
+      setCategoryFilter('All')
+      setStatusFilter('All')
+      setHistoryItem(null)
+    }
+  }, [switchBranch])
+
+  const hasMultipleBranches = branches && branches.length > 1
+  const noBranchSelected = !currentBranch && !isLoadingBranchData
+
   // ── Render ──────────────────────────────────────────────────────────────
   return (
     <div className="animate-fade-in">
@@ -388,282 +544,353 @@ export default function Inventory() {
           <h2 style={{ fontSize: 20, fontWeight: 700, color: theme.text, margin: 0 }}>
             Inventory
           </h2>
-          <p style={{ fontSize: 13, color: theme.textMuted, margin: '4px 0 0 0' }}>
-            Monitor stock levels and manage item details
-          </p>
-        </div>
-      </div>
-
-      {/* Stats */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
-        gap: 14,
-        marginBottom: 24,
-      }}>
-        {stats.map(s => <StatCard key={s.label} {...s} />)}
-      </div>
-
-      {/* Filters */}
-      <Card style={{ marginBottom: 16, padding: '12px 14px' }}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
-            <Ic
-              n="Search"
-              size={13}
-              color="#9ca3af"
-              style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}
-            />
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search items by name, category, or supplier…"
-              style={{
-                width: '100%',
-                padding: '9px 10px 9px 32px',
-                border: `1px solid ${theme.inputBorder}`,
-                borderRadius: 8,
-                fontSize: 13,
-                background: theme.inputBg,
-                color: theme.text,
-                outline: 'none',
-              }}
-            />
-          </div>
-          <select
-            value={categoryFilter}
-            onChange={e => setCategoryFilter(e.target.value)}
-            style={{
-              padding: '9px 12px',
-              border: `1px solid ${theme.inputBorder}`,
-              borderRadius: 8,
-              fontSize: 13,
-              background: theme.inputBg,
-              color: theme.text,
-              cursor: 'pointer',
-              minWidth: 140,
-            }}
-          >
-            {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-            style={{
-              padding: '9px 12px',
-              border: `1px solid ${theme.inputBorder}`,
-              borderRadius: 8,
-              fontSize: 13,
-              background: theme.inputBg,
-              color: theme.text,
-              cursor: 'pointer',
-              minWidth: 140,
-            }}
-          >
-            {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          {hasActiveFilters && (
-            <button
-              onClick={() => { setSearch(''); setCategoryFilter('All'); setStatusFilter('All') }}
-              style={{
-                padding: '9px 14px',
-                fontSize: 13,
-                fontWeight: 600,
-                color: '#2563eb',
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Reset Filters
-            </button>
+          {currentBranch && (
+            <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Ic n="MapPin" size={11} color="#9ca3af" />
+              Branch: <strong style={{ color: theme.text }}>{currentBranch.name}</strong>
+            </div>
           )}
         </div>
-      </Card>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {hasMultipleBranches && (
+            <BranchSelector
+              branches={branches}
+              currentBranch={currentBranch}
+              onSwitch={handleSwitchBranch}
+              theme={theme}
+            />
+          )}
+          {currentBranch && (
+            <Btn
+              variant="outline"
+              size="sm"
+              onClick={handleExport}
+              disabled={exporting || !filteredItems.length}
+            >
+              <Ic n="Download" size={14} color={theme.textMuted} />
+              {exporting ? 'Exporting…' : 'Export Report'}
+            </Btn>
+          )}
+        </div>
+      </div>
 
-      {/* Table */}
-      <Card style={{ padding: 0, overflow: 'hidden' }}>
-        {loading ? (
+      {/* Loading State */}
+      {isLoadingBranchData && (
+        <div style={{ padding: '60px 20px', textAlign: 'center' }}>
           <div style={{
-            padding: 60,
-            textAlign: 'center',
-            color: theme.textMuted,
-            fontSize: 14,
-          }}>
-            <Ic n="Loader2" size={24} color={theme.textMuted} className="spin" style={{ marginBottom: 12 }} />
-            <div>Loading inventory…</div>
-          </div>
-        ) : items.length === 0 ? (
-          <EmptyState
-            icon="Package"
-            title="No Inventory Available"
-            message="No stock has been received yet. Use Stock IN after creating an Item Template to add inventory."
-          />
-        ) : filteredItems.length === 0 ? (
-          <EmptyState
-            icon="Search"
-            title="No Items Match"
-            message="Try adjusting your search or filter criteria."
-          />
-        ) : (
-          <>
-            {/* Desktop Table */}
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: theme.bg }}>
-                    {[
-                      { key: 'name', label: 'Item Name' },
-                      { key: 'category', label: 'Category' },
-                      { key: 'stock', label: 'Stock' },
-                      { key: 'unit', label: 'Unit' },
-                      { key: 'threshold', label: 'Threshold' },
-                      { key: 'lastIn', label: 'Last Stock In' },
-                      { key: 'lastOut', label: 'Last Stock Out' },
-                      { key: 'status', label: 'Status' },
-                      { key: 'updated', label: 'Updated' },
-                      { key: 'actions', label: 'Actions' },
-                    ].map(h => (
-                      <th
-                        key={h.key}
-                        onClick={SORTABLE_COLUMNS.includes(h.key) ? () => handleSort(h.key) : undefined}
-                        style={{
-                          padding: '12px 14px',
-                          textAlign: 'left',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          color: theme.textMuted,
-                          borderBottom: `1px solid ${theme.border}`,
-                          whiteSpace: 'nowrap',
-                          cursor: SORTABLE_COLUMNS.includes(h.key) ? 'pointer' : 'default',
-                          userSelect: 'none',
-                        }}
-                      >
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          {h.label}
-                          {SORTABLE_COLUMNS.includes(h.key) && (
-                            <SortIcon column={h.key} sortConfig={sortConfig} theme={theme} />
-                          )}
-                        </span>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredItems.map(item => {
-                    const status = getStockStatus(item.quantity, item.min_threshold)
-                    const lastIn = getLastIn(item.name)
-                    const lastOut = getLastOut(item.name)
-                    return (
-                      <tr key={item.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
-                        <td style={{ padding: '10px 14px' }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>
-                            {item.name}
-                          </div>
-                          {item.notes && (
-                            <div style={{
-                              fontSize: 11,
-                              color: theme.textMuted,
-                              marginTop: 2,
-                              maxWidth: 180,
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                            }}>
-                              {item.notes}
-                            </div>
-                          )}
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span style={{
-                            padding: '2px 8px',
-                            borderRadius: 6,
-                            fontSize: 11,
-                            fontWeight: 600,
-                            background: theme.bg,
-                            color: theme.textMuted,
-                            border: `1px solid ${theme.border}`,
-                            whiteSpace: 'nowrap',
-                          }}>
-                            {item.category || '—'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <span style={{
-                            fontSize: 13,
-                            fontWeight: 700,
-                            color: status.color,
-                            whiteSpace: 'nowrap',
-                          }}>
-                            {fmtNum(item.quantity || 0)} {item.unit || 'pcs'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px', fontSize: 13, color: theme.textMuted }}>
-                          {item.unit || 'pcs'}
-                        </td>
-                        <td style={{ padding: '10px 14px', fontSize: 13, color: theme.textMuted }}>
-                          {item.min_threshold ?? '—'}
-                        </td>
-                        <td style={{
-                          padding: '10px 14px',
-                          fontSize: 12,
-                          color: theme.textMuted,
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {lastIn ? fmtAgo(lastIn) : '—'}
-                        </td>
-                        <td style={{
-                          padding: '10px 14px',
-                          fontSize: 12,
-                          color: theme.textMuted,
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {lastOut ? fmtAgo(lastOut) : '—'}
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <StatusBadge qty={item.quantity} minThreshold={item.min_threshold} />
-                        </td>
-                        <td style={{
-                          padding: '10px 14px',
-                          fontSize: 12,
-                          color: theme.textMuted,
-                          whiteSpace: 'nowrap',
-                        }}>
-                          <span title={fmtDateTime(item.updated_at)}>
-                            {fmtAgo(item.updated_at)}
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 14px' }}>
-                          <Btn
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setHistoryItem(item)}
-                          >
-                            <Ic n="History" size={14} color={theme.textMuted} />
-                            History
-                          </Btn>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            width: 40,
+            height: 40,
+            border: '3px solid #e5e7eb',
+            borderTopColor: theme.primary || '#3b82f6',
+            borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite',
+            margin: '0 auto 16px'
+          }} />
+          <div style={{ fontSize: 14, color: '#6b7280' }}>Loading branch data…</div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
 
-            {/* Footer */}
-            <div style={{
-              padding: '10px 14px',
-              fontSize: 12,
-              color: theme.textMuted,
-              textAlign: 'right',
-              borderTop: `1px solid ${theme.border}`,
-            }}>
-              Showing {filteredItems.length} of {items.length} items
+      {/* No Branch Selected */}
+      {noBranchSelected && (
+        <EmptyState
+          icon="Building"
+          title="No Branch Selected"
+          message={hasMultipleBranches
+            ? "Please select a branch from the dropdown above to view its inventory."
+            : "You don't have access to any branches. Contact your administrator."
+          }
+        />
+      )}
+
+      {/* Main Content */}
+      {currentBranch && !isLoadingBranchData && (
+        <>
+          {/* Stats */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
+            gap: 14,
+            marginBottom: 24,
+          }}>
+            {stats.map(s => <StatCard key={s.label} {...s} />)}
+          </div>
+
+          {/* Filters */}
+          <Card style={{ marginBottom: 16, padding: '12px 14px' }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 200 }}>
+                <Ic
+                  n="Search"
+                  size={13}
+                  color="#9ca3af"
+                  style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}
+                />
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder={`Search items in ${currentBranch.name}…`}
+                  style={{
+                    width: '100%',
+                    padding: '9px 10px 9px 32px',
+                    border: `1px solid ${theme.inputBorder}`,
+                    borderRadius: 8,
+                    fontSize: 13,
+                    background: theme.inputBg,
+                    color: theme.text,
+                    outline: 'none',
+                  }}
+                />
+              </div>
+              <select
+                value={categoryFilter}
+                onChange={e => setCategoryFilter(e.target.value)}
+                style={{
+                  padding: '9px 12px',
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  background: theme.inputBg,
+                  color: theme.text,
+                  cursor: 'pointer',
+                  minWidth: 140,
+                }}
+              >
+                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value)}
+                style={{
+                  padding: '9px 12px',
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: 8,
+                  fontSize: 13,
+                  background: theme.inputBg,
+                  color: theme.text,
+                  cursor: 'pointer',
+                  minWidth: 140,
+                }}
+              >
+                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              {hasActiveFilters && (
+                <button
+                  onClick={() => { setSearch(''); setCategoryFilter('All'); setStatusFilter('All') }}
+                  style={{
+                    padding: '9px 14px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: '#2563eb',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
-          </>
-        )}
-      </Card>
+          </Card>
+
+          {/* Table */}
+          <Card style={{ padding: 0, overflow: 'hidden' }}>
+            {loading ? (
+              <div style={{
+                padding: 60,
+                textAlign: 'center',
+                color: theme.textMuted,
+                fontSize: 14,
+              }}>
+                <Ic n="Loader2" size={24} color={theme.textMuted} className="spin" style={{ marginBottom: 12 }} />
+                <div>Loading inventory…</div>
+              </div>
+            ) : items.length === 0 ? (
+              <EmptyState
+                icon="Package"
+                title="No Inventory Available"
+                message={`No stock has been received yet for ${currentBranch.name}. Use Stock IN after creating an Item Template to add inventory.`}
+              />
+            ) : filteredItems.length === 0 ? (
+              <EmptyState
+                icon="Search"
+                title="No Items Match"
+                message="Try adjusting your search or filter criteria."
+              />
+            ) : (
+              <>
+                {/* Desktop Table */}
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: theme.bg }}>
+                        {[
+                          { key: 'name', label: 'Item Name' },
+                          { key: 'category', label: 'Category' },
+                          { key: 'stock', label: 'Stock' },
+                          { key: 'unit', label: 'Unit' },
+                          { key: 'threshold', label: 'Min Threshold' },
+                          { key: 'lastIn', label: 'Last Stock In' },
+                          { key: 'lastOut', label: 'Last Stock Out' },
+                          { key: 'status', label: 'Status' },
+                          { key: 'updated', label: 'Updated' },
+                          { key: 'actions', label: 'Actions' },
+                        ].map(h => (
+                          <th
+                            key={h.key}
+                            onClick={SORTABLE_COLUMNS.includes(h.key) ? () => handleSort(h.key) : undefined}
+                            style={{
+                              padding: '12px 14px',
+                              textAlign: 'left',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: theme.textMuted,
+                              borderBottom: `1px solid ${theme.border}`,
+                              whiteSpace: 'nowrap',
+                              cursor: SORTABLE_COLUMNS.includes(h.key) ? 'pointer' : 'default',
+                              userSelect: 'none',
+                            }}
+                          >
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              {h.label}
+                              {SORTABLE_COLUMNS.includes(h.key) && (
+                                <SortIcon column={h.key} sortConfig={sortConfig} theme={theme} />
+                              )}
+                            </span>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredItems.map(item => {
+                        const threshold = item.min_threshold ?? item.minThreshold ?? item.threshold ?? 0
+                        const status = getStockStatus(item.quantity, threshold)
+                        const lastIn = getLastIn(item.name)
+                        const lastOut = getLastOut(item.name)
+                        return (
+                          <tr key={item.id} style={{ borderBottom: `1px solid ${theme.border}` }}>
+                            <td style={{ padding: '10px 14px' }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: theme.text }}>
+                                {item.name}
+                              </div>
+                              {item.notes && (
+                                <div style={{
+                                  fontSize: 11,
+                                  color: theme.textMuted,
+                                  marginTop: 2,
+                                  maxWidth: 180,
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}>
+                                  {item.notes}
+                                </div>
+                              )}
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{
+                                padding: '2px 8px',
+                                borderRadius: 6,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                background: theme.bg,
+                                color: theme.textMuted,
+                                border: `1px solid ${theme.border}`,
+                                whiteSpace: 'nowrap',
+                              }}>
+                                {item.category || '—'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{
+                                fontSize: 13,
+                                fontWeight: 700,
+                                color: status.color,
+                                whiteSpace: 'nowrap',
+                              }}>
+                                {fmtNum(item.quantity || 0)} {item.unit || 'pcs'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 14px', fontSize: 13, color: theme.textMuted }}>
+                              {item.unit || 'pcs'}
+                            </td>
+                            {/* ─── FIXED: Threshold display with unit ─── */}
+                            <td style={{ padding: '10px 14px' }}>
+                              {threshold > 0 ? (
+                                <span style={{
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  color: '#d97706',
+                                  whiteSpace: 'nowrap',
+                                }}>
+                                  {fmtNum(threshold)} {item.unit || 'pcs'}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: 13, color: theme.textMuted }}>—</span>
+                              )}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              fontSize: 12,
+                              color: theme.textMuted,
+                              whiteSpace: 'nowrap',
+                            }}>
+                              {lastIn ? fmtAgo(lastIn) : '—'}
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              fontSize: 12,
+                              color: theme.textMuted,
+                              whiteSpace: 'nowrap',
+                            }}>
+                              {lastOut ? fmtAgo(lastOut) : '—'}
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <StatusBadge qty={item.quantity} minThreshold={threshold} />
+                            </td>
+                            <td style={{
+                              padding: '10px 14px',
+                              fontSize: 12,
+                              color: theme.textMuted,
+                              whiteSpace: 'nowrap',
+                            }}>
+                              <span title={fmtDateTime(item.updated_at)}>
+                                {fmtAgo(item.updated_at)}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <Btn
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setHistoryItem(item)}
+                              >
+                                <Ic n="History" size={14} color={theme.textMuted} />
+                                History
+                              </Btn>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Footer */}
+                <div style={{
+                  padding: '10px 14px',
+                  fontSize: 12,
+                  color: theme.textMuted,
+                  textAlign: 'right',
+                  borderTop: `1px solid ${theme.border}`,
+                }}>
+                  Showing {filteredItems.length} of {items.length} items
+                </div>
+              </>
+            )}
+          </Card>
+        </>
+      )}
 
       {/* History Modal */}
       <Modal
@@ -691,7 +918,7 @@ export default function Inventory() {
                   Current Stock: {fmtNum(historyItem.quantity || 0)} {historyItem.unit || 'pcs'}
                 </div>
               </div>
-              <StatusBadge qty={historyItem.quantity} minThreshold={historyItem.min_threshold} />
+              <StatusBadge qty={historyItem.quantity} minThreshold={historyItem.min_threshold ?? historyItem.minThreshold ?? historyItem.threshold ?? 0} />
             </div>
 
             {historyData.length === 0 ? (
