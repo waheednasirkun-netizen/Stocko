@@ -1,4 +1,4 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from "https://deno.land/std@0.201.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.35.0";
 
 const corsHeaders = {
@@ -23,19 +23,25 @@ serve(async (req: Request) => {
       );
     }
 
-    const env = (globalThis as any).Deno.env;
     const supabase = createClient(
-      env.get("SUPABASE_URL")!,
-      env.get("SUPABASE_SERVICE_ROLE_KEY")!
-    );
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+);
 
     // Create auth user
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-    });
-
+    const { data: authData, error: authError } =
+  await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: {
+      name,
+      role,
+      status,
+      phone,
+      branch_id,
+    },
+  });
     if (authError) {
       return new Response(
         JSON.stringify({ success: false, error: authError.message }),
@@ -44,19 +50,21 @@ serve(async (req: Request) => {
     }
 
     // Insert into public.users table
-    const { data: userData, error: dbError } = await supabase
-      .from("users")
-      .insert({
-        id: authData.user.id,
-        name,
-        email: email.toLowerCase(),
-        role,
-        status,
-        phone: phone || "",
-        branch_id: branch_id || null,
-      })
-      .select()
-      .single();
+    // Update the user row created by the auth trigger
+   // Update the row that was automatically created by handle_new_user()
+  const { data: userData, error: dbError } = await supabase
+  .from("users")
+  .update({
+    name,
+    full_name: name,
+    role,
+    status,
+    phone: phone || null,
+    branch_id: branch_id || null,
+  })
+  .eq("id", authData.user.id)
+  .select()
+  .single();
 
     if (dbError) {
       // Rollback: delete auth user if DB insert fails

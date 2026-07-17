@@ -210,26 +210,42 @@ export default function UserManagement() {
 
   // ── Create User via RPC (bypasses Edge Function CORS issues) ─────────
 // ── Create User via RPC ───────────────────────────────────────────────
+// ── Create User via Edge Function ──────────────────────────────────────
 const createUser = async (userData) => {
   try {
-    const { data, error } = await supabase.rpc("create_app_user", {
-      user_email: userData.email,
-      user_password: userData.password,
-      user_name: userData.name,
-      user_role: userData.role,
-      user_status: userData.status,
-      user_phone: userData.phone,
-      user_branch_id: userData.branch_id,
+    const payload = {
+      name: userData.name,
+      email: userData.email,
+      password: userData.password,
+      role: userData.role,
+      status: userData.status,
+      phone: userData.phone,
+
+      // Developers can choose a branch.
+      // Admins/Managers always use their own branch.
+      branch_id: isDeveloper
+        ? userData.branch_id
+        : currentUser.branch_id,
+    };
+
+    const { data, error } = await supabase.functions.invoke("create-user", {
+      body: payload,
     });
 
-    if (error) throw error;
+    console.log("Function data:", data);
+    console.log("Function error:", error);
 
-    setUsers(prev => [...prev, data]);
+    if (error) {
+      throw new Error(data?.error || error.message);
+    }
 
-    return {
-      success: true,
-      user: data,
-    };
+    if (!data.success) {
+      throw new Error(data.error);
+    }
+
+    setUsers((prev) => [...prev, data.user]);
+
+    return data;
   } catch (err) {
     console.error("createUser error:", err);
 
