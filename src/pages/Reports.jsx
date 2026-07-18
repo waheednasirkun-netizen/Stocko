@@ -31,6 +31,24 @@ const DATE_PRESETS = [
   { label: "Custom Range", type: "custom" },
 ];
 
+const EXPORT_TYPES = {
+  stock: [
+    { key: "stock_in", label: "Stock In Report" },
+    { key: "stock_out", label: "Stock Out Report" },
+    { key: "top_items", label: "Top Moving Items" },
+  ],
+  requests: [
+    { key: "all_requests", label: "All Requests" },
+    { key: "pending", label: "Pending Requests" },
+    { key: "completed", label: "Completed Requests" },
+  ],
+  inventory: [
+    { key: "all_inventory", label: "All Items" },
+    { key: "low_stock", label: "Low Stock Items" },
+    { key: "by_category", label: "Inventory by Category" },
+  ],
+};
+
 const fmtDate = (str) => {
   if (!str) return "—";
   const d = new Date(str);
@@ -85,7 +103,6 @@ function downloadCSV(filename, rows) {
   URL.revokeObjectURL(url);
 }
 
-/* ── Date Preset Helper ── */
 const getPresetDates = (preset) => {
   const today = new Date();
   today.setHours(23, 59, 59, 999);
@@ -151,6 +168,10 @@ export default function Reports() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [deptFilter, setDeptFilter] = useState("All");
   const [search, setSearch] = useState("");
+
+  /* ── Export Modal ── */
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [selectedExportType, setSelectedExportType] = useState(null);
 
   /* ── Reset filters on tab change ── */
   useEffect(() => {
@@ -472,7 +493,6 @@ export default function Reports() {
      STOCK OUT ACTIVITY — Transactions + Requests
   ═════════════════════════════════════════════════════════════════ */
   const stockOutActivity = useMemo(() => {
-    // Stock OUT / Wastage transactions
     const txns = (transactions || [])
       .filter((t) => inDateRange(t.created_at || t.date))
       .filter((t) => t.type === "Stock OUT" || t.type === "Wastage")
@@ -489,7 +509,6 @@ export default function Reports() {
         bg: "#dbeafe",
       }));
 
-    // Requests (demands) — treat as "outgoing" activity
     const reqStatusStyle = (status) => {
       switch (status) {
         case "Completed": return { icon: "CheckCircle", color: "#16a34a", bg: "#dcfce7", label: "Completed" };
@@ -537,22 +556,67 @@ export default function Reports() {
           }));
       });
 
-    // Combine, sort by date, limit to 8
     return [...txns, ...reqs]
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, 8);
   }, [transactions, requests, inDateRange, itemFilter, statusFilter, deptFilter, search]);
 
-  /* ── Export ── */
-  const handleExportCSV = () => {
-    if (!filteredData.length) {
-      showToast("error", "Nothing to export", "No data matches your filters");
+  /* ── Export function ── */
+  const handleExport = (exportTypeKey) => {
+    let dataToExport = [];
+    let filename = "";
+
+    if (reportType === "stock") {
+      if (exportTypeKey === "stock_in") {
+        dataToExport = filteredData.filter((r) => r["Movement Type"] === "Stock IN");
+        filename = `Stock_In_Report_${startDate.toISOString().split("T")[0]}.csv`;
+      } else if (exportTypeKey === "stock_out") {
+        dataToExport = filteredData.filter((r) => r["Movement Type"] === "Stock OUT" || r["Movement Type"] === "Wastage");
+        filename = `Stock_Out_Report_${startDate.toISOString().split("T")[0]}.csv`;
+      } else if (exportTypeKey === "top_items") {
+        dataToExport = topItemsData.map((item) => ({
+          Item: item.name,
+          "Total Movement": item.value,
+        }));
+        filename = `Top_Moving_Items_${startDate.toISOString().split("T")[0]}.csv`;
+      }
+    } else if (reportType === "requests") {
+      if (exportTypeKey === "all_requests") {
+        dataToExport = filteredData;
+        filename = `All_Requests_${startDate.toISOString().split("T")[0]}.csv`;
+      } else if (exportTypeKey === "pending") {
+        dataToExport = filteredData.filter((r) => r.Status === "Pending");
+        filename = `Pending_Requests_${startDate.toISOString().split("T")[0]}.csv`;
+      } else if (exportTypeKey === "completed") {
+        dataToExport = filteredData.filter((r) => r.Status === "Completed");
+        filename = `Completed_Requests_${startDate.toISOString().split("T")[0]}.csv`;
+      }
+    } else if (reportType === "inventory") {
+      if (exportTypeKey === "all_inventory") {
+        dataToExport = filteredData;
+        filename = `All_Inventory_${new Date().toISOString().split("T")[0]}.csv`;
+      } else if (exportTypeKey === "low_stock") {
+        dataToExport = filteredData.filter((r) => r.Status === "Low Stock");
+        filename = `Low_Stock_Items_${new Date().toISOString().split("T")[0]}.csv`;
+      } else if (exportTypeKey === "by_category") {
+        dataToExport = categoryData.map((item) => ({
+          Category: item.name,
+          "Total Quantity": item.value,
+        }));
+        filename = `Inventory_By_Category_${new Date().toISOString().split("T")[0]}.csv`;
+      }
+    }
+
+    if (!dataToExport.length) {
+      showToast("error", "Nothing to export", "No data matches your selection");
+      setShowExportModal(false);
       return;
     }
-    const typeLabel = REPORT_TYPES.find((r) => r.key === reportType)?.label || "Report";
-    const filename = `${typeLabel.replace(/\s+/g, "_")}_${startDate.toISOString().split("T")[0]}_to_${endDate.toISOString().split("T")[0]}.csv`;
-    downloadCSV(filename, filteredData);
-    showToast("success", "Exported", `${filteredData.length} rows exported to CSV`);
+
+    downloadCSV(filename, dataToExport);
+    showToast("success", "Exported", `${dataToExport.length} rows exported to CSV`);
+    setShowExportModal(false);
+    setSelectedExportType(null);
   };
 
   const handleResetFilters = () => {
@@ -621,14 +685,122 @@ export default function Reports() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <Btn variant="outline" onClick={() => window.print()}>
-            <Ic n="Printer" size={14} /> Print
-          </Btn>
-          <Btn variant="primary" onClick={handleExportCSV}>
-            <Ic n="Download" size={14} color="white" /> Export CSV
+          <Btn variant="primary" onClick={() => setShowExportModal(true)}>
+            <Ic n="Download" size={14} color="white" /> Export Report
           </Btn>
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════
+            EXPORT MODAL
+      ═══════════════════════════════════════ */}
+      {showExportModal && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: "rgba(0, 0, 0, 0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 1000,
+        }}>
+          <Card style={{
+            padding: "28px",
+            borderRadius: 16,
+            minWidth: 400,
+            maxWidth: 500,
+            boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1)",
+          }}>
+            <h2 style={{ margin: "0 0 16px 0", fontSize: 18, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+              <Ic n="Download" size={18} color="#2563eb" /> Export Report
+            </h2>
+            <p style={{ margin: "0 0 20px 0", fontSize: 13, color: theme.textMuted }}>
+              Select which report you'd like to export as CSV:
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+              {EXPORT_TYPES[reportType].map((exportOption) => (
+                <button
+                  key={exportOption.key}
+                  onClick={() => setSelectedExportType(exportOption.key)}
+                  style={{
+                    padding: "12px 16px",
+                    borderRadius: 10,
+                    border: selectedExportType === exportOption.key ? `2px solid #2563eb` : `1px solid ${theme.border}`,
+                    background: selectedExportType === exportOption.key ? "#eff6ff" : theme.bg,
+                    color: theme.text,
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    textAlign: "left",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: "50%",
+                      border: selectedExportType === exportOption.key ? "2px solid #2563eb" : `2px solid ${theme.border}`,
+                      background: selectedExportType === exportOption.key ? "#2563eb" : "transparent",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}>
+                      {selectedExportType === exportOption.key && (
+                        <span style={{ color: "#fff", fontSize: 12, fontWeight: 700 }}>✓</span>
+                      )}
+                    </div>
+                    <span>{exportOption.label}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => {
+                  setShowExportModal(false);
+                  setSelectedExportType(null);
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  borderRadius: 10,
+                  border: `1px solid ${theme.border}`,
+                  background: theme.bg,
+                  color: theme.text,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => selectedExportType && handleExport(selectedExportType)}
+                disabled={!selectedExportType}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  borderRadius: 10,
+                  border: "none",
+                  background: selectedExportType ? "#2563eb" : "#bfdbfe",
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: selectedExportType ? "pointer" : "not-allowed",
+                }}
+              >
+                Export CSV
+              </button>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════
             REPORT TYPE TABS
@@ -664,11 +836,11 @@ export default function Reports() {
       {/* ═══════════════════════════════════════
             SUMMARY CARDS
       ═══════════════════════════════════════ */}
-      <div style={{ 
-        display: "grid", 
-        gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", 
-        gap: 14, 
-        marginBottom: 20 
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+        gap: 14,
+        marginBottom: 20
       }}>
         {summary.map((s, i) => (
           <Card key={i} style={{ padding: "18px 20px", borderRadius: 14, borderLeft: `4px solid ${s.color}` }}>
@@ -697,8 +869,8 @@ export default function Reports() {
           {/* Date Preset */}
           <div>
             <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Date Range</label>
-            <select 
-              value={datePreset} 
+            <select
+              value={datePreset}
               onChange={(e) => handleDatePresetChange(e.target.value)}
               style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, minWidth: 160, fontFamily: "inherit" }}
             >
@@ -711,24 +883,24 @@ export default function Reports() {
             <>
               <div>
                 <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>From</label>
-                <DatePicker 
-                  selected={startDate} 
-                  onChange={setStartDate} 
-                  dateFormat="dd MMM yyyy" 
+                <DatePicker
+                  selected={startDate}
+                  onChange={setStartDate}
+                  dateFormat="dd MMM yyyy"
                   className="rs-datepicker"
                   maxDate={endDate}
-                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }} 
+                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }}
                 />
               </div>
               <div>
                 <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>To</label>
-                <DatePicker 
-                  selected={endDate} 
-                  onChange={setEndDate} 
-                  dateFormat="dd MMM yyyy" 
+                <DatePicker
+                  selected={endDate}
+                  onChange={setEndDate}
+                  dateFormat="dd MMM yyyy"
                   className="rs-datepicker"
                   minDate={startDate}
-                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }} 
+                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }}
                 />
               </div>
             </>
@@ -796,7 +968,8 @@ export default function Reports() {
           )}
         </div>
       </Card>
-{/* ═══════════════════════════════════════
+
+      {/* ═══════════════════════════════════════
             CHARTS (context-aware)
       ═══════════════════════════════════════ */}
       {reportType === "stock" && (
@@ -873,9 +1046,9 @@ export default function Reports() {
                     {requestStatusData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={
                         entry.name === "Completed" ? "#16a34a" :
-                        entry.name === "Pending" ? "#f59e0b" :
-                        entry.name === "Approved" ? "#2563eb" :
-                        entry.name === "Rejected" ? "#dc2626" : "#7c3aed"
+                          entry.name === "Pending" ? "#f59e0b" :
+                            entry.name === "Approved" ? "#2563eb" :
+                              entry.name === "Rejected" ? "#dc2626" : "#7c3aed"
                       } />
                     ))}
                   </Bar>
@@ -957,6 +1130,56 @@ export default function Reports() {
       )}
 
       {/* ═══════════════════════════════════════
+            LOW STOCK CARD (All Reports)
+      ═══════════════════════════════════════ */}
+      {lowStockList.length > 0 && (
+        <Card style={{ padding: 22, borderRadius: 14, marginBottom: 20, background: "#fff5f5", borderLeft: "4px solid #dc2626" }}>
+          <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: "#dc2626", display: "flex", alignItems: "center", gap: 8 }}>
+            <Ic n="AlertTriangle" size={18} color="#dc2626" /> Low Stock Alert
+          </h2>
+          <p style={{ margin: "0 0 14px 0", fontSize: 13, color: theme.textMuted }}>
+            {lowStockList.length} item(s) below stock threshold
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 }}>
+            {lowStockList.slice(0, 6).map((item, idx) => {
+              const pct = Math.min(100, Math.round(((item.quantity || 0) / (item.threshold || item.min_stock || 1)) * 100));
+              const isVeryLow = pct < 20;
+              return (
+                <div key={idx} style={{
+                  padding: 14,
+                  borderRadius: 10,
+                  background: theme.bg,
+                  border: `1px solid ${isVeryLow ? "#fecaca" : "#fca5a5"}`,
+                }}>
+                  <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, marginBottom: 8 }}>
+                    {item.name}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, fontSize: 12 }}>
+                    <span style={{ color: theme.textMuted }}>Stock Level</span>
+                    <span style={{ fontWeight: 700, color: isVeryLow ? "#dc2626" : "#f97316" }}>
+                      {fmtNum(item.quantity || 0)} / {fmtNum(item.threshold || item.min_stock || 0)}
+                    </span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 10, background: "#f1f5f9", overflow: "hidden" }}>
+                    <div style={{
+                      width: `${pct}%`,
+                      height: "100%",
+                      borderRadius: 10,
+                      background: isVeryLow ? "#dc2626" : "#f97316",
+                      transition: "width 0.6s ease"
+                    }} />
+                  </div>
+                  <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 6 }}>
+                    {isVeryLow ? "Critical" : "Low"} • {pct}% of threshold
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* ═══════════════════════════════════════
             BOTTOM ROW: STOCK ACTIVITIES + TOP ITEMS
       ═══════════════════════════════════════ */}
       {reportType === "stock" && (
@@ -1035,7 +1258,7 @@ export default function Reports() {
           </Card>
         </div>
       )}
-      
+
       {/* ═══════════════════════════════════════
             DATA TABLE
       ═══════════════════════════════════════ */}
