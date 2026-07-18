@@ -224,6 +224,9 @@ export default function Dashboard() {
 
   useEffect(() => { setMounted(true); }, []);
 
+  /* ── Role-based access: Kitchen Staff see a restricted view ── */
+  const isKitchenStaff = user?.role === "Kitchen Staff";
+
   /* ── Branch Isolation: Filter data by currentBranch ── */
   const branchRequests = useMemo(() => {
     if (!currentBranch?.id) return []
@@ -386,8 +389,10 @@ export default function Dashboard() {
         bg: r.status === "Completed" ? "#DCFEE7" : r.status === "Rejected" ? "#FEE2E2" : "#FEF3C7",
       })),
     ];
-    return items.sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 10);
-  }, [branchTransactions, branchRequests]);
+    // Kitchen staff only need to see request-related activity, not raw stock transactions
+    const scoped = isKitchenStaff ? items.filter(it => it.type === "request") : items;
+    return scoped.sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 10);
+  }, [branchTransactions, branchRequests, isKitchenStaff]);
 
   /* ── Quick Actions ── */
   const quickActions = [
@@ -460,24 +465,26 @@ export default function Dashboard() {
               theme={theme}
             />
           )}
-          {/* Time Range */}
-          <div style={{
-            display: "flex", gap: 2, padding: 3, background: theme.bg,
-            borderRadius: 10, border: `1px solid ${theme.border}`
-          }}>
-            {[
-              { key: "24h", label: "24H" },
-              { key: "7d", label: "7D" },
-              { key: "30d", label: "30D" },
-              { key: "90d", label: "90D" },
-            ].map(r => (
-              <button key={r.key} onClick={() => setTimeRange(r.key)} style={{
-                padding: "7px 14px", borderRadius: 8, border: "none", fontSize: 12,
-                fontWeight: 700, cursor: "pointer", background: timeRange === r.key ? COLORS.primary : "transparent",
-                color: timeRange === r.key ? "#fff" : theme.textMuted, transition: "all 0.15s ease",
-              }}>{r.label}</button>
-            ))}
-          </div>
+          {/* Time Range — not relevant for kitchen staff's restricted view */}
+          {!isKitchenStaff && (
+            <div style={{
+              display: "flex", gap: 2, padding: 3, background: theme.bg,
+              borderRadius: 10, border: `1px solid ${theme.border}`
+            }}>
+              {[
+                { key: "24h", label: "24H" },
+                { key: "7d", label: "7D" },
+                { key: "30d", label: "30D" },
+                { key: "90d", label: "90D" },
+              ].map(r => (
+                <button key={r.key} onClick={() => setTimeRange(r.key)} style={{
+                  padding: "7px 14px", borderRadius: 8, border: "none", fontSize: 12,
+                  fontWeight: 700, cursor: "pointer", background: timeRange === r.key ? COLORS.primary : "transparent",
+                  color: timeRange === r.key ? "#fff" : theme.textMuted, transition: "all 0.15s ease",
+                }}>{r.label}</button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -509,8 +516,141 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Main Content */}
-      {currentBranch && !isLoadingBranchData && (
+      {/* ═══════════════════════════════════════════════════
+            KITCHEN STAFF — RESTRICTED VIEW
+            Only: Pending / Completed / Rejected requests + Recent Activity
+      ═══════════════════════════════════════════════════ */}
+      {currentBranch && !isLoadingBranchData && isKitchenStaff && (
+        <>
+          {/* Simple status summary */}
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+            gap: 16, marginBottom: 24, padding: "0 4px"
+          }}>
+            {[
+              { label: "Pending Requests", value: pendingReqs.length, icon: "Clock", color: COLORS.warning, bg: "#FEF3C7" },
+              { label: "Completed", value: completedReqs.length, icon: "CheckCircle", color: COLORS.success, bg: "#D1FAE5" },
+              { label: "Rejected", value: rejectedReqs.length, icon: "Ban", color: COLORS.danger, bg: "#FEE2E2" },
+            ].map((kpi, i) => (
+              <Card key={kpi.label} style={{
+                padding: "20px 22px", borderRadius: 14, border: `1px solid ${theme.border}`,
+                opacity: mounted ? 1 : 0, transform: mounted ? "translateY(0)" : "translateY(12px)",
+                transition: `all 0.5s cubic-bezier(0.4, 0, 0.2, 1) ${i * 0.06}s`,
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+              }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 6 }}>
+                    {kpi.label}
+                  </div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: theme.text, lineHeight: 1, letterSpacing: -0.5 }}>
+                    <AnimatedCounter value={kpi.value} />
+                  </div>
+                </div>
+                <div style={{
+                  width: 42, height: 42, borderRadius: 10, background: kpi.bg,
+                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                }}>
+                  <Ic n={kpi.icon} size={20} color={kpi.color} />
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          {/* Pending Requests Table */}
+          <Card style={{ padding: 0, borderRadius: 14, border: `1px solid ${theme.border}`, overflow: "hidden", margin: "0 4px 20px 4px" }}>
+            <div style={{ padding: "20px 24px", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+                <Ic n="Clock" size={18} color={theme.text} /> Pending Requests
+                <span style={{
+                  marginLeft: 6, padding: "2px 8px", borderRadius: 10, fontSize: 11,
+                  fontWeight: 700, background: COLORS.warning + "20", color: COLORS.warning,
+                }}>{pendingReqs.length}</span>
+              </h2>
+            </div>
+            {pendingReqs.length === 0 ? (
+              <EmptyState icon="Inbox" title="No pending requests" message="All caught up!" />
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: theme.bg }}>
+                      {["Department", "Item", "Qty", "Priority", "Status", "Time"].map(h => (
+                        <th key={h} style={{
+                          padding: "12px 16px", textAlign: "left", fontSize: 10, fontWeight: 700,
+                          color: theme.textMuted, borderBottom: `1px solid ${theme.border}`,
+                          whiteSpace: "nowrap", letterSpacing: 0.5, textTransform: "uppercase",
+                        }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingReqs.map((req, idx) => {
+                      const itemName = req.item_name || req.name || "—";
+                      const qty = req.quantity || req.qty || 0;
+                      const unit = req.unit || "pcs";
+                      return (
+                        <tr key={req.id || idx} style={{
+                          borderBottom: `1px solid ${theme.border}`,
+                          background: idx % 2 === 0 ? "transparent" : theme.bg,
+                        }}>
+                          <td style={{ padding: "10px 16px", color: theme.text, fontWeight: 600, whiteSpace: "nowrap" }}>{req.department || "—"}</td>
+                          <td style={{ padding: "10px 16px", color: theme.text, whiteSpace: "nowrap" }}>{itemName}</td>
+                          <td style={{ padding: "10px 16px", color: theme.text, fontWeight: 600, whiteSpace: "nowrap" }}>{fmtNum(qty)} {unit}</td>
+                          <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}><StatusBadge status={req.priority || "Medium"} /></td>
+                          <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}><StatusBadge status={req.status || "Pending"} /></td>
+                          <td style={{ padding: "10px 16px", color: theme.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{fmtAgo(req.created_at || req.createdAt)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
+          {/* Recent Activity (requests only) */}
+          <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}`, marginBottom: 20, margin: "0 4px 20px 4px" }}>
+            <h2 style={{ margin: "0 0 20px 0", fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
+              <Ic n="Clock" size={18} color={theme.text} /> Recent Activity
+            </h2>
+            {activityFeed.length === 0 ? (
+              <EmptyState icon="Clock" title="No recent activity" message="Activity will appear here." />
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+                {activityFeed.map((act, idx) => (
+                  <div key={idx} style={{
+                    display: "flex", alignItems: "center", gap: 12, padding: 14, borderRadius: 10,
+                    background: theme.bg, border: `1px solid ${theme.border}`,
+                  }}>
+                    <div style={{
+                      width: 38, height: 38, borderRadius: 10, background: act.bg,
+                      display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                    }}>
+                      <Ic n={act.icon} size={18} color={act.color} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, color: theme.text, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {act.title}
+                      </div>
+                      <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {act.desc}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: theme.textMuted, whiteSpace: "nowrap", flexShrink: 0, fontWeight: 500 }}>
+                      {fmtAgo(act.time)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════════════
+            FULL DASHBOARD — everyone else
+      ═══════════════════════════════════════════════════ */}
+      {currentBranch && !isLoadingBranchData && !isKitchenStaff && (
         <>
           {/* ═══════════════════════════════════════════════════
                 QUICK ACTIONS
