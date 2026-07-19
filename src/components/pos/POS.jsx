@@ -1,5 +1,4 @@
-
-import { useState, useMemo, useCallback, useEffect, Fragment } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useApp } from '../../context/AppContext'
 import { inventoryApi } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
@@ -72,42 +71,29 @@ async function _completeOrder({ orderId, status, payment, paid_amount, due_amoun
   if (orderError) return { data: null, error: orderError }
 
   if (payment?.amount > 0) {
-  const { error: paymentError } = await supabase
-    .from('order_payments')
-    .insert([{
-      order_id: orderId,
-      amount: payment.amount,
-      method: payment.method,
-      remarks: payment.remarks || null,
-      created_at: _now(),
-    }]);
-
-  if (paymentError) {
-    console.warn('[POS] payment error:', paymentError);
+    const { error: paymentError } = await supabase
+      .from('order_payments')
+      .insert([{
+        order_id: orderId,
+        amount: payment.amount,
+        method: payment.method,
+        remarks: payment.remarks || null,
+        created_at: _now(),
+      }])
+    if (paymentError) {
+      console.warn('[POS] payment error:', paymentError)
+    }
   }
-}
- if (ledgerEntry) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
-  console.log("Current Auth User:", user);
-  console.log("Ledger Entry:", ledgerEntry);
-
-  const { data, error: ledgerErr } = await supabase
-    .from("ledger_entries")
-    .insert([{
-      ...ledgerEntry,
-      created_at: _now(),
-    }])
-    .select();
-
-  console.log("Insert Result:", data);
-
-  if (ledgerErr) {
-    console.error("Ledger Error:", ledgerErr);
+  if (ledgerEntry) {
+    const { error: ledgerErr } = await supabase
+      .from('ledger_entries')
+      .insert([{ ...ledgerEntry, created_at: _now() }])
+    if (ledgerErr) {
+      console.error('[POS] ledger insert error:', ledgerErr)
+    }
   }
-}
+
   if (activityLog) await _logPosActivity({ ...activityLog, action: 'Order Completed' })
   return { data: orderData, error: null }
 }
@@ -143,29 +129,72 @@ async function _processPayment({ orderId, payment, status, paid, due, ledgerEntr
   }).eq('id', orderId).select().single()
   if (orderError) return { data: null, error: orderError }
 
- if (payment?.amount > 0) {
-  try {
-    const { error } = await supabase
-      .from('order_payments')
-      .insert([{
-        order_id: orderId,
-        amount: payment.amount,
-        method: payment.method,
-        remarks: payment.remarks || null,
-        created_at: _now(),
-      }]);
-
-    if (error) throw error;
-  } catch (err) {
-    console.warn('[POS] payment error:', err);
+  if (payment?.amount > 0) {
+    try {
+      const { error } = await supabase
+        .from('order_payments')
+        .insert([{
+          order_id: orderId,
+          amount: payment.amount,
+          method: payment.method,
+          remarks: payment.remarks || null,
+          created_at: _now(),
+        }])
+      if (error) throw error
+    } catch (err) {
+      console.warn('[POS] payment error:', err)
+    }
   }
-}
   if (ledgerEntry) {
     const { error: ledgerErr } = await supabase.from('ledger_entries').insert([{ ...ledgerEntry, created_at: _now() }])
     if (ledgerErr) console.error('[POS] ledger insert error:', ledgerErr.message, ledgerErr.details)
   }
   if (activityLog) await _logPosActivity({ ...activityLog, action: 'Payment Processed' })
   return { data: orderData, error: null }
+}
+
+// NEW: edit an existing order (items / discount / tax), reconciling inventory diffs.
+async function _editOrder({ orderId, updatedOrder, updatedItems, inventoryDiffs, activityLog }) {
+  const { error: orderError } = await supabase.from('orders').update({
+    ...updatedOrder, updated_at: _now(),
+  }).eq('id', orderId)
+  if (orderError) return { data: null, error: orderError }
+
+  // Replace order items with the edited set
+  const { error: deleteError } = await supabase.from('order_items').delete().eq('order_id', orderId)
+  if (deleteError) console.error('[POS] _editOrder delete items error:', deleteError)
+
+  const lineItems = (updatedItems || []).map(item => ({
+    order_id: orderId,
+    inventory_id: item.inventory_id,
+    quantity: item.quantity,
+    price: item.price,
+    subtotal: item.subtotal,
+    name: item.name || 'Item',
+    created_at: _now(),
+  }))
+  if (lineItems.length > 0) {
+    const { error: itemsError } = await supabase.from('order_items').insert(lineItems)
+    if (itemsError) console.error('[POS] _editOrder insert items error:', itemsError)
+  }
+
+  // Reconcile inventory: diff > 0 means more stock was used (deduct), diff < 0 means stock is returned
+  for (const d of inventoryDiffs || []) {
+    if (!d.inventoryId || !d.diff) continue
+    try {
+      const { data: inv } = await supabase.from('inventory').select('id, quantity').eq('id', d.inventoryId).single()
+      if (inv) {
+        const newQty = Math.max(0, (inv.quantity || 0) - d.diff)
+        const { error: invErr } = await supabase.from('inventory').update({ quantity: newQty, updated_at: _now() }).eq('id', d.inventoryId)
+        if (invErr) console.error('[POS] _editOrder inventory adjust error:', invErr)
+      }
+    } catch (e) {
+      console.error('[POS] _editOrder inventory adjust exception:', e)
+    }
+  }
+
+  if (activityLog) await _logPosActivity({ ...activityLog, action: 'Order Edited' })
+  return { data: { id: orderId, ...updatedOrder, order_items: lineItems }, error: null }
 }
 
 const PAYMENT_METHODS = {
@@ -184,14 +213,10 @@ const ORDER_STATUS = {
   COMPLETED: 'completed',
 }
 
-async function _getCustomerBalance(customerId) {
-  if (!customerId) return 0
-  const { data } = await supabase
-    .from('ledger_entries')
-    .select('amount')
-    .eq('customer_id', customerId)
-  return (data || []).reduce((sum, entry) => sum + (parseFloat(entry.amount) || 0), 0)
-}
+/* ── Roles allowed to use the POS at all ── */
+const STOREKEEPER_ROLES = ['storekeeper', 'staff', 'cashier', 'store boy', 'storeboy']
+const ADMIN_ROLES = ['admin', 'manager', 'developer', 'superadmin', 'owner']
+const BLOCKED_ROLES = ['chief', 'viewer']
 
 /* ── Print Receipt ── */
 const printReceipt = (order, items, user) => {
@@ -221,11 +246,6 @@ const printReceipt = (order, items, user) => {
     .bold { font-weight: bold; }
     .line { border-top: 1px dashed #000; margin: 8px 0; }
     .right { text-align: right; }
-    .item { display: flex; justify-content: space-between; }
-    .item-name { flex: 1; }
-    .item-qty { width: 30px; text-align: center; }
-    .item-price { width: 60px; text-align: right; }
-    .item-total { width: 60px; text-align: right; }
     .total { font-size: 14px; font-weight: bold; }
     .footer { margin-top: 16px; font-size: 10px; text-align: center; }
     @media print {
@@ -285,8 +305,10 @@ export default function POS() {
   const { user, branch, theme } = useApp()
 
   const userRole = (user?.role || user?.user_role || user?.type || 'storekeeper').toLowerCase()
-  const isStorekeeper = ['storekeeper', 'staff', 'cashier'].includes(userRole)
-  const isAdmin = ['admin', 'manager', 'developer', 'superadmin', 'owner'].includes(userRole)
+  const isStorekeeper = STOREKEEPER_ROLES.includes(userRole)
+  const isAdmin = ADMIN_ROLES.includes(userRole)
+  const isBlockedRole = BLOCKED_ROLES.includes(userRole)
+  const hasAccess = !isBlockedRole && (isAdmin || isStorekeeper)
 
   const [cart, setCart] = useState([])
   const [discount, setDiscount] = useState(0)
@@ -347,6 +369,13 @@ export default function POS() {
   const [confirmAction, setConfirmAction] = useState(null)
   const [confirmMessage, setConfirmMessage] = useState('')
 
+  // NEW: Edit Order modal state (admin/manager only, password gated)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editOrderData, setEditOrderData] = useState(null)
+  const [editItems, setEditItems] = useState([])
+  const [editDiscount, setEditDiscount] = useState(0)
+  const [editTax, setEditTax] = useState(0)
+
   const colors = {
     bg: '#f8f9fa', panelBg: '#ffffff', sidebar: '#ffffff', text: '#1a1a2e',
     muted: '#6c757d', border: '#e9ecef', accent: '#0d6efd', accentHover: '#0b5ed7',
@@ -385,7 +414,9 @@ export default function POS() {
   const tax = useMemo(() => Math.max(0, (subtotal - discount) * (taxRate / 100)), [subtotal, discount, taxRate])
   const total = useMemo(() => Math.max(0, subtotal - discount + tax), [subtotal, discount, tax])
 
+  // ── Data loading (all scoped to the logged-in user's branch — branch isolation) ──
   useEffect(() => {
+    if (!hasAccess) return
     const load = async () => {
       if (!user?.branch_id) return
       const { data, error } = await inventoryApi.getAll(user.branch_id)
@@ -393,33 +424,39 @@ export default function POS() {
       else setInventory(data || [])
     }
     load()
-  }, [user?.branch_id])
+  }, [user?.branch_id, hasAccess])
 
   useEffect(() => {
+    if (!hasAccess) return
     const loadBranches = async () => {
       setBranchesLoading(true)
       try {
-        const { data, error } = await supabase.from('branches').select('*')
+        // Branch list is only used to attribute a sale to another branch (as a "customer").
+        // We never expose a branch's orders/customers/inventory here — only id/name/location.
+        const { data, error } = await supabase.from('branches').select('id, name, location').neq('id', user?.branch_id || '')
         if (error) console.error('[POS] branches error:', error.message)
         else setBranches(data || [])
       } catch (err) { console.error('[POS] branches load failed:', err) }
       finally { setBranchesLoading(false) }
     }
     loadBranches()
-  }, [])
+  }, [hasAccess, user?.branch_id])
 
   useEffect(() => {
+    if (!hasAccess) return
     const loadCustomers = async () => {
+      if (!user?.branch_id) return
       setCustomersLoading(true)
       try {
-        const { data, error } = await supabase.from('customers').select('*').order('name')
+        // Branch isolation: only this branch's customers are visible here.
+        const { data, error } = await supabase.from('customers').select('*').eq('branch_id', user.branch_id).order('name')
         if (error) console.error('[POS] customers error:', error.message)
         else setCustomers(data || [])
       } catch (err) { console.error('[POS] customers load failed:', err) }
       finally { setCustomersLoading(false) }
     }
     loadCustomers()
-  }, [])
+  }, [hasAccess, user?.branch_id])
 
   const handleCreateCustomer = async () => {
     if (!newCustomerName.trim()) { showError('Customer name is required'); return }
@@ -430,11 +467,11 @@ export default function POS() {
         phone: newCustomerPhone.trim() || null,
         email: newCustomerEmail.trim() || null,
         address: newCustomerAddress.trim() || null,
+        branch_id: user?.branch_id || null, // branch isolation
       }
-      const { data, error } = await supabase.from('customers').insert([payload]).select().single()
+      const { data: newCust, error } = await supabase.from('customers').insert([payload]).select().single()
       if (error) { showError('Failed to create customer: ' + error.message); return }
 
-      const newCust = data?.[0] || data
       if (newCust) {
         setCustomers(prev => [...prev, newCust].sort((a, b) => a.name?.localeCompare(b.name)))
         setSelectedCustomer(newCust)
@@ -453,6 +490,7 @@ export default function POS() {
     if (!user?.branch_id) return
     setOrdersLoading(true)
     try {
+      // Branch isolation: orders are always scoped to the logged-in user's branch.
       const { data, error } = await supabase.from('orders').select('*, order_items(*)').eq('branch_id', user.branch_id).order('created_at', { ascending: false })
       if (error) showError('Failed to load orders')
       else setOrders(data || [])
@@ -506,6 +544,7 @@ export default function POS() {
         case 'cancel': await doCancelOrder(pendingActionData); break
         case 'payment': await doProcessPayment(pendingActionData); break
         case 'complete': await doCompleteOrder(pendingActionData); break
+        case 'edit': openEditModal(pendingActionData); break
       }
       setShowPasswordModal(false); setPasswordInput(''); setPendingAction(null); setPendingActionData(null)
     } catch (err) { showError('Action failed: ' + err.message) }
@@ -538,11 +577,10 @@ export default function POS() {
   // ========================
 
   const placeOrder = async () => {
-    if (!selectedCustomer && !confirm('No customer selected. Continue as Walk-In?')) return
     if (cart.length === 0) { showError('Cart is empty'); return }
 
     askConfirm(
-      `Place order for ${selectedCustomer?.name || 'Walk-In'}?\\nTotal: Rs. ${total.toFixed(2)}\\n${cart.length} item(s) in cart.`,
+      `Place order for ${selectedCustomer?.name || 'Walk-In'}?\nTotal: Rs. ${total.toFixed(2)}\n${cart.length} item(s) in cart.`,
       async () => {
         setProcessing(true)
         try {
@@ -581,10 +619,10 @@ export default function POS() {
               description: `Order placed: ${cart.length} items, Total: ${total}`
             },
           })
-          if (error) { 
+          if (error) {
             console.error('[POS] placeOrder error:', error)
-            showError('Order failed: ' + (error.message || error.details || 'Unknown error')); 
-            return 
+            showError('Order failed: ' + (error.message || error.details || 'Unknown error'))
+            return
           }
           showSuccess('Order placed successfully!')
           clearCart()
@@ -593,9 +631,9 @@ export default function POS() {
           if (data) {
             printReceipt(data, saleItems, user)
           }
-        } catch (err) { 
+        } catch (err) {
           console.error('[POS] placeOrder exception:', err)
-          showError('Error placing order: ' + (err.message || 'Unknown error')) 
+          showError('Error placing order: ' + (err.message || 'Unknown error'))
         }
         finally { setProcessing(false) }
       }
@@ -639,7 +677,7 @@ export default function POS() {
         balance_after: newDue,
       }
 
-      const { data, error } = await _completeOrder({
+      const { error } = await _completeOrder({
         orderId,
         status: finalStatus,
         payment: {
@@ -693,7 +731,7 @@ export default function POS() {
         order_id: order.id,
       } : null
 
-      const { data, error } = await _cancelOrder({
+      const { error } = await _cancelOrder({
         orderId,
         cancelledBy: user?.id,
         cancelledByName: user?.name,
@@ -715,7 +753,7 @@ export default function POS() {
   const initiatePayment = (order) => {
     if (!isAdmin) { showError('Only managers can process payments'); return }
     setSelectedOrder(order)
-    setPaidAmount(order.due_amount || 0)
+    setPaidAmount(order.due_amount ?? order.total ?? 0)
     setPaymentMethod(PAYMENT_METHODS.CASH)
     setPaymentRemarks('')
     setShowPaymentModal(true)
@@ -731,7 +769,7 @@ export default function POS() {
     try {
       const order = orders.find(o => o.id === orderId)
       if (!order) { showError('Order not found'); return }
-      const totalDue = order.due_amount || order.total || 0
+      const totalDue = order.due_amount ?? order.total ?? 0
       const newPaid = (order.paid_amount || 0) + paidAmount
       const newDue = Math.max(0, totalDue - paidAmount)
       const finalStatus = newDue > 0 ? ORDER_STATUS.PARTIALLY_PAID : ORDER_STATUS.PAID
@@ -746,7 +784,7 @@ export default function POS() {
         balance_after: newDue,
       }
 
-      const { data, error } = await _processPayment({
+      const { error } = await _processPayment({
         orderId,
         payment: { amount: paidAmount, method: paymentMethod, remarks: paymentRemarks },
         status: finalStatus,
@@ -769,14 +807,91 @@ export default function POS() {
     } catch (err) { showError('Payment error: ' + err.message) }
   }
 
+  // ========================
+  // EDIT ORDER (admin/manager only — password gated)
+  // ========================
+  const initiateEditOrder = (order) => {
+    if (!isAdmin) { showError('Only managers can edit orders'); return }
+    requirePassword('edit', order)
+  }
+
+  const openEditModal = (order) => {
+    setEditOrderData(order)
+    setEditItems((order.order_items || []).map(it => ({
+      ...it,
+      originalQuantity: it.quantity,
+    })))
+    setEditDiscount(order.discount || 0)
+    setEditTax(order.tax || 0)
+    setShowEditModal(true)
+  }
+
+  const editSubtotal = useMemo(() => editItems.reduce((s, i) => s + (i.quantity * i.price), 0), [editItems])
+  const editTotal = useMemo(() => Math.max(0, editSubtotal - editDiscount + editTax), [editSubtotal, editDiscount, editTax])
+
+  const updateEditQty = (idx, qty) => {
+    if (qty < 1) return
+    setEditItems(prev => prev.map((it, i) => {
+      if (i !== idx) return it
+      const invItem = inventory.find(p => p.id === it.inventory_id)
+      const maxAvailable = (invItem?.quantity || 0) + (it.originalQuantity || 0)
+      if (qty > maxAvailable) { showError(`Only ${maxAvailable} units available for "${it.name}"`); return it }
+      return { ...it, quantity: qty }
+    }))
+  }
+
+  const removeEditItem = (idx) => setEditItems(prev => prev.filter((_, i) => i !== idx))
+
+  const saveEditOrder = async () => {
+    if (!editOrderData) return
+    if (editItems.length === 0) { showError('Order must have at least one item'); return }
+    setProcessing(true)
+    try {
+      const editIds = editItems.map(i => i.inventory_id)
+      const inventoryDiffs = editItems.map(item => ({
+        inventoryId: item.inventory_id,
+        diff: item.quantity - (item.originalQuantity || 0),
+      }))
+      const removedDiffs = (editOrderData.order_items || [])
+        .filter(i => !editIds.includes(i.inventory_id))
+        .map(i => ({ inventoryId: i.inventory_id, diff: -i.quantity }))
+
+      const { error } = await _editOrder({
+        orderId: editOrderData.id,
+        updatedOrder: { subtotal: editSubtotal, discount: editDiscount, tax: editTax, total: editTotal },
+        updatedItems: editItems.map(i => ({ ...i, subtotal: i.quantity * i.price })),
+        inventoryDiffs: [...inventoryDiffs, ...removedDiffs],
+        activityLog: {
+          branchId: user?.branch_id,
+          userId: user?.id,
+          userName: user?.name,
+          description: `Order edited: #${editOrderData.invoice_no || editOrderData.id}`
+        },
+      })
+      if (error) { showError('Edit failed: ' + error.message); return }
+      showSuccess('Order updated successfully')
+      setShowEditModal(false)
+      setEditOrderData(null)
+      await loadOrders()
+    } catch (err) { showError('Edit error: ' + err.message) }
+    finally { setProcessing(false) }
+  }
+
+  // Print any existing order's receipt again (no password required — non-destructive)
+  const printOrderRow = (order) => {
+    printReceipt(order, order.order_items || [], user)
+  }
+
   const viewOrderDetails = async (order) => {
     setOrderDetails(order)
     setShowOrderDetailsModal(true)
     if (order?.customer_id) {
+      // Branch isolation: only show ledger entries that belong to this branch.
       const { data: ledgerData } = await supabase
         .from('ledger_entries')
         .select('*')
         .eq('customer_id', order.customer_id)
+        .eq('branch_id', user?.branch_id)
         .order('created_at', { ascending: false })
       setCustomerLedger(ledgerData || [])
     } else {
@@ -810,7 +925,19 @@ export default function POS() {
     return isAdmin && [ORDER_STATUS.PENDING, ORDER_STATUS.PARTIALLY_PAID].includes(order.status)
   }
 
-''
+  // ── Access gate: chief & viewer roles (and anyone else not admin/storekeeper) cannot use POS ──
+  if (!hasAccess) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: colors.bg, fontFamily: '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif', textAlign: 'center', padding: '20px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🚫</div>
+        <h2 style={{ fontSize: '20px', fontWeight: 700, color: colors.text, margin: '0 0 8px' }}>Access Restricted</h2>
+        <p style={{ fontSize: '14px', color: colors.muted, maxWidth: '360px', margin: 0 }}>
+          Your role ({user?.role || 'unknown'}) does not have access to the Point of Sale module.
+          Only Admins, Developers, Managers, and Storekeepers can use POS.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -1063,7 +1190,7 @@ export default function POS() {
       {/* ── Orders Modal ── */}
       {showOrdersModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowOrdersModal(false)}>
-          <div style={{ background: colors.panelBg, borderRadius: '12px', padding: '24px', width: '700px', maxWidth: '95vw', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+          <div style={{ background: colors.panelBg, borderRadius: '12px', padding: '24px', width: '760px', maxWidth: '95vw', maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: colors.text }}>Orders</h3>
               <button onClick={() => setShowOrdersModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: colors.muted }}>×</button>
@@ -1108,10 +1235,12 @@ export default function POS() {
                             {order.status?.replace('_', ' ')}
                           </span>
                         </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                        <td style={{ padding: '10px 12px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                           <button onClick={() => viewOrderDetails(order)} style={{ padding: '4px 8px', background: colors.info, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', marginRight: '4px' }}>View</button>
+                          <button onClick={() => printOrderRow(order)} style={{ padding: '4px 8px', background: colors.purple, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', marginRight: '4px' }}>🖨️ Print</button>
                           {canModifyOrder(order) && (
                             <>
+                              <button onClick={() => initiateEditOrder(order)} style={{ padding: '4px 8px', background: colors.orange, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', marginRight: '4px' }}>✏️ Edit</button>
                               {order.status === ORDER_STATUS.PENDING && (
                                 <button onClick={() => initiateCompleteOrder(order)} style={{ padding: '4px 8px', background: colors.success, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', marginRight: '4px' }}>Complete</button>
                               )}
@@ -1157,7 +1286,7 @@ export default function POS() {
           <div style={{ background: colors.panelBg, borderRadius: '12px', padding: '24px', width: '400px', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 16px', fontSize: '18px', fontWeight: '700', color: colors.text }}>Process Payment</h3>
             <p style={{ fontSize: '14px', color: colors.muted, margin: '0 0 12px' }}>Order: #{selectedOrder?.invoice_no || selectedOrder?.id?.slice(0, 8)}</p>
-            <p style={{ fontSize: '16px', fontWeight: '700', margin: '0 0 16px' }}>Due: Rs. {selectedOrder?.due_amount?.toFixed(2) || selectedOrder?.total?.toFixed(2)}</p>
+            <p style={{ fontSize: '16px', fontWeight: '700', margin: '0 0 16px' }}>Due: Rs. {(selectedOrder?.due_amount ?? selectedOrder?.total ?? 0).toFixed(2)}</p>
             <div style={{ marginBottom: '12px' }}>
               <label style={{ display: 'block', fontSize: '11px', fontWeight: '700', color: colors.muted, marginBottom: '6px', textTransform: 'uppercase' }}>Payment Method</label>
               <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} style={{ width: '100%', padding: '10px 12px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '14px' }}>
@@ -1238,13 +1367,94 @@ export default function POS() {
         </div>
       )}
 
+      {/* ── Edit Order Modal (admin/manager, password already verified before opening) ── */}
+      {showEditModal && editOrderData && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowEditModal(false)}>
+          <div style={{ background: colors.panelBg, borderRadius: '12px', padding: '24px', width: '520px', maxWidth: '95vw', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: colors.text }}>Edit Order</h3>
+              <button onClick={() => setShowEditModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: colors.muted }}>×</button>
+            </div>
+            <p style={{ fontSize: '13px', color: colors.muted, margin: '0 0 16px' }}>Order: #{editOrderData.invoice_no || editOrderData.id?.slice(0, 8)}</p>
+
+            <div style={{ border: `1px solid ${colors.border}`, borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: colors.tableHeader }}>
+                    <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: '700', color: colors.muted, fontSize: '11px' }}>Item</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '700', color: colors.muted, fontSize: '11px' }}>Qty</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: '700', color: colors.muted, fontSize: '11px' }}>Price</th>
+                    <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: '700', color: colors.muted, fontSize: '11px' }}>Total</th>
+                    <th style={{ padding: '8px 10px' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {editItems.map((item, idx) => (
+                    <tr key={idx} style={{ borderTop: `1px solid ${colors.border}` }}>
+                      <td style={{ padding: '8px 10px' }}>{item.name}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                          <button onClick={() => updateEditQty(idx, item.quantity - 1)} style={{ width: '22px', height: '22px', border: `1px solid ${colors.border}`, background: colors.bg, borderRadius: '4px', cursor: 'pointer' }}>−</button>
+                          <span style={{ minWidth: '20px', display: 'inline-block', textAlign: 'center' }}>{item.quantity}</span>
+                          <button onClick={() => updateEditQty(idx, item.quantity + 1)} style={{ width: '22px', height: '22px', border: `1px solid ${colors.border}`, background: colors.bg, borderRadius: '4px', cursor: 'pointer' }}>+</button>
+                        </div>
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right' }}>Rs. {item.price?.toFixed(2)}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: '700' }}>Rs. {(item.quantity * item.price).toFixed(2)}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
+                        <button onClick={() => removeEditItem(idx)} style={{ background: 'transparent', color: colors.danger, border: 'none', cursor: 'pointer', fontSize: '16px' }}>×</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: '700', color: colors.muted, marginBottom: '4px', textTransform: 'uppercase' }}>Discount (Rs)</label>
+                <input type="number" min="0" value={editDiscount || ''} onChange={e => setEditDiscount(parseFloat(e.target.value) || 0)}
+                  style={{ width: '100%', padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: '700', color: colors.muted, marginBottom: '4px', textTransform: 'uppercase' }}>Tax (Rs)</label>
+                <input type="number" min="0" value={editTax || ''} onChange={e => setEditTax(parseFloat(e.target.value) || 0)}
+                  style={{ width: '100%', padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+
+            <div style={{ borderTop: `2px solid ${colors.border}`, paddingTop: '12px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                <span style={{ color: colors.muted }}>Subtotal:</span><span style={{ fontWeight: '600' }}>Rs. {editSubtotal.toFixed(2)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: '800', color: colors.text }}>
+                <span>New Total</span><span>Rs. {editTotal.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => setShowEditModal(false)} style={{ flex: 1, padding: '10px', background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={saveEditOrder} disabled={processing} style={{ flex: 1, padding: '10px', background: colors.orange, color: '#fff', border: 'none', borderRadius: '6px', fontSize: '13px', fontWeight: '700', cursor: processing ? 'not-allowed' : 'pointer' }}>
+                {processing ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Order Details Modal ── */}
       {showOrderDetailsModal && orderDetails && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }} onClick={() => setShowOrderDetailsModal(false)}>
           <div style={{ background: colors.panelBg, borderRadius: '12px', padding: '24px', width: '500px', maxWidth: '95vw', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
               <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '700', color: colors.text }}>Order Details</h3>
-              <button onClick={() => setShowOrderDetailsModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: colors.muted }}>×</button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button onClick={() => printOrderRow(orderDetails)} style={{ padding: '6px 10px', background: colors.purple, color: '#fff', border: 'none', borderRadius: '6px', fontSize: '11px', fontWeight: '700', cursor: 'pointer' }}>🖨️ Print</button>
+                {canModifyOrder(orderDetails) && (
+                  <button onClick={() => { setShowOrderDetailsModal(false); initiateEditOrder(orderDetails) }} style={{ padding: '6px 10px', background: colors.orange, color: '#fff', border: 'none', borderRadius: '6px', fontSize: '11px', fontWeight: '700', cursor: 'pointer' }}>✏️ Edit</button>
+                )}
+                <button onClick={() => setShowOrderDetailsModal(false)} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: colors.muted }}>×</button>
+              </div>
             </div>
             <div style={{ marginBottom: '16px', padding: '12px', background: colors.bg, borderRadius: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
@@ -1342,5 +1552,3 @@ export default function POS() {
     </>
   )
 }
-''
-
