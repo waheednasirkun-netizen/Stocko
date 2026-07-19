@@ -3,6 +3,12 @@ import { ROLE_COLORS } from '../../lib/constants'
 import { Ic } from '../ui'
 
 const navItems = [
+  {
+   key: 'pos',
+   label: 'Point of Sale',
+   icon: 'ShoppingCart',
+   perm: 'canAccessPOS'
+  },
   { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard',  perm: 'canAccessDashboard' },
   { key: 'inventory',            label: 'Inventory',           icon: 'Package',          perm: 'canAccessInventory' },
   { key: 'item-templates',       label: 'Item Templates',      icon: 'Box',              perm: 'canAccessItemTemplates' },
@@ -10,7 +16,8 @@ const navItems = [
   { key: 'demands',              label: 'Demands',             icon: 'ClipboardList',    perm: 'canAccessDemands' },
   { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle',      perm: 'canAccessFulfillment' },
   { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
-  { key: 'reports',              label: 'Reports',             icon: 'BarChart2',          perm: 'canViewReports' },
+  { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'BookOpen',         perm: 'canAccessLedger' },
+  { key: 'reports',              label: 'Reports',             icon: 'BarChart2',        perm: 'canViewReports' },
   { key: 'user-management',      label: 'Users',               icon: 'UserPlus',         perm: 'canAccessUserManagement' },
   { key: 'activity-log',         label: 'Activity Log',        icon: 'Activity',         perm: 'canAccessActivityLog' },
   { key: 'settings',             label: 'Settings',            icon: 'Settings',         perm: 'canAccessSettings' },
@@ -20,6 +27,7 @@ export default function Sidebar() {
   const {
     user, tab, setTab, sidebarOpen, setSidebar, dark, theme,
     userRole,
+    canAccessPOS,
     canAccessDashboard,
     canAccessInventory,
     canAccessItemTemplates,
@@ -27,6 +35,7 @@ export default function Sidebar() {
     canAccessDemands,
     canAccessFulfillment,
     canAccessSuppliers,
+    canAccessLedger,
     canViewReports,
     canAccessUserManagement,
     canAccessActivityLog,
@@ -38,8 +47,8 @@ export default function Sidebar() {
     if (window.innerWidth <= 768) setSidebar(false)
   }
 
-  // Permission check map
   const permChecks = {
+    canAccessPOS,
     canAccessDashboard,
     canAccessInventory,
     canAccessItemTemplates,
@@ -47,6 +56,7 @@ export default function Sidebar() {
     canAccessDemands,
     canAccessFulfillment,
     canAccessSuppliers,
+    canAccessLedger,
     canViewReports,
     canAccessUserManagement,
     canAccessActivityLog,
@@ -58,12 +68,10 @@ export default function Sidebar() {
     return check ? check() : true
   })
 
-  // Get role color for the badge
   const roleColor = ROLE_COLORS[userRole] || theme.textMuted
 
   return (
     <>
-      {/* Mobile overlay */}
       <div
         id="mob-overlay"
         className={sidebarOpen && window.innerWidth <= 768 ? 'active' : ''}
@@ -78,7 +86,6 @@ export default function Sidebar() {
           borderRight: `1px solid ${theme.border}`
         }}
       >
-        {/* Logo */}
         <div style={{
           padding: sidebarOpen ? '20px 16px 16px' : '20px 0 16px',
           display: 'flex', alignItems: 'center', gap: 10,
@@ -103,7 +110,6 @@ export default function Sidebar() {
           )}
         </div>
 
-        {/* Nav items */}
         <nav style={{
           padding: '12px 8px', overflowY: 'auto', flex: 1,
           height: 'calc(100vh - 160px)'
@@ -143,7 +149,6 @@ export default function Sidebar() {
           })}
         </nav>
 
-        {/* Role badge */}
         {sidebarOpen && userRole && (
           <div style={{
             padding: '8px 12px',
@@ -167,7 +172,6 @@ export default function Sidebar() {
           </div>
         )}
 
-        {/* Toggle */}
         <div style={{ padding: 8, borderTop: `1px solid ${theme.border}` }}>
           <button
             className="sidebar-toggle-btn"

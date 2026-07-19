@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useApp } from '../../context/AppContext'
-import { posApi } from '../../lib/pos'
-
+import { posApi } from "../lib/pos";
 export default function CustomerSelect({ selectedCustomer, onSelectCustomer }) {
   const { user, theme } = useApp()
   const isDark = theme === 'dark'

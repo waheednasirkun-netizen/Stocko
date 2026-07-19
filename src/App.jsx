@@ -1,6 +1,3 @@
-console.log('[stocko] App.jsx loaded')
-
-import NotFound from './pages/NotFound'
 import { useEffect } from 'react'
 import { useApp } from './context/AppContext'
 import { ToastContainer, LoadingScreen } from './components/ui'
@@ -22,14 +19,20 @@ import ActivityLog from './pages/ActivityLog'
 import Reports from './pages/Reports'
 import InventoryExpenses from './pages/InventoryExpenses'
 import SettingsPage from './pages/SettingsPage'
+import CustomerLedger from './pages/CustomerLedger'
+import POS from './components/pos/POS'
+import NotFound from './pages/NotFound'
 import { userCan } from './lib/constants'
 
+console.log('[stocko] App.jsx loaded')
+
 const PAGES = {
+  'pos':                  <POS />,
   'dashboard':            <Dashboard/>,
   'inventory':            <Inventory/>,
   'item-templates':       <ItemTemplates/>,
   'stock-movement':       <StockMovement/>,
-  'demands': <Demands/>,
+  'demands':              <Demands/>,
   'fulfillment-center':   <FulfillmentCenter/>,
   'procurement-requests': <ProcurementRequests/>,
   'purchase-orders':      <PurchaseOrders/>,
@@ -39,9 +42,11 @@ const PAGES = {
   'user-management':      <UserManagement/>,
   'activity-log':         <ActivityLog/>,
   'settings':             <SettingsPage/>,
+  'customer-ledger':      <CustomerLedger/>,
 }
 
 const MOB_TABS = [
+  { key: 'pos',                  icon: '🛒', label: 'POS'      },
   { key: 'dashboard',          icon: '🏠', label: 'Home'     },
   { key: 'inventory',          icon: '📦', label: 'Stock'    },
   { key: 'demands',            icon: '📋', label: 'Demands'  },
@@ -122,7 +127,6 @@ function AppContent() {
     systemEnabled, loading, dataLoaded, authReady, dark,
   } = useApp()
 
-  // Apply dark-mode class to body for CSS overrides
   useEffect(() => {
     if (dark) {
       document.body.classList.add('dark-mode')
@@ -132,20 +136,16 @@ function AppContent() {
     return () => document.body.classList.remove('dark-mode')
   }, [dark])
 
-  // Step 1: Wait for Supabase to check existing session.
   if (!authReady) {
     return <LoadingScreen message="Checking session…"/>
   }
 
-  // Step 2: No authenticated user
   if (!user) return <Login/>
 
-  // Step 3: Authenticated but data still loading
   if (loading && !dataLoaded) {
     return <LoadingScreen message={`Loading ${user.branch_name ?? 'branch'} data…`}/>
   }
 
-  // Step 4: User has no branch mapping
   if (!user.branch_id) {
     return (
       <div className="no-branch-page" style={{
@@ -165,7 +165,7 @@ function AppContent() {
           <p style={{ color: theme.textMuted, fontSize: 14, lineHeight: 1.7, marginBottom: 8 }}>
             Logged in as <strong>{user.email}</strong>
           </p>
-          <p style={{ color: theme.textMuted, fontSize: 13, lineHeight: 1.7, marginBottom: 8 }}>
+          <p style={{ color: theme.textMuted, FontSize: 13, lineHeight: 1.7, marginBottom: 8 }}>
             public.users.id: <code style={{
               background: theme.cardHover, padding: '2px 6px', borderRadius: 4, fontSize: 11,
               color: theme.textLight, border: `1px solid ${theme.borderLight}`
@@ -188,7 +188,6 @@ function AppContent() {
     )
   }
 
-  // Step 5: Everything ready
   return (
     <div style={{ minHeight: '100vh', background: theme.bg }}>
       {!systemEnabled && <SystemDisabledOverlay/>}
