@@ -4,6 +4,7 @@ import { Ic } from '../ui'
 
 const PAGE_TITLES = {
   'dashboard':            'Dashboard',
+  'pos':                  'Point of Sale',
   'inventory':            'Inventory',
   'item-templates':       'Item Templates',
   'stock-movement':       'Stock Movement',
@@ -17,6 +18,7 @@ const PAGE_TITLES = {
   'user-management':      'User Management',
   'activity-log':         'Activity Log',
   'settings':             'Settings',
+  'customer-ledger':      'Customer Ledger',
 }
 
 export default function Header() {

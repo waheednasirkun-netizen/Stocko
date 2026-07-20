@@ -844,7 +844,7 @@ body { overflow-x:hidden; }
 button,input,select,textarea { min-height:40px; }
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--focus-ring)!important; outline-offset:2px; }
 button:disabled,input:disabled,select:disabled,textarea:disabled { cursor:not-allowed!important; opacity:.58; }
-.app-main { padding:20px; padding-bottom:80px; min-width:0; }
+.app-main { padding:20px; min-width:0; }
 .app-page { width:100%; max-width:1600px; margin:0 auto; min-width:0; }
 .app-page > .animate-fade-in { min-width:0; }
 .app-page table { width:100%; border-collapse:collapse; }
