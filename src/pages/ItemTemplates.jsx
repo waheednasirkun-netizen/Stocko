@@ -5,7 +5,7 @@ import { useConfirm } from '../components/ui'
 import { fmtNum, userCan } from '../lib/constants'
 
 /* ─── Searchable Category Dropdown ─── */
-function CategorySelect({ value, onChange, options, theme, error, disabled, onOpenAddCategory }) {
+function CategorySelect({ value, onChange, options, theme, error, disabled, onOpenAddCategory, onOpenEditCategory }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const containerRef = useRef(null)
@@ -128,7 +128,19 @@ function CategorySelect({ value, onChange, options, theme, error, disabled, onOp
                   onMouseLeave={e => { if (value !== cat) e.currentTarget.style.background = 'transparent' }}
                 >
                   {cat}
-                  {value === cat && <Ic n="Check" size={14} color={theme.primary || '#3b82f6'} />}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {value === cat && <Ic n="Check" size={14} color={theme.primary || '#3b82f6'} />}
+                    {onOpenEditCategory && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onOpenEditCategory(cat); setOpen(false); setQuery(''); }}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 0 }}
+                        title="Edit category"
+                      >
+                        <Ic n="Edit" size={12} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))
             )}
@@ -190,21 +202,22 @@ function CategorySelect({ value, onChange, options, theme, error, disabled, onOp
   )
 }
 
-/* ─── Inline Add Category Modal ─── */
-function AddCategoryModal({ open, onClose, onSave, theme }) {
+/* ─── Add / Edit Category Modal ─── */
+function AddCategoryModal({ open, onClose, onSave, theme, existingCategories, editingCategory, onUpdate }) {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const inputRef = useRef(null)
+  const isEditMode = !!editingCategory
 
   useEffect(() => {
     if (open) {
-      setName('')
+      setName(isEditMode ? editingCategory : '')
       setError('')
       setSaving(false)
       setTimeout(() => inputRef.current?.focus(), 50)
     }
-  }, [open])
+  }, [open, isEditMode, editingCategory])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -213,13 +226,27 @@ function AddCategoryModal({ open, onClose, onSave, theme }) {
       setError('Category name is required')
       return
     }
+    // Check for duplicate (case-insensitive) — branch-scoped via existingCategories prop
+    const lowerExisting = (existingCategories || []).map(c => c.toLowerCase())
+    if (!isEditMode && lowerExisting.includes(trimmed.toLowerCase())) {
+      setError(`Category "${trimmed}" already exists`)
+      return
+    }
+    if (isEditMode && trimmed.toLowerCase() !== editingCategory.toLowerCase() && lowerExisting.includes(trimmed.toLowerCase())) {
+      setError(`Category "${trimmed}" already exists`)
+      return
+    }
     setSaving(true)
     setError('')
     try {
-      await onSave(trimmed)
+      if (isEditMode) {
+        await onUpdate(editingCategory, trimmed)
+      } else {
+        await onSave(trimmed)
+      }
       onClose()
     } catch (err) {
-      setError(err.message || 'Failed to create category')
+      setError(err.message || `Failed to ${isEditMode ? 'update' : 'create'} category`)
     } finally {
       setSaving(false)
     }
@@ -249,7 +276,9 @@ function AddCategoryModal({ open, onClose, onSave, theme }) {
         onClick={e => e.stopPropagation()}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 700, color: theme.text, margin: 0 }}>Add New Category</h3>
+          <h3 style={{ fontSize: 16, fontWeight: 700, color: theme.text, margin: 0 }}>
+            {isEditMode ? 'Edit Category' : 'Add New Category'}
+          </h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af' }}>
             <Ic n="X" size={18} />
           </button>
@@ -280,7 +309,7 @@ function AddCategoryModal({ open, onClose, onSave, theme }) {
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <Btn variant="outline" onClick={onClose} type="button">Cancel</Btn>
             <Btn variant="primary" disabled={saving} type="submit">
-              {saving ? 'Creating…' : 'Create Category'}
+              {saving ? (isEditMode ? 'Updating…' : 'Creating…') : (isEditMode ? 'Update Category' : 'Create Category')}
             </Btn>
           </div>
         </form>
@@ -304,6 +333,7 @@ export default function ItemTemplates() {
     allUnits = [],
     categories,
     createCategory,
+    updateCategory,
   } = app || {}
 
   const { confirm } = useConfirm()
@@ -312,9 +342,10 @@ export default function ItemTemplates() {
   const [editing, setEditing] = useState(null)
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
-  const [form, setForm] = useState({ name: '', category: '', unit: 'pcs', lowStockThreshold: '' })
+  const [form, setForm] = useState({ name: '', category: '', unit: 'pcs', lowStockThreshold: '', price: '' })
   const [errors, setErrors] = useState({})
   const [showAddCategory, setShowAddCategory] = useState(false)
+  const [editingCategory, setEditingCategory] = useState(null)
 
   const canManage = userCan('createTemplate', user?.role)
 
@@ -332,7 +363,7 @@ export default function ItemTemplates() {
 
   const openCreate = () => {
     setEditing(null)
-    setForm({ name: '', category: '', unit: 'pcs', lowStockThreshold: '' })
+    setForm({ name: '', category: '', unit: 'pcs', lowStockThreshold: '', price: '' })
     setErrors({})
     setShowModal(true)
   }
@@ -343,7 +374,8 @@ export default function ItemTemplates() {
       name: t.name,
       category: t.category || '',
       unit: t.unit || 'pcs',
-      lowStockThreshold: t.lowStockThreshold || t.low_stock_threshold || ''
+      lowStockThreshold: t.lowStockThreshold || t.low_stock_threshold || '',
+      price: t.price || ''
     })
     setErrors({})
     setShowModal(true)
@@ -365,6 +397,7 @@ export default function ItemTemplates() {
         category: form.category,
         unit: form.unit,
         low_stock_threshold: Math.max(0, Number(form.lowStockThreshold) || 0),
+        price: form.price !== '' ? Math.max(0, Number(form.price) || 0) : null,
         enabled: true
       }
       if (editing) await updateTemplate(editing.id, data)
@@ -379,22 +412,31 @@ export default function ItemTemplates() {
     }
   }
 
-  const handleDelete = async (t) => {
-    const ok = await confirm({ title: 'Delete Template', message: `Delete "${t.name}"?`, variant: 'danger', confirmLabel: 'Delete' })
-    if (!ok) return
-    try {
-      await deleteTemplate(t.id)
-      showToast('info', 'Template Deleted', t.name)
-    } catch (err) {
-      showToast('error', 'Delete Failed', err.message || 'Unknown error')
-    }
-  }
-
   const handleAddCategory = async (categoryName) => {
     if (!createCategory) throw new Error('createCategory not available')
     await createCategory({ name: categoryName })
     showToast('success', 'Category Created', categoryName)
     set('category', categoryName)
+  }
+
+  const handleUpdateCategory = async (oldName, newName) => {
+    if (!updateCategory) throw new Error('updateCategory not available')
+    await updateCategory(oldName, newName)
+    showToast('success', 'Category Updated', newName)
+    // Update selected category in form if it matches
+    if (form.category === oldName) {
+      set('category', newName)
+    }
+  }
+
+  const openEditCategory = (catName) => {
+    setEditingCategory(catName)
+    setShowAddCategory(true)
+  }
+
+  const closeCategoryModal = () => {
+    setShowAddCategory(false)
+    setEditingCategory(null)
   }
 
   return (
@@ -441,14 +483,18 @@ export default function ItemTemplates() {
                 {canManage && (
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button onClick={() => openEdit(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Ic n="Edit" size={14} /></button>
-                    <button onClick={() => handleDelete(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><Ic n="Trash2" size={14} /></button>
                   </div>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {(t.lowStockThreshold || t.low_stock_threshold) > 0 && (
                   <span style={{ fontSize: 11, padding: '2px 8px', background: '#fef9c3', color: '#854d0e', borderRadius: 6, fontWeight: 500 }}>
                     Min: {fmtNum(t.lowStockThreshold || t.low_stock_threshold)}
+                  </span>
+                )}
+                {t.price > 0 && (
+                  <span style={{ fontSize: 11, padding: '2px 8px', background: '#dcfce7', color: '#166534', borderRadius: 6, fontWeight: 500 }}>
+                    ${fmtNum(t.price)}
                   </span>
                 )}
               </div>
@@ -479,11 +525,12 @@ export default function ItemTemplates() {
             error={!!errors.category}
             disabled={!canManage}
             onOpenAddCategory={() => setShowAddCategory(true)}
+            onOpenEditCategory={canManage ? openEditCategory : null}
           />
           {errors.category && <div style={{ marginTop: 4, fontSize: 12, color: '#ef4444' }}>{errors.category}</div>}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
           <div>
             <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>Unit</label>
             <select
@@ -508,6 +555,19 @@ export default function ItemTemplates() {
           </div>
         </div>
 
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>Price (Optional)</label>
+          <input
+            type="number"
+            value={form.price}
+            onChange={e => set('price', e.target.value)}
+            min="0"
+            step="0.01"
+            placeholder="e.g. 9.99"
+            style={{ width: '100%', padding: '10px 12px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
+          />
+        </div>
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Btn variant="outline" onClick={() => { setShowModal(false); setErrors({}) }}>Cancel</Btn>
           <Btn variant="primary" onClick={handleSave} disabled={loading}>
@@ -518,9 +578,12 @@ export default function ItemTemplates() {
 
       <AddCategoryModal
         open={showAddCategory}
-        onClose={() => setShowAddCategory(false)}
+        onClose={closeCategoryModal}
         onSave={handleAddCategory}
+        onUpdate={handleUpdateCategory}
         theme={theme}
+        existingCategories={categoryNames}
+        editingCategory={editingCategory}
       />
     </div>
   )

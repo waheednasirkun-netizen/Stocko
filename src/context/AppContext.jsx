@@ -1232,3 +1232,6 @@ export function AppProvider({ children }) {
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
+const updateCategory = async (oldName, newName) => {
+  await api.patch('/categories/rename', { oldName, newName, branchId: currentBranch.id })
+}
