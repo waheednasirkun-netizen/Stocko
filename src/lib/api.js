@@ -1013,3 +1013,106 @@ export async function deleteUserRole(userId) {
   const { error } = await supabase.from('user_roles').delete().eq('user_id', userId)
   if (error) throw error
 }
+
+// ─── POS / Customer APIs ──────────────────────────────────────────────────
+export const posApi = {
+  // Get all customers
+  async getCustomers(branchId) {
+    if (!branchId) return { data: [], error: null }
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('branch_id', branchId)
+      .order('name')
+    return { data, error }
+  },
+
+  // Search customers by name (for POS dropdown)
+  async searchCustomers(query, branchId) {
+    if (!branchId) return { data: [], error: null }
+    if (!query || query.length < 2) {
+      return this.getCustomers(branchId)
+    }
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('branch_id', branchId)
+      .ilike('name', `%${query}%`)
+      .order('name')
+      .limit(10)
+    return { data, error }
+  },
+
+  // Search inventory items (for POS product list)
+  async searchInventory(query, branchId, limit = 48) {
+    if (!branchId) return { data: [], error: null }
+    const { data, error } = await supabase
+      .from('inventory')
+      .select('*')
+      .eq('branch_id', branchId)
+      .ilike('name', `%${query || ''}%`)
+      .order('name')
+      .limit(limit)
+    return { data, error }
+  },
+
+  // Create customer
+  async createCustomer(customerData) {
+    const { data, error } = await supabase
+      .from('customers')
+      .insert([customerData])
+      .select()
+      .single()
+    return { data, error }
+  },
+
+  // Update customer
+  async updateCustomer(id, updates) {
+    const { data, error } = await supabase
+      .from('customers')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single()
+    return { data, error }
+  },
+
+  // Delete customer
+  async deleteCustomer(id) {
+    const { error } = await supabase
+      .from('customers')
+      .delete()
+      .eq('id', id)
+    return { error }
+  },
+
+  // Get customer by ID
+  async getCustomer(id) {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('id', id)
+      .single()
+    return { data, error }
+  },
+
+  // Get customer ledger/transactions
+  async getCustomerLedger(customerId) {
+    const { data, error } = await supabase
+      .from('customer_transactions')
+      .select('*')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false })
+    return { data, error }
+  },
+
+  // Add transaction to customer ledger
+  async addTransaction(transactionData) {
+    const { data, error } = await supabase
+      .from('customer_transactions')
+      .insert([transactionData])
+      .select()
+      .single()
+    return { data, error }
+  },
+}	

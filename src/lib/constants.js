@@ -52,11 +52,15 @@ export const lightTheme = {
   card: '#ffffff',
   cardBg: '#ffffff',
   cardHover: '#f1f5f9',
+  elevated: '#ffffff',
+  subtle: '#f1f5f9',
+  selected: '#eff6ff',
 
   // Text
   text: '#111827',
   textMuted: '#6b7280',
   textLight: '#4b5563',
+  textSecondary: '#475569',
 
   // Borders
   border: '#e5e7eb',
@@ -140,11 +144,15 @@ export const darkTheme = {
   card: '#1e293b',
   cardBg: '#1e293b',
   cardHover: '#26354d',
+  elevated: '#1e293b',
+  subtle: '#162032',
+  selected: '#1e3a5f',
 
   // Text — Warm off-white for readability
   text: '#f1f5f9',
   textMuted: '#94a3b8',
   textLight: '#cbd5e1',
+  textSecondary: '#cbd5e1',
 
   // Borders — Subtle
   border: '#334155',
