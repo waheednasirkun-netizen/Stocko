@@ -215,7 +215,7 @@ const ORDER_STATUS = {
 
 /* ── Roles allowed to use the POS at all ── */
 const STOREKEEPER_ROLES = ['storekeeper', 'staff', 'cashier', 'store boy', 'storeboy']
-const ADMIN_ROLES = ['admin', 'manager', 'developer', 'superadmin', 'owner']
+const ADMIN_ROLES = ['admin', 'manager', 'developer', 'store keeper' , 'owner']
 const BLOCKED_ROLES = ['chief', 'viewer']
 
 /* ── Print Receipt ── */

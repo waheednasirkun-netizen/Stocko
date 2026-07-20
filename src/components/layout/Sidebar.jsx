@@ -4,10 +4,10 @@ import { Ic } from '../ui'
 
 const navItems = [
   {
-   key: 'pos',
-   label: 'Point of Sale',
-   icon: 'ShoppingCart',
-   perm: 'canAccessPOS'
+    key: 'pos',
+    label: 'Point of Sale',
+    icon: 'ShoppingCart',
+    perm: 'canAccessPOS'
   },
   { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard',  perm: 'canAccessDashboard' },
   { key: 'inventory',            label: 'Inventory',           icon: 'Package',          perm: 'canAccessInventory' },

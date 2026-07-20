@@ -1227,11 +1227,16 @@ export function AppProvider({ children }) {
     canAccessDashboard: () => canAccessDashboard(userRole),
     canAccessActivityLog: () => canAccessActivityLog(userRole),
     canAccessItemTemplates: () => canAccessItemTemplates(userRole),
+    canAccessLedger: () => canAccessLedger(userRole),
+    
+    // ═════════════════════════════════════════════════════════════════════════
+    // NEW: POS & LEDGER PERMISSIONS (with specific role restrictions)
+    // ═════════════════════════════════════════════════════════════════════════
+    canAccessPOS: () => hasAnyRole(userRole, ['Admin', 'Manager', 'Store Keeper', 'Developer']),
+    canAccessLedger: () => hasAnyRole(userRole, ['Admin', 'Manager', 'Developer']),
+    
     SIDEBAR_PERMISSIONS,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
-}
-const updateCategory = async (oldName, newName) => {
-  await api.patch('/categories/rename', { oldName, newName, branchId: currentBranch.id })
 }
