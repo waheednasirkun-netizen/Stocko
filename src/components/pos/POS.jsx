@@ -951,11 +951,11 @@ export default function POS() {
         .stocko-pos-header { display: none !important; }
         .stocko-pos-toolbar { flex-wrap: wrap; }
         .stocko-pos-product-card:focus-visible { outline: 3px solid ${colors.accent}40; outline-offset: 2px; }
-        .stocko-pos-cart { position: sticky; top: 84px; align-self: start; }
+        .stocko-pos-cart { position: sticky; top: 84px; align-self: stretch; }
         .stocko-pos-cart-items { scrollbar-gutter: stable; }
         .stocko-pos-cart > div:last-child { position: sticky; bottom: 0; z-index: 2; }
         @media (max-width: 1050px) {
-          .stocko-pos-shell { grid-template-columns: 1fr !important; height: auto !important; overflow: visible !important; }
+          .stocko-pos-shell { grid-template-columns: 1fr !important; grid-template-rows: auto auto auto !important; height: auto !important; overflow: visible !important; }
           .stocko-pos-page-header { grid-column: 1; }
           .stocko-pos-products { min-height: 620px; }
           .stocko-pos-cart { position: static; min-height: 560px; max-height: 760px; }
@@ -981,7 +981,7 @@ export default function POS() {
       )}
 
       {/* ── Main Layout ── */}
-      <div className="animate-fade-in stocko-pos-shell" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(350px, 390px)', columnGap: '20px', rowGap: '14px', height: 'calc(100dvh - 98px)', minHeight: '610px', width: '100%', background: colors.bg, fontFamily: 'inherit', overflow: 'hidden' }}>
+      <div className="animate-fade-in stocko-pos-shell" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(350px, 390px)', gridTemplateRows: 'auto minmax(0, 1fr)', columnGap: '20px', rowGap: '16px', height: 'calc(100dvh - 98px)', minHeight: '610px', width: '100%', background: colors.bg, fontFamily: 'inherit', overflow: 'hidden' }}>
         <div className="stocko-pos-page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 750, letterSpacing: '-0.35px', color: colors.text, margin: '0 0 4px' }}>Point of Sale</h1>
