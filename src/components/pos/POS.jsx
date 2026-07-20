@@ -302,7 +302,8 @@ const printReceipt = (order, items, user) => {
 }
 
 export default function POS() {
-  const { user, branch, theme } = useApp()
+  const { user, currentBranch, theme } = useApp()
+  const currentBranchName = currentBranch?.name || user?.branch_name || user?.branch?.name || 'Main Branch'
 
   const userRole = (user?.role || user?.user_role || user?.type || 'storekeeper').toLowerCase()
   const isStorekeeper = STOREKEEPER_ROLES.includes(userRole)
@@ -987,7 +988,7 @@ export default function POS() {
               <p style={{ fontSize: '13px', color: colors.muted, margin: 0 }}>Sell and supply stock to branches or customers</p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, color: colors.muted, fontSize: 11 }}>
                 <span style={{ width: 7, height: 7, borderRadius: '50%', background: colors.success }} />
-                Active branch: <strong style={{ color: colors.text }}>{currentBranch?.name || 'Current branch'}</strong>
+                Active branch: <strong style={{ color: colors.text }}>{currentBranchName}</strong>
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
