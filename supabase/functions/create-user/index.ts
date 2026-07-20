@@ -24,24 +24,24 @@ serve(async (req: Request) => {
     }
 
     const supabase = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-);
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
 
     // Create auth user
-    const { data: authData, error: authError } =
-  await supabase.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: {
-      name,
-      role,
-      status,
-      phone,
-      branch_id,
-    },
-  });
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        name,
+        role,
+        status,
+        phone,
+        branch_id,
+      },
+    });
+
     if (authError) {
       return new Response(
         JSON.stringify({ success: false, error: authError.message }),
@@ -49,29 +49,46 @@ serve(async (req: Request) => {
       );
     }
 
-    // Insert into public.users table
-    // Update the user row created by the auth trigger
-   // Update the row that was automatically created by handle_new_user()
-  const { data: userData, error: dbError } = await supabase
-  .from("users")
-  .update({
-    name,
-    full_name: name,
-    role,
-    status,
-    phone: phone || null,
-    branch_id: branch_id || null,
-  })
-  .eq("id", authData.user.id)
-  .select()
-  .single();
+    // ✅ FIX 1 & 2: Null check for authData.user
+    if (!authData?.user) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Failed to create user" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const userId = authData.user.id;
+
+    // Update the row that was automatically created by handle_new_user()
+    const { data: userData, error: dbError } = await supabase
+      .from("users")
+      .update({
+        name,
+        full_name: name,
+        role,
+        status,
+        phone: phone || null,
+        branch_id: branch_id || null,
+      })
+      .eq("id", userId)
+      .select()
+      .single();
 
     if (dbError) {
-      // Rollback: delete auth user if DB insert fails
-      await supabase.auth.admin.deleteUser(authData.user.id);
+      // Rollback: delete auth user if DB update fails
+      await supabase.auth.admin.deleteUser(userId);
       return new Response(
         JSON.stringify({ success: false, error: dbError.message }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ✅ FIX 3: Null check for userData (TypeScript safety)
+    if (!userData) {
+      await supabase.auth.admin.deleteUser(userId);
+      return new Response(
+        JSON.stringify({ success: false, error: "User row not found after creation" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -80,11 +97,13 @@ serve(async (req: Request) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
-  } catch (e) {
+  } catch (e: unknown) {
+    // ✅ FIX 4: Explicit type annotation + safe error extraction
+    const errorMessage = e instanceof Error ? e.message : String(e);
     return new Response(
       JSON.stringify({
         success: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage,
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
