@@ -11,6 +11,7 @@ import {
   canAccessPurchaseOrders, canAccessFinancials, canAccessInventory,
   canAccessStockMovement, canAccessFulfillment, canAccessDemands,
   canAccessDashboard, canAccessActivityLog, canAccessItemTemplates,
+  canAccessLedger,
   SIDEBAR_PERMISSIONS,
 } from '../lib/constants'
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
@@ -1228,15 +1229,11 @@ export function AppProvider({ children }) {
     canAccessActivityLog: () => canAccessActivityLog(userRole),
     canAccessItemTemplates: () => canAccessItemTemplates(userRole),
     canAccessLedger: () => canAccessLedger(userRole),
-    
-    // ═════════════════════════════════════════════════════════════════════════
-    // NEW: POS & LEDGER PERMISSIONS (with specific role restrictions)
-    // ═════════════════════════════════════════════════════════════════════════
-    canAccessPOS: () => hasAnyRole(userRole, ['Admin', 'Manager', 'Store Keeper', 'Developer']),
-    canAccessLedger: () => hasAnyRole(userRole, ['Admin', 'Manager', 'Developer']),
-    
-    SIDEBAR_PERMISSIONS,
   }
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
+  return (
+    <AppContext.Provider value={value}>
+      {children}
+    </AppContext.Provider>
+  )
 }

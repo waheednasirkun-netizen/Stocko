@@ -251,7 +251,8 @@ export const ROLES = {
   KITCHEN_STAFF: 'Kitchen Staff',
   VIEWER: 'Viewer',
 }
-
+export const canAccessLedger = (role) =>
+  [ROLES.ADMIN, ROLES.MANAGER, ROLES.CHIEF, ROLES.DEVELOPER].includes(role)
 // ALL_ROLES - Full list including Developer (for validation / role checks)
 export const ALL_ROLES = ['Developer', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer']
 
