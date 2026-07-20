@@ -536,7 +536,7 @@ export const transactionsApi = {
     return wrap(data, error)
   },
 
-  async stockIn({ item, qty, unit, source, category, notes, branchId, userId, userName }) {
+  async stockIn({ item, qty, unit, source, category, notes, price, branchId, userId, userName }) {
     if (!branchId) {
       console.error('[api] stockIn: branchId is required')
       return wrap(null, { message: 'Branch ID is required for stock in' })
@@ -544,12 +544,42 @@ export const transactionsApi = {
 
     const quantity = Math.abs(Number(qty))
     const itemName = String(item).trim()
+    // FIX: price was previously discarded entirely — it never made it onto the
+    // transaction row or the inventory row, so POS had nothing to read a price from.
+    const hasExplicitPrice = price !== undefined && price !== null && price !== ''
+    let pricePerUnit = hasExplicitPrice ? Math.max(0, Number(price) || 0) : null
 
     if (!itemName || quantity <= 0) {
       return wrap(null, { message: 'Valid item name and quantity are required' })
     }
 
-    console.log('[api] stockIn:', { branchId, itemName, quantity, unit, userId })
+    // 2a. Look up existing inventory row first (need this before the transaction insert
+    // so we can fall back to the item's current/template price when none was supplied).
+    const normalizedName = itemName.toLowerCase()
+    const { data: existingItem } = await supabase
+      .from('inventory')
+      .select('id, quantity, unit, default_price')
+      .eq('branch_id', branchId)
+      .ilike('name', normalizedName)
+      .maybeSingle()
+
+    if (pricePerUnit === null) {
+      if (existingItem?.default_price != null) {
+        // Keep the item's current price if none was entered for this stock-in.
+        pricePerUnit = Number(existingItem.default_price) || 0
+      } else {
+        // New item with no price entered — try the matching item template's default_price.
+        const { data: tmpl } = await supabase
+          .from('item_templates')
+          .select('default_price')
+          .eq('branch_id', branchId)
+          .ilike('name', normalizedName)
+          .maybeSingle()
+        pricePerUnit = Number(tmpl?.default_price) || 0
+      }
+    }
+
+    console.log('[api] stockIn:', { branchId, itemName, quantity, unit, userId, pricePerUnit })
 
     // 1. Insert transaction
     const { data: txnData, error: txnError } = await supabase
@@ -560,8 +590,8 @@ export const transactionsApi = {
         type: ACTIVITY_ACTIONS.STOCK_IN,
         quantity,
         unit,
-        price_per_unit: 0,
-        total_amount: 0,
+        price_per_unit: pricePerUnit,
+        total_amount: Number((pricePerUnit * quantity).toFixed(2)),
         source: source ?? null,
         category: category ?? null,
         notes: notes ?? null,
@@ -577,15 +607,7 @@ export const transactionsApi = {
       return wrap(null, txnError)
     }
 
-    // 2. Upsert inventory
-    const normalizedName = itemName.toLowerCase()
-    const { data: existingItem } = await supabase
-      .from('inventory')
-      .select('id, quantity, unit')
-      .eq('branch_id', branchId)
-      .ilike('name', normalizedName)
-      .maybeSingle()
-
+    // 2b. Upsert inventory (now carries default_price so POS can read it)
     if (existingItem) {
       const newQty = Number(existingItem.quantity || 0) + quantity
       const { error: updateError } = await supabase
@@ -594,6 +616,7 @@ export const transactionsApi = {
           quantity: newQty,
           unit: unit || existingItem.unit,
           category: category ?? 'Other',
+          default_price: pricePerUnit,
           updated_at: now(),
         })
         .eq('id', existingItem.id)
@@ -609,6 +632,7 @@ export const transactionsApi = {
         category: category ?? 'Other',
         quantity,
         unit,
+        default_price: pricePerUnit,
         created_at: now(),
         updated_at: now(),
       }])
