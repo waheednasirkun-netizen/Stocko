@@ -27,8 +27,8 @@ import { userCan } from './lib/constants'
 console.log('[stocko] App.jsx loaded')
 
 const PAGES = {
-  'pos':                  <POS />,
   'dashboard':            <Dashboard/>,
+  'pos':                  <POS />,
   'inventory':            <Inventory/>,
   'item-templates':       <ItemTemplates/>,
   'stock-movement':       <StockMovement/>,
@@ -55,13 +55,27 @@ const MOB_TABS = [
 ]
 
 function MobileBottomNav() {
-  const { tab, setTab } = useApp()
+  const { tab, setTab, theme } = useApp()
   return (
-    <nav id="mob-nav">
+    <nav id="mob-nav" style={{
+      position: 'fixed', bottom: 0, left: 0, right: 0,
+      background: theme.cardBg || '#ffffff',
+      borderTop: `1px solid ${theme.border || '#e2e8f0'}`,
+      display: 'flex', justifyContent: 'space-around', alignItems: 'center',
+      padding: '8px 0', zIndex: 100, boxShadow: '0 -2px 10px rgba(0,0,0,0.05)',
+    }}>
       {MOB_TABS.map(t => (
-        <button key={t.key} className={`mob-nav-btn${tab === t.key ? ' active' : ''}`}
-          onClick={() => setTab(t.key)}>
-          <span style={{ fontSize: 18 }}>{t.icon}</span>
+        <button key={t.key}
+          onClick={() => setTab(t.key)}
+          style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+            padding: '6px 12px', borderRadius: 10, border: 'none', background: 'none',
+            cursor: 'pointer', color: tab === t.key ? (theme.primary || '#3b82f6') : (theme.textMuted || '#64748b'),
+            fontSize: 11, fontWeight: tab === t.key ? 700 : 500,
+            transition: 'all 0.15s',
+          }}
+        >
+          <span style={{ fontSize: 20 }}>{t.icon}</span>
           <span>{t.label}</span>
         </button>
       ))}
@@ -70,25 +84,26 @@ function MobileBottomNav() {
 }
 
 function SystemDisabledOverlay() {
-  const { systemMsg, theme, dark } = useApp()
+  const { systemMsg, theme } = useApp()
   return (
     <div style={{
       position: 'fixed', inset: 0,
-      background: dark ? 'rgba(0,0,0,0.85)' : 'rgba(0,0,0,0.55)',
+      background: 'rgba(0,0,0,0.55)',
       zIndex: 99999,
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
     }}>
-      <div className="system-disabled-box" style={{
-        background: theme.modalBg,
-        border: `1px solid ${theme.border}`,
+      <div style={{
+        background: theme.cardBg || '#ffffff',
+        border: `1px solid ${theme.border || '#e2e8f0'}`,
         borderRadius: 16,
-        padding: 40, textAlign: 'center', maxWidth: 400, width: '100%'
+        padding: 40, textAlign: 'center', maxWidth: 400, width: '100%',
+        boxShadow: theme.shadowLg || '0 20px 60px rgba(0,0,0,0.15)',
       }}>
-        <div style={{ fontSize: 40, marginBottom: 16 }}>🔒</div>
-        <h2 style={{ color: theme.text, fontSize: 20, fontWeight: 700, marginBottom: 8 }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
+        <h2 style={{ color: theme.text || '#0f172a', fontSize: 20, fontWeight: 700, marginBottom: 8 }}>
           System Disabled
         </h2>
-        <p style={{ color: theme.textMuted, fontSize: 14, lineHeight: 1.6 }}>
+        <p style={{ color: theme.textMuted || '#64748b', fontSize: 14, lineHeight: 1.6 }}>
           {systemMsg}
         </p>
       </div>
@@ -148,39 +163,45 @@ function AppContent() {
 
   if (!user.branch_id) {
     return (
-      <div className="no-branch-page" style={{
-        minHeight: '100vh', background: theme.bg,
+      <div style={{
+        minHeight: '100vh', background: theme.bg || '#f8fafc',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
       }}>
-        <div className="no-branch-card" style={{
-          background: theme.cardBg,
+        <div style={{
+          background: theme.cardBg || '#ffffff',
           borderRadius: 16, padding: 40,
           maxWidth: 480, width: '100%', textAlign: 'center',
-          boxShadow: theme.shadowLg, border: `1px solid ${theme.border}`
+          boxShadow: theme.shadowLg || '0 20px 60px rgba(0,0,0,0.08)',
+          border: `1px solid ${theme.border || '#e2e8f0'}`,
         }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>🏢</div>
-          <h2 style={{ fontSize: 20, fontWeight: 700, color: theme.text, marginBottom: 8 }}>
+          <h2 style={{ fontSize: 20, fontWeight: 700, color: theme.text || '#0f172a', marginBottom: 8 }}>
             No Branch Assigned
           </h2>
-          <p style={{ color: theme.textMuted, fontSize: 14, lineHeight: 1.7, marginBottom: 8 }}>
+          <p style={{ color: theme.textMuted || '#64748b', fontSize: 14, lineHeight: 1.7, marginBottom: 8 }}>
             Logged in as <strong>{user.email}</strong>
           </p>
-          <p style={{ color: theme.textMuted, FontSize: 13, lineHeight: 1.7, marginBottom: 8 }}>
+          <p style={{ color: theme.textMuted || '#64748b', fontSize: 13, lineHeight: 1.7, marginBottom: 8 }}>
             public.users.id: <code style={{
-              background: theme.cardHover, padding: '2px 6px', borderRadius: 4, fontSize: 11,
-              color: theme.textLight, border: `1px solid ${theme.borderLight}`
+              background: theme.bg || '#f8fafc', padding: '2px 6px', borderRadius: 4, fontSize: 11,
+              color: theme.text || '#0f172a', border: `1px solid ${theme.border || '#e2e8f0'}`,
+              fontFamily: 'monospace',
             }}>{user.id}</code>
           </p>
-          <p style={{ color: theme.textMuted, fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>
-            Set <code>branch_id</code> on your user row in the <code>users</code> table
+          <p style={{ color: theme.textMuted || '#64748b', fontSize: 14, lineHeight: 1.7, marginBottom: 24 }}>
+            Set <code style={{ fontFamily: 'monospace', background: theme.bg || '#f8fafc', padding: '1px 4px', borderRadius: 4, border: `1px solid ${theme.border || '#e2e8f0'}` }}>branch_id</code> on your user row in the <code style={{ fontFamily: 'monospace', background: theme.bg || '#f8fafc', padding: '1px 4px', borderRadius: 4, border: `1px solid ${theme.border || '#e2e8f0'}` }}>users</code> table
             to a valid branch, then refresh the page.
           </p>
           <button
             onClick={async () => { const { authApi: a } = await import('./lib/api'); await a.logout() }}
             style={{
-              padding: '10px 28px', background: theme.primary, color: theme.primaryText,
-              border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer'
-            }}>
+              padding: '10px 28px', background: theme.primary || '#3b82f6', color: '#ffffff',
+              border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+              transition: 'all 0.15s', boxShadow: `0 4px 14px ${theme.primary || '#3b82f6'}40`,
+            }}
+            onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-1px)'}
+            onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
+          >
             Sign Out
           </button>
         </div>
@@ -189,14 +210,16 @@ function AppContent() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: theme.bg }}>
+    <div style={{ minHeight: '100vh', background: theme.bg || '#f8fafc' }}>
       {!systemEnabled && <SystemDisabledOverlay/>}
       <KeyboardShortcuts/>
       <Sidebar/>
       <div id="main-content" className={sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}>
         <Header/>
-        <main style={{ padding: 20 }} className="mobile-p">
-          {PAGES[tab] || <NotFound/>}
+        <main className="app-main mobile-p">
+          <div className="app-page">
+            {PAGES[tab] || <NotFound/>}
+          </div>
         </main>
       </div>
       <MobileBottomNav/>

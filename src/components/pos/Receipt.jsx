@@ -1,5 +1,5 @@
 // ==========================================
-// 6. Receipt.jsx — A4 + Thermal (80mm) printable
+// Receipt.jsx — A4 + Thermal (80mm) printable
 // ==========================================
 import { useRef } from 'react'
 import { useApp } from '../../context/AppContext'
@@ -11,17 +11,20 @@ const PAYMENT_LABELS = {
   credit: 'Credit',
 }
 
-/**
- * Receipt.jsx
- * Printable A4 and Thermal (80mm) receipt with print button
- */
 export default function Receipt({
   sale, items, customer, payment,
   type = 'a4', onClose, branch, user,
 }) {
   const receiptRef = useRef(null)
   const { theme } = useApp()
-  const accent = '#6366f1'
+
+  /* ── Stocko Design Tokens (theme-aware) ── */
+  const bg = theme.cardBg || '#ffffff'
+  const cardBg = theme.bg || '#f8fafc'
+  const border = theme.border || '#e2e8f0'
+  const text = theme.text || '#0f172a'
+  const muted = theme.textMuted || '#64748b'
+  const accent = theme.primary || '#3b82f6'
 
   const format = (n) => `Rs. ${(n || 0).toFixed(2)}`
 
@@ -92,38 +95,42 @@ export default function Receipt({
   return (
     <div style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-      background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
       zIndex: 2000, padding: 16,
     }} onClick={onClose}>
       <div style={{
-        background: '#fff', borderRadius: 16, width: '100%',
+        background: bg, borderRadius: 16, width: '100%',
         maxWidth: isThermal ? 400 : 700, maxHeight: '90vh', overflow: 'hidden',
-        display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.3)',
+        display: 'flex', flexDirection: 'column', boxShadow: theme.shadowLg || '0 24px 64px rgba(0,0,0,0.2)',
+        border: `1px solid ${border}`,
       }} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div style={{
-          padding: '16px 24px', borderBottom: '1px solid #e2e8f0',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc',
+          padding: '16px 24px', borderBottom: `1px solid ${border}`,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: cardBg,
         }}>
-          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: text }}>
             {isThermal ? 'Thermal Receipt (80mm)' : 'A4 Invoice'}
           </h3>
           <button onClick={onClose} style={{
-            background: 'none', border: 'none', cursor: 'pointer', fontSize: 22, color: '#64748b',
-          }}>✕</button>
+            background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: muted,
+            width: 36, height: 36, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'background 0.15s',
+          }} onMouseEnter={e => e.currentTarget.style.background = theme.cardHover || '#f1f5f9'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>✕</button>
         </div>
 
         {/* Preview */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 20, background: '#f0f0f0' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20, background: cardBg }}>
           <div ref={receiptRef} style={{
             background: '#fff', padding: isThermal ? 16 : 40,
             maxWidth: isThermal ? 320 : 600, margin: '0 auto',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
             fontFamily: "'Courier New', monospace", color: '#000',
             fontSize: isThermal ? 12 : 14, lineHeight: '1.4',
+            borderRadius: 8,
           }}>
-            {/* Header */}
+            {/* Receipt Header */}
             <div style={{
               textAlign: 'center', marginBottom: isThermal ? 12 : 24,
               paddingBottom: isThermal ? 12 : 20,
@@ -244,18 +251,19 @@ export default function Receipt({
 
         {/* Actions */}
         <div style={{
-          padding: '16px 24px', borderTop: '1px solid #e2e8f0',
-          display: 'flex', gap: 12, background: '#f8fafc',
+          padding: '16px 24px', borderTop: `1px solid ${border}`,
+          display: 'flex', gap: 12, background: cardBg,
         }}>
           <button onClick={onClose} style={{
-            flex: 1, padding: 12, borderRadius: 10, border: '1px solid #e2e8f0',
-            background: '#fff', color: '#0f172a', cursor: 'pointer',
-            fontSize: 14, fontWeight: 600,
+            flex: 1, padding: 12, borderRadius: 10, border: `1px solid ${border}`,
+            background: 'transparent', color: text, cursor: 'pointer',
+            fontSize: 14, fontWeight: 600, transition: 'all 0.15s',
           }}>Close</button>
           <button onClick={handlePrint} style={{
             flex: 2, padding: 12, borderRadius: 10, border: 'none',
             background: accent, color: '#fff', cursor: 'pointer',
             fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            transition: 'all 0.15s', boxShadow: `0 4px 14px ${accent}60`,
           }}>🖨️ Print {isThermal ? 'Thermal' : 'A4'} Receipt</button>
         </div>
       </div>

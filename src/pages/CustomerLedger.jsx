@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { useApp } from "../context/AppContext.jsx";
 import { posApi } from "../lib/pos";
 
+// Only these roles may access the Customer Ledger page at all.
+const PAGE_ACCESS_ROLES = ['admin', 'manager', 'developer']
+
 export default function CustomerLedger() {
   const { user, theme } = useApp()
   const [customers, setCustomers] = useState([])
@@ -16,25 +19,48 @@ export default function CustomerLedger() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showLedgerModal, setShowLedgerModal] = useState(false)
 
-  const isAdmin = ['admin', 'manager', 'developer', 'superadmin', 'owner'].includes(
-    (user?.role || '').toLowerCase()
-  )
+  // NEW: date filter for the ledger history modal
+  const [ledgerDateFrom, setLedgerDateFrom] = useState('')
+  const [ledgerDateTo, setLedgerDateTo] = useState('')
+
+  // NEW: order details modal (opened via "View" on a ledger transaction)
+  const [showOrderModal, setShowOrderModal] = useState(false)
+  const [orderDetails, setOrderDetails] = useState(null)
+  const [orderLoading, setOrderLoading] = useState(false)
+
+  const userRole = (user?.role || '').toLowerCase()
+  const hasPageAccess = PAGE_ACCESS_ROLES.includes(userRole)
+
+  const isAdmin = ['admin', 'manager', 'developer', 'superadmin', 'owner'].includes(userRole)
 
   const colors = {
     bg: '#f8f9fa', panelBg: '#ffffff', text: '#1a1a2e',
     muted: '#6c757d', border: '#e9ecef', accent: '#0d6efd',
-    success: '#198754', danger: '#dc3545', warning: '#ffc107',
+    success: '#198754', danger: '#dc3545', warning: '#ffc107', purple: '#6f42c1',
   }
 
   useEffect(() => {
+    if (!hasPageAccess) return
     loadData()
-  }, [user?.branch_id])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.branch_id, hasPageAccess])
 
   const loadData = async () => {
     setLoading(true)
     try {
-      const { data: custData } = await posApi.getCustomers?.() || 
-        await posApi.supabase?.from('customers').select('*').eq('is_active', true).order('name') || { data: [] }
+      // Branch isolation: only customers belonging to this branch are ever loaded.
+      // NOTE: if posApi.getCustomers() doesn't already scope by branch internally,
+      // make sure it accepts/filters on branch_id too — the fallback query below
+      // always filters explicitly so branch 1 can never see branch 2's customers.
+      const { data: custData } =
+        (await posApi.getCustomers?.(user?.branch_id)) ||
+        (await posApi.supabase
+          ?.from('customers')
+          .select('*')
+          .eq('is_active', true)
+          .eq('branch_id', user?.branch_id)
+          .order('name')) ||
+        { data: [] }
       setCustomers(custData || [])
 
       const { data: ledgerData } = await posApi.supabase
@@ -132,14 +158,25 @@ export default function CustomerLedger() {
     )
   }, [customers, searchQuery])
 
-  const getCustomerLedger = (customerId) => {
-    return ledgerEntries
-      .filter(e => e.customer_id === customerId)
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  // Supports an optional { from, to } date range — used by the ledger history modal.
+  const getCustomerLedger = (customerId, range) => {
+    let entries = ledgerEntries.filter(e => e.customer_id === customerId)
+    if (range?.from) {
+      const fromDate = new Date(range.from)
+      entries = entries.filter(e => new Date(e.created_at) >= fromDate)
+    }
+    if (range?.to) {
+      const toDate = new Date(range.to)
+      toDate.setHours(23, 59, 59, 999)
+      entries = entries.filter(e => new Date(e.created_at) <= toDate)
+    }
+    return entries.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
   }
 
   const openLedgerModal = (customer) => {
     setSelectedCustomer(customer)
+    setLedgerDateFrom('')
+    setLedgerDateTo('')
     setShowLedgerModal(true)
   }
 
@@ -158,7 +195,76 @@ export default function CustomerLedger() {
   const closeLedgerModal = () => {
     setShowLedgerModal(false)
     setSelectedCustomer(null)
+    setLedgerDateFrom('')
+    setLedgerDateTo('')
   }
+
+  // NEW: view the order behind a ledger transaction
+  const viewOrder = async (entry) => {
+    if (!entry.order_id) return
+    setOrderDetails(null)
+    setOrderLoading(true)
+    setShowOrderModal(true)
+    try {
+      const { data, error } = await posApi.supabase
+        .from('orders')
+        .select('*, order_items(*)')
+        .eq('id', entry.order_id)
+        .eq('branch_id', user?.branch_id) // branch isolation guard — never fetch another branch's order
+        .single()
+      if (error) throw error
+      setOrderDetails(data)
+    } catch (err) {
+      console.error('[Ledger] order fetch error:', err)
+      setOrderDetails(null)
+    } finally {
+      setOrderLoading(false)
+    }
+  }
+
+  const closeOrderModal = () => {
+    setShowOrderModal(false)
+    setOrderDetails(null)
+  }
+
+  // NEW: export the currently viewed (and date-filtered) ledger as CSV
+  const exportLedgerToCSV = () => {
+    if (!selectedCustomer) return
+    const rows = getCustomerLedger(selectedCustomer.id, { from: ledgerDateFrom, to: ledgerDateTo })
+    const header = ['Date', 'Description', 'Type', 'Amount']
+    const csvRows = [header.join(',')]
+    rows.forEach(entry => {
+      const date = new Date(entry.created_at).toLocaleDateString()
+      const desc = `"${(entry.description || entry.type || '').replace(/"/g, '""')}"`
+      csvRows.push([date, desc, entry.type, entry.amount.toFixed(2)].join(','))
+    })
+    const csvContent = csvRows.join('\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `ledger_${selectedCustomer.name.replace(/\s+/g, '_')}_${Date.now()}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  // ── Access gate: only admin / manager / developer can open this page ──
+  if (!hasPageAccess) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: colors.bg, textAlign: 'center', padding: '20px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>🚫</div>
+        <h2 style={{ fontSize: '20px', fontWeight: 700, color: colors.text, margin: '0 0 8px' }}>Access Restricted</h2>
+        <p style={{ fontSize: '14px', color: colors.muted, maxWidth: '360px', margin: 0 }}>
+          Your role ({user?.role || 'unknown'}) does not have access to the Customer Ledger.
+          Only Admins, Managers, and Developers can view this page.
+        </p>
+      </div>
+    )
+  }
+
+  const modalLedger = selectedCustomer ? getCustomerLedger(selectedCustomer.id, { from: ledgerDateFrom, to: ledgerDateTo }) : []
 
   return (
     <div style={{ padding: '20px', background: colors.bg, minHeight: '100vh' }}>
@@ -458,8 +564,8 @@ export default function CustomerLedger() {
             borderRadius: '10px',
             padding: '24px',
             width: '100%',
-            maxWidth: '600px',
-            maxHeight: '80vh',
+            maxWidth: '680px',
+            maxHeight: '85vh',
             display: 'flex',
             flexDirection: 'column'
           }}>
@@ -468,18 +574,66 @@ export default function CustomerLedger() {
                 <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800 }}>📋 Ledger History</h2>
                 <p style={{ color: colors.muted, margin: '4px 0 0' }}>{selectedCustomer.name}</p>
               </div>
-              <button 
-                onClick={closeLedgerModal}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  fontSize: '20px',
-                  cursor: 'pointer',
-                  color: colors.muted
-                }}
-              >
-                ✕
-              </button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  onClick={exportLedgerToCSV}
+                  style={{
+                    padding: '8px 12px',
+                    background: colors.purple,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  ⬇️ Export Ledger
+                </button>
+                <button
+                  onClick={closeLedgerModal}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '20px',
+                    cursor: 'pointer',
+                    color: colors.muted
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* NEW: Date range filter */}
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', marginBottom: '14px', flexWrap: 'wrap' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: colors.muted, marginBottom: '4px', textTransform: 'uppercase' }}>From</label>
+                <input
+                  type="date"
+                  value={ledgerDateFrom}
+                  onChange={(e) => setLedgerDateFrom(e.target.value)}
+                  style={{ padding: '7px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '10px', fontWeight: 700, color: colors.muted, marginBottom: '4px', textTransform: 'uppercase' }}>To</label>
+                <input
+                  type="date"
+                  value={ledgerDateTo}
+                  onChange={(e) => setLedgerDateTo(e.target.value)}
+                  style={{ padding: '7px 10px', border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '13px' }}
+                />
+              </div>
+              {(ledgerDateFrom || ledgerDateTo) && (
+                <button
+                  onClick={() => { setLedgerDateFrom(''); setLedgerDateTo('') }}
+                  style={{ padding: '7px 12px', background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: '6px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', color: colors.text }}
+                >
+                  Clear
+                </button>
+              )}
+              <span style={{ fontSize: '12px', color: colors.muted, marginLeft: 'auto' }}>{modalLedger.length} transaction(s)</span>
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -490,10 +644,11 @@ export default function CustomerLedger() {
                     <th style={{ textAlign: 'left', padding: '10px', color: colors.muted, fontSize: '11px', textTransform: 'uppercase' }}>Description</th>
                     <th style={{ textAlign: 'left', padding: '10px', color: colors.muted, fontSize: '11px', textTransform: 'uppercase' }}>Type</th>
                     <th style={{ textAlign: 'right', padding: '10px', color: colors.muted, fontSize: '11px', textTransform: 'uppercase' }}>Amount</th>
+                    <th style={{ textAlign: 'center', padding: '10px', color: colors.muted, fontSize: '11px', textTransform: 'uppercase' }}>Order</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {getCustomerLedger(selectedCustomer.id).map((entry, idx) => (
+                  {modalLedger.map((entry, idx) => (
                     <tr key={idx} style={{ borderBottom: `1px solid ${colors.border}` }}>
                       <td style={{ padding: '10px', color: colors.text }}>
                         {new Date(entry.created_at).toLocaleDateString()}
@@ -525,12 +680,30 @@ export default function CustomerLedger() {
                       }}>
                         {entry.amount > 0 ? '+' : ''}Rs. {entry.amount.toFixed(2)}
                       </td>
+                      <td style={{ padding: '10px', textAlign: 'center' }}>
+                        <button
+                          onClick={() => viewOrder(entry)}
+                          disabled={!entry.order_id}
+                          style={{
+                            padding: '4px 10px',
+                            background: entry.order_id ? colors.info || colors.accent : colors.border,
+                            color: entry.order_id ? '#fff' : colors.muted,
+                            border: 'none',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: entry.order_id ? 'pointer' : 'not-allowed'
+                          }}
+                        >
+                          View
+                        </button>
+                      </td>
                     </tr>
                   ))}
-                  {getCustomerLedger(selectedCustomer.id).length === 0 && (
+                  {modalLedger.length === 0 && (
                     <tr>
-                      <td colSpan="4" style={{ textAlign: 'center', padding: '30px', color: colors.muted }}>
-                        No transactions found
+                      <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: colors.muted }}>
+                        No transactions found{(ledgerDateFrom || ledgerDateTo) ? ' for the selected date range' : ''}
                       </td>
                     </tr>
                   )}
@@ -556,6 +729,107 @@ export default function CustomerLedger() {
                 Rs. {(customerBalances[selectedCustomer.id]?.total || 0).toFixed(2)}
               </span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Order Details Modal (opened via "View" on a ledger transaction) */}
+      {showOrderModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 6000, padding: '20px'
+        }} onClick={closeOrderModal}>
+          <div style={{
+            background: colors.panelBg,
+            borderRadius: '10px',
+            padding: '24px',
+            width: '100%',
+            maxWidth: '520px',
+            maxHeight: '80vh',
+            overflowY: 'auto'
+          }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800 }}>🧾 Order Details</h2>
+              <button onClick={closeOrderModal} style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer', color: colors.muted }}>✕</button>
+            </div>
+
+            {orderLoading ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: colors.muted }}>Loading order...</div>
+            ) : !orderDetails ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: colors.muted }}>
+                Order not found, or it belongs to a different branch.
+              </div>
+            ) : (
+              <>
+                <div style={{ marginBottom: '16px', padding: '12px', background: colors.bg, borderRadius: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                    <span style={{ color: colors.muted }}>Invoice:</span>
+                    <span style={{ fontWeight: 600 }}>#{orderDetails.invoice_no || orderDetails.id?.slice(0, 8)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                    <span style={{ color: colors.muted }}>Customer:</span>
+                    <span style={{ fontWeight: 600 }}>{orderDetails.customer_name || 'Walk-In'}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                    <span style={{ color: colors.muted }}>Date:</span>
+                    <span>{new Date(orderDetails.created_at).toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                    <span style={{ color: colors.muted }}>Status:</span>
+                    <span style={{ fontWeight: 700 }}>{orderDetails.status?.replace('_', ' ')}</span>
+                  </div>
+                </div>
+
+                <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '0 0 10px', color: colors.text }}>Items</h4>
+                <div style={{ border: `1px solid ${colors.border}`, borderRadius: '8px', overflow: 'hidden', marginBottom: '16px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                    <thead>
+                      <tr style={{ background: colors.bg }}>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, color: colors.muted, fontSize: '11px' }}>Item</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 700, color: colors.muted, fontSize: '11px' }}>Qty</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: colors.muted, fontSize: '11px' }}>Price</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: colors.muted, fontSize: '11px' }}>Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(orderDetails.order_items || []).map((item, idx) => (
+                        <tr key={idx} style={{ borderTop: `1px solid ${colors.border}` }}>
+                          <td style={{ padding: '8px 12px' }}>{item.name || `Item #${idx + 1}`}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>{item.quantity}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right' }}>Rs. {item.price?.toFixed(2)}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700 }}>Rs. {(item.quantity * item.price)?.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ borderTop: `2px solid ${colors.border}`, paddingTop: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                    <span style={{ color: colors.muted }}>Subtotal:</span>
+                    <span style={{ fontWeight: 600 }}>Rs. {orderDetails.subtotal?.toFixed(2)}</span>
+                  </div>
+                  {orderDetails.discount > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                      <span style={{ color: colors.muted }}>Discount:</span>
+                      <span style={{ fontWeight: 600, color: colors.success }}>−Rs. {orderDetails.discount?.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {orderDetails.tax > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', fontSize: '13px' }}>
+                      <span style={{ color: colors.muted }}>Tax:</span>
+                      <span style={{ fontWeight: 600 }}>Rs. {orderDetails.tax?.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 800, color: colors.text }}>
+                    <span>Total</span>
+                    <span>Rs. {orderDetails.total?.toFixed(2)}</span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

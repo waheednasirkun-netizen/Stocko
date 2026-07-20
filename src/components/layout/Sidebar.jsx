@@ -3,20 +3,15 @@ import { ROLE_COLORS } from '../../lib/constants'
 import { Ic } from '../ui'
 
 const navItems = [
-  {
-   key: 'pos',
-   label: 'Point of Sale',
-   icon: 'ShoppingCart',
-   perm: 'canAccessPOS'
-  },
   { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard',  perm: 'canAccessDashboard' },
+  { key: 'pos',                  label: 'Point of Sale',       icon: 'ShoppingCart',     perm: 'canAccessPOS' },
   { key: 'inventory',            label: 'Inventory',           icon: 'Package',          perm: 'canAccessInventory' },
   { key: 'item-templates',       label: 'Item Templates',      icon: 'Box',              perm: 'canAccessItemTemplates' },
   { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight',   perm: 'canAccessStockMovement' },
   { key: 'demands',              label: 'Demands',             icon: 'ClipboardList',    perm: 'canAccessDemands' },
   { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle',      perm: 'canAccessFulfillment' },
-  { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
   { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'BookOpen',         perm: 'canAccessLedger' },
+  { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
   { key: 'reports',              label: 'Reports',             icon: 'BarChart2',        perm: 'canViewReports' },
   { key: 'user-management',      label: 'Users',               icon: 'UserPlus',         perm: 'canAccessUserManagement' },
   { key: 'activity-log',         label: 'Activity Log',        icon: 'Activity',         perm: 'canAccessActivityLog' },
@@ -112,7 +107,7 @@ export default function Sidebar() {
 
         <nav style={{
           padding: '12px 8px', overflowY: 'auto', flex: 1,
-          height: 'calc(100vh - 160px)'
+          height: 'calc(100vh - 200px)'
         }}>
           {visible.map(item => {
             const active = tab === item.key
@@ -148,6 +143,25 @@ export default function Sidebar() {
             )
           })}
         </nav>
+
+        {/* Slogan */}
+        {sidebarOpen && (
+          <div style={{
+            padding: '10px 12px',
+            borderTop: `1px solid ${theme.border}`,
+            borderBottom: `1px solid ${theme.border}`,
+            textAlign: 'center',
+          }}>
+            <div style={{
+              fontSize: 10,
+              color: theme.textMuted,
+              fontStyle: 'italic',
+              lineHeight: 1.4,
+            }}>
+              💰 "Track every rupee with Customer Ledger"
+            </div>
+          </div>
+        )}
 
         {sidebarOpen && userRole && (
           <div style={{

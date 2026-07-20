@@ -836,3 +836,26 @@ body.dark-mode .login-error-box {
   background: rgba(239,68,68,0.12);
   border-color: rgba(239,68,68,0.2);
 }
+/* Stocko shared application system */
+:root { color-scheme: light; --page-bg:#f8fafc; --surface:#fff; --surface-subtle:#f1f5f9; --border:#e2e8f0; --text:#0f172a; --text-secondary:#475569; --text-muted:#64748b; --primary:#2563eb; --focus-ring:rgba(37,99,235,.22); --radius-sm:6px; --radius-md:10px; --radius-lg:14px; }
+body.dark-mode { color-scheme:dark; --page-bg:#0f172a; --surface:#1e293b; --surface-subtle:#162032; --border:#334155; --text:#f1f5f9; --text-secondary:#cbd5e1; --text-muted:#94a3b8; --primary:#60a5fa; --focus-ring:rgba(96,165,250,.28); }
+html,body,#root { min-width:320px; min-height:100%; }
+body { overflow-x:hidden; }
+button,input,select,textarea { min-height:40px; }
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--focus-ring)!important; outline-offset:2px; }
+button:disabled,input:disabled,select:disabled,textarea:disabled { cursor:not-allowed!important; opacity:.58; }
+.app-main { padding:20px; padding-bottom:80px; min-width:0; }
+.app-page { width:100%; max-width:1600px; margin:0 auto; min-width:0; }
+.app-page > .animate-fade-in { min-width:0; }
+.app-page table { width:100%; border-collapse:collapse; }
+.app-page th { font-size:11px; line-height:1.35; letter-spacing:.045em; text-transform:uppercase; }
+.app-page th,.app-page td { padding:12px 14px; vertical-align:middle; }
+.app-page button { transition:background-color .15s,border-color .15s,color .15s,box-shadow .15s,transform .15s; }
+.app-page img,.app-page svg { max-width:100%; }
+.table-responsive,.table-container { max-width:100%; overflow-x:auto; overscroll-behavior-inline:contain; }
+.modal-overlay { backdrop-filter:blur(3px); }
+.modal-content { max-width:calc(100vw - 32px)!important; }
+@media (max-width:768px) { .app-main { padding:14px; padding-bottom:82px; } .app-page th,.app-page td { padding:10px 12px; } .modal-content { padding:20px!important; max-height:calc(100dvh - 24px)!important; } }
+@media (min-width:769px) and (max-width:1180px) { .app-main { padding:16px; } .app-page th,.app-page td { padding:10px 12px; } }
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }
+@media print { :root,body.dark-mode { color-scheme:light!important; --page-bg:#fff; --surface:#fff; --text:#000; } * { box-shadow:none!important; text-shadow:none!important; } }
