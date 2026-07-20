@@ -944,13 +944,24 @@ export default function POS() {
   return (
     <>
       <style>{`
+        .stocko-pos-shell { align-items: stretch; }
+        .stocko-pos-products, .stocko-pos-cart { backdrop-filter: saturate(120%); }
+        .stocko-pos-header { background: linear-gradient(135deg, ${colors.panelBg} 0%, ${colors.bg} 100%); }
+        .stocko-pos-toolbar { flex-wrap: wrap; }
+        .stocko-pos-product-card:focus-visible { outline: 3px solid ${colors.accent}40; outline-offset: 2px; }
+        .stocko-pos-cart { position: sticky; top: 84px; align-self: start; }
+        .stocko-pos-cart-items { scrollbar-gutter: stable; }
         @media (max-width: 1050px) {
           .stocko-pos-shell { grid-template-columns: 1fr !important; height: auto !important; overflow: visible !important; }
-          .stocko-pos-products { min-height: 680px; }
-          .stocko-pos-cart { min-height: 620px; }
+          .stocko-pos-products { min-height: 620px; }
+          .stocko-pos-cart { position: static; min-height: 560px; max-height: 760px; }
         }
         @media (max-width: 640px) {
           .stocko-pos-shell { gap: 12px !important; min-height: 0 !important; }
+          .stocko-pos-header { padding: 16px !important; }
+          .stocko-pos-toolbar { padding: 12px !important; align-items: stretch !important; }
+          .stocko-pos-toolbar > * { max-width: none !important; width: 100% !important; }
+          .stocko-pos-product-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
       {/* ── Toasts ── */}
@@ -966,16 +977,18 @@ export default function POS() {
       )}
 
       {/* ── Main Layout ── */}
-      <div className="animate-fade-in stocko-pos-shell" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(340px, 390px)', gap: '18px', height: 'calc(100vh - 112px)', minHeight: '650px', maxWidth: '1440px', margin: '0 auto', background: colors.bg, fontFamily: 'inherit', overflow: 'hidden' }}>
+      <div className="animate-fade-in stocko-pos-shell" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(360px, 410px)', gap: '20px', height: 'calc(100vh - 112px)', minHeight: '650px', maxWidth: '1500px', margin: '0 auto', background: colors.bg, fontFamily: 'inherit', overflow: 'hidden' }}>
         {/* LEFT PANEL - Product Catalog */}
         <div className="stocko-pos-products" style={{ minWidth: 0, display: 'flex', flexDirection: 'column', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: '14px', overflow: 'hidden', boxShadow: '0 1px 2px rgba(15,23,42,0.04)' }}>
           {/* Header */}
-          <div style={{ padding: '20px 22px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div className="stocko-pos-header" style={{ padding: '22px 24px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <div>
               <h1 style={{ fontSize: '24px', fontWeight: '800', letterSpacing: '-0.5px', color: colors.text, margin: '0 0 5px' }}>Point of Sale</h1>
-              <p style={{ fontSize: '12px', color: colors.muted, margin: 0 }}>
-                {isStorekeeper && !isAdmin ? 'Create orders for customers' : 'Manage orders, payments & complete sales'}
-              </p>
+              <p style={{ fontSize: '13px', color: colors.muted, margin: 0 }}>Sell and supply stock to branches or customers</p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, color: colors.muted, fontSize: 11 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: colors.success }} />
+                Active branch: <strong style={{ color: colors.text }}>{currentBranch?.name || 'Current branch'}</strong>
+              </div>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
               <div style={{ background: isAdmin ? '#DBEAFE' : '#DCFCE7', color: isAdmin ? '#1E40AF' : '#166534', padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: '700' }}>
@@ -989,7 +1002,7 @@ export default function POS() {
           </div>
 
           {/* Search & Filters */}
-          <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', gap: '10px', alignItems: 'center', background: colors.bg }}>
+          <div className="stocko-pos-toolbar" style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', gap: '10px', alignItems: 'center', background: colors.bg }}>
             <div style={{ position: 'relative', flex: 1, maxWidth: '400px' }}>
               <input type="text" placeholder="Search products by name, SKU, or barcode..." value={productSearch} onChange={(e) => setProductSearch(e.target.value)}
                 style={{ boxSizing: 'border-box', width: '100%', padding: '10px 14px 10px 36px', border: `1px solid ${colors.inputBorder}`, borderRadius: '8px', background: colors.inputBg, color: colors.text, fontSize: '13px', outline: 'none' }} />
@@ -999,6 +1012,8 @@ export default function POS() {
               style={{ padding: '10px 14px', border: `1px solid ${colors.inputBorder}`, borderRadius: '8px', background: colors.inputBg, color: colors.text, fontSize: '13px', cursor: 'pointer', minWidth: '150px' }}>
               {categories.map(cat => <option key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</option>)}
             </select>
+            {productSearch && <button type="button" onClick={() => setProductSearch('')} style={{ padding: '9px 12px', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.panelBg, color: colors.text, fontSize: 12, fontWeight: 700 }}>Clear search</button>}
+            <div style={{ marginLeft: 'auto', color: colors.muted, fontSize: 12, whiteSpace: 'nowrap' }}><strong style={{ color: colors.text }}>{filteredInventory.length}</strong> products</div>
           </div>
 
           {/* Products Grid */}
@@ -1010,29 +1025,29 @@ export default function POS() {
                 <div style={{ fontSize: '13px', marginTop: '4px' }}>Try adjusting your search or category filter</div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '14px' }}>
+              <div className="stocko-pos-product-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '12px' }}>
                 {filteredInventory.map(product => {
                   const inCart = cart.find(c => c.id === product.id)
                   const stock = product.quantity || 0
                   const lowStock = stock > 0 && stock <= 5
                   return (
-                    <div key={product.id} onClick={() => addToCart(product)}
-                      style={{ minHeight: 145, background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: '14px', padding: '16px', cursor: stock > 0 ? 'pointer' : 'not-allowed', opacity: stock > 0 ? 1 : 0.5, transition: 'all 0.18s ease', position: 'relative', boxShadow: '0 1px 2px rgba(15,23,42,0.04)' }}
+                    <button type="button" key={product.id} onClick={() => addToCart(product)} disabled={stock <= 0} className="stocko-pos-product-card"
+                      style={{ minHeight: 126, width: '100%', textAlign: 'left', background: inCart ? `${colors.accent}0D` : colors.panelBg, border: `1px solid ${inCart ? colors.accent : colors.border}`, borderRadius: '12px', padding: '14px', cursor: stock > 0 ? 'pointer' : 'not-allowed', opacity: stock > 0 ? 1 : 0.58, transition: 'all 0.18s ease', position: 'relative', boxShadow: inCart ? `0 0 0 1px ${colors.accent}30` : '0 1px 2px rgba(15,23,42,0.04)' }}
                       onMouseEnter={(e) => { if (stock > 0) { e.currentTarget.style.borderColor = colors.accent; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 20px rgba(37,99,235,.10)' } }}
                       onMouseLeave={(e) => { e.currentTarget.style.borderColor = colors.border; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 2px rgba(15,23,42,.04)' }}>
                       <div style={{ position: 'absolute', top: '10px', right: '10px', padding: '3px 8px', borderRadius: '10px', fontSize: '10px', fontWeight: '700',
                         ...(stock === 0 ? { background: '#f8d7da', color: '#842029' } : lowStock ? { background: '#fff3cd', color: '#856404' } : { background: '#d1e7dd', color: '#0f5132' }) }}>
                         {stock === 0 ? 'Out of Stock' : lowStock ? `Low: ${stock}` : `Stock: ${stock}`}
                       </div>
-                      <div style={{ marginTop: '8px' }}>
-                        <div style={{ fontSize: '14px', fontWeight: '700', color: colors.text, marginBottom: '4px', lineHeight: '1.3' }}>{product.name}</div>
-                        {product.sku && <div style={{ fontSize: '11px', color: colors.muted, marginBottom: '4px' }}>SKU: {product.sku}</div>}
+                      <div style={{ marginTop: '20px' }}>
+                        <div style={{ fontSize: '15px', fontWeight: '750', color: colors.text, marginBottom: '4px', lineHeight: '1.3' }}>{product.name}</div>
+                        <div style={{ fontSize: '11px', color: colors.muted, marginBottom: '4px' }}>{product.category || 'Uncategorized'}{product.sku ? ` · ${product.sku}` : ''}</div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
                           <span style={{ fontSize: '16px', fontWeight: '800', color: colors.accent }}>Rs. {product.selling_price?.toFixed(2) || '0.00'}</span>
                           {inCart && <span style={{ background: colors.accent, color: '#fff', padding: '3px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: '700' }}>In Cart: {inCart.qty}</span>}
                         </div>
                       </div>
-                    </div>
+                    </button>
                   )
                 })}
               </div>
@@ -1041,10 +1056,10 @@ export default function POS() {
         </div>
 
         {/* RIGHT PANEL - Cart & Checkout */}
-        <div className="stocko-pos-cart" style={{ minWidth: 0, display: 'flex', flexDirection: 'column', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: '14px', overflow: 'hidden', boxShadow: '0 4px 20px rgba(15,23,42,0.07)' }}>
+        <aside className="stocko-pos-cart" aria-label="Current order" style={{ minWidth: 0, display: 'flex', flexDirection: 'column', background: colors.panelBg, border: `1px solid ${colors.border}`, borderRadius: '14px', overflow: 'hidden', boxShadow: '0 12px 32px rgba(15,23,42,0.10)' }}>
           {/* Cart Header */}
-          <div style={{ padding: '18px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div><h2 style={{ fontSize: '16px', fontWeight: '700', color: colors.text, margin: 0 }}>Current order <span style={{ marginLeft: 6, padding: '3px 8px', borderRadius: 6, background: '#DBEAFE', color: '#1E40AF', fontSize: 11 }}>{cart.length}</span></h2><div style={{ marginTop: 4, color: colors.muted, fontSize: 11 }}>Walk-In Customer</div></div>
+          <div style={{ padding: '18px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: colors.bg }}>
+            <div><h2 style={{ fontSize: '17px', fontWeight: '800', color: colors.text, margin: 0 }}>Current order <span style={{ marginLeft: 6, padding: '3px 8px', borderRadius: 999, background: `${colors.accent}20`, color: colors.accent, fontSize: 11 }}>{cart.length}</span></h2><div style={{ marginTop: 4, color: colors.muted, fontSize: 11 }}>{selectedCustomer?.name || 'Walk-In Customer'}</div></div>
             {cart.length > 0 && (
               <button onClick={clearCart} style={{ padding: '6px 12px', background: colors.danger, color: '#fff', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Clear All</button>
             )}
@@ -1078,7 +1093,7 @@ export default function POS() {
           </div>
 
           {/* Cart Items */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 20px', background: colors.bg }}>
+          <div className="stocko-pos-cart-items" style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', background: colors.bg }}>
             {cart.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px 20px', color: colors.muted }}>
                 <div style={{ fontSize: '36px', marginBottom: '10px' }}>🛒</div>
@@ -1156,7 +1171,7 @@ export default function POS() {
               </button>
             )}
           </div>
-        </div>
+        </aside>
       </div>
 
       {/* ── Confirmation Modal ── */}
