@@ -3,23 +3,15 @@ import { ROLE_COLORS } from '../../lib/constants'
 import { Ic } from '../ui'
 
 const navItems = [
-  {
-    key: 'pos',
-    label: 'Point of Sale',
-    icon: 'ShoppingCart',
-    perm: 'canAccessPOS'
-  },
+  { key: 'pos',                  label: 'Point of Sale',       icon: 'ShoppingCart',     perm: 'canAccessPOS' },
   { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard',  perm: 'canAccessDashboard' },
   { key: 'inventory',            label: 'Inventory',           icon: 'Package',          perm: 'canAccessInventory' },
   { key: 'item-templates',       label: 'Item Templates',      icon: 'Box',              perm: 'canAccessItemTemplates' },
   { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight',   perm: 'canAccessStockMovement' },
   { key: 'demands',              label: 'Demands',             icon: 'ClipboardList',    perm: 'canAccessDemands' },
   { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle',      perm: 'canAccessFulfillment' },
-
   { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'Wallet',           perm: 'canAccessLedger' },
->>>>>>> ui-redesign
   { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
-  { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'BookOpen',         perm: 'canAccessLedger' },
   { key: 'reports',              label: 'Reports',             icon: 'BarChart2',        perm: 'canViewReports' },
   { key: 'user-management',      label: 'Users',               icon: 'UserPlus',         perm: 'canAccessUserManagement' },
   { key: 'activity-log',         label: 'Activity Log',        icon: 'Activity',         perm: 'canAccessActivityLog' },
