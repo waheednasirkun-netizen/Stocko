@@ -10,7 +10,7 @@ const navItems = [
   { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight',   perm: 'canAccessStockMovement' },
   { key: 'demands',              label: 'Demands',             icon: 'ClipboardList',    perm: 'canAccessDemands' },
   { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle',      perm: 'canAccessFulfillment' },
-  { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'BookOpen',         perm: 'canAccessLedger' },
+  { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'Wallet',           perm: 'canAccessLedger' },
   { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
   { key: 'reports',              label: 'Reports',             icon: 'BarChart2',        perm: 'canViewReports' },
   { key: 'user-management',      label: 'Users',               icon: 'UserPlus',         perm: 'canAccessUserManagement' },
