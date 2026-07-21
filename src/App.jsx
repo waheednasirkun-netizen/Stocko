@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useApp } from './context/AppContext'
 import { ToastContainer, LoadingScreen } from './components/ui'
 import { ConfirmProvider } from './components/ui'
@@ -53,6 +53,18 @@ const MOB_TABS = [
   { key: 'fulfillment-center', icon: '✅', label: 'Fulfill'  },
   { key: 'stock-movement',     icon: '🔄', label: 'Movement' },
 ]
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768)
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth <= 768)
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+
+  return isMobile
+}
 
 function MobileBottomNav() {
   const { tab, setTab, theme } = useApp()
@@ -142,6 +154,8 @@ function AppContent() {
     systemEnabled, loading, dataLoaded, authReady, dark,
   } = useApp()
 
+  const isMobile = useIsMobile()
+
   useEffect(() => {
     if (dark) {
       document.body.classList.add('dark-mode')
@@ -222,7 +236,7 @@ function AppContent() {
           </div>
         </main>
       </div>
-      <MobileBottomNav/>
+      {isMobile && <MobileBottomNav/>}
       <ToastContainer toasts={toasts} onDismiss={dismissToast}/>
     </div>
   )
