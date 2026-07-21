@@ -3,8 +3,8 @@ import { ROLE_COLORS } from '../../lib/constants'
 import { Ic } from '../ui'
 
 const navItems = [
-  { key: 'pos',                  label: 'Point of Sale',       icon: 'ShoppingCart',     perm: 'canAccessPOS' },
   { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard',  perm: 'canAccessDashboard' },
+  { key: 'pos',                  label: 'Point of Sale',       icon: 'ShoppingCart',     perm: 'canAccessPOS' },
   { key: 'inventory',            label: 'Inventory',           icon: 'Package',          perm: 'canAccessInventory' },
   { key: 'item-templates',       label: 'Item Templates',      icon: 'Box',              perm: 'canAccessItemTemplates' },
   { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight',   perm: 'canAccessStockMovement' },
