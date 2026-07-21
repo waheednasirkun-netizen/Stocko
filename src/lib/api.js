@@ -3,6 +3,16 @@ console.log('[Stocko] api.js loaded')
 /**
  * Stocko — src/lib/api.js
  * Production-ready Supabase API layer
+ *
+ * SCHEMA (verified via information_schema): `inventory` has purchase_price (cost) and
+ * selling_price (POS-facing price) — there is NO default_price column on inventory.
+ * `item_templates` has default_price. POS reads inventory.selling_price.
+ *
+ * FIX APPLIED: templatesApi.update() propagates item_templates.default_price into
+ * inventory.selling_price for matching rows. inventoryApi.create() and
+ * transactionsApi.stockIn() seed inventory.selling_price from the template on first
+ * creation, and correctly write stock-in cost to purchase_price (not selling_price).
+ * See inline comments on each function for the full root-cause explanation.
  */
 
 import { supabase } from './supabase'
@@ -463,6 +473,22 @@ export const templatesApi = {
     return wrap(data, error)
   },
 
+  /**
+   * FIX (schema-verified): root cause of "POS shows 0 after editing Item Template price".
+   *
+   * Confirmed via information_schema: `inventory` has `purchase_price` and `selling_price`
+   * columns — there is NO `default_price` column on `inventory` (that column only exists
+   * on `item_templates`). POS reads `inventory.selling_price` (see POS.jsx extractSalePrice,
+   * which checks it as its 2nd priority). Any code that wrote `default_price` into
+   * `inventory` was rejected by PostgREST with a 400 "could not find column" error —
+   * which is why prices never propagated, and why they don't show up now either until
+   * this column name is corrected.
+   *
+   * Fix: after a successful template update, if default_price changed, propagate it into
+   * `inventory.selling_price` (the column POS actually reads) for any matching inventory
+   * row(s) in the same branch (case-insensitive name match, same pattern used elsewhere
+   * in this file).
+   */
   async update(id, updates) {
     const { id: _id, created_at: _ca, ...safe } = updates
     const { data, error } = await supabase
@@ -471,6 +497,21 @@ export const templatesApi = {
       .eq('id', id)
       .select()
       .single()
+
+    if (!error && data && safe.default_price !== undefined && data.branch_id && data.name) {
+      const { error: syncError } = await supabase
+        .from('inventory')
+        .update({ selling_price: safe.default_price, updated_at: now() })
+        .eq('branch_id', data.branch_id)
+        .ilike('name', data.name.trim())
+
+      if (syncError) {
+        console.warn('[api] templatesApi.update: inventory price sync failed:', syncError.message)
+      } else {
+        console.log('[api] templatesApi.update: synced selling_price to inventory for', data.name, '→', safe.default_price)
+      }
+    }
+
     return wrap(data, error)
   },
 
@@ -544,8 +585,6 @@ export const transactionsApi = {
 
     const quantity = Math.abs(Number(qty))
     const itemName = String(item).trim()
-    // FIX: price was previously discarded entirely — it never made it onto the
-    // transaction row or the inventory row, so POS had nothing to read a price from.
     const hasExplicitPrice = price !== undefined && price !== null && price !== ''
     let pricePerUnit = hasExplicitPrice ? Math.max(0, Number(price) || 0) : null
 
@@ -553,29 +592,40 @@ export const transactionsApi = {
       return wrap(null, { message: 'Valid item name and quantity are required' })
     }
 
-    // 2a. Look up existing inventory row first (need this before the transaction insert
-    // so we can fall back to the item's current/template price when none was supplied).
+    // Look up existing inventory row first (need this before the transaction insert
+    // so we can fall back to the item's current cost / template price when none was supplied).
+    // FIX (schema-verified): `inventory` has purchase_price and selling_price — NOT
+    // default_price. price_per_unit entered at Stock IN is a COST (what you paid the
+    // supplier), so it belongs in purchase_price, not the POS-facing selling_price.
     const normalizedName = itemName.toLowerCase()
     const { data: existingItem } = await supabase
       .from('inventory')
-      .select('id, quantity, unit, default_price')
+      .select('id, quantity, unit, purchase_price, selling_price')
       .eq('branch_id', branchId)
       .ilike('name', normalizedName)
       .maybeSingle()
 
+    // Look up the matching item template once — used as a cost fallback when no explicit
+    // price is entered, and to seed selling_price when this stock-in creates a brand-new
+    // inventory row (so POS has a price immediately, without waiting for a template edit).
+    let templateDefaultPrice = null
+    if (!existingItem || pricePerUnit === null) {
+      const { data: tmpl } = await supabase
+        .from('item_templates')
+        .select('default_price')
+        .eq('branch_id', branchId)
+        .ilike('name', normalizedName)
+        .maybeSingle()
+      templateDefaultPrice = tmpl?.default_price != null ? Number(tmpl.default_price) : null
+    }
+
     if (pricePerUnit === null) {
-      if (existingItem?.default_price != null) {
-        // Keep the item's current price if none was entered for this stock-in.
-        pricePerUnit = Number(existingItem.default_price) || 0
+      if (existingItem?.purchase_price != null) {
+        // Keep the item's current cost if none was entered for this stock-in.
+        pricePerUnit = Number(existingItem.purchase_price) || 0
       } else {
-        // New item with no price entered — try the matching item template's default_price.
-        const { data: tmpl } = await supabase
-          .from('item_templates')
-          .select('default_price')
-          .eq('branch_id', branchId)
-          .ilike('name', normalizedName)
-          .maybeSingle()
-        pricePerUnit = Number(tmpl?.default_price) || 0
+        // New item with no cost entered — fall back to the template's default_price.
+        pricePerUnit = templateDefaultPrice || 0
       }
     }
 
@@ -607,7 +657,10 @@ export const transactionsApi = {
       return wrap(null, txnError)
     }
 
-    // 2b. Upsert inventory (now carries default_price so POS can read it)
+    // 2. Upsert inventory — pricePerUnit (cost) goes to purchase_price. selling_price
+    //    (what POS displays) is left untouched for existing items — it's owned by the
+    //    Item Template flow (see templatesApi.update) — and seeded from the template
+    //    only when this stock-in is what creates the inventory row for the first time.
     if (existingItem) {
       const newQty = Number(existingItem.quantity || 0) + quantity
       const { error: updateError } = await supabase
@@ -616,7 +669,7 @@ export const transactionsApi = {
           quantity: newQty,
           unit: unit || existingItem.unit,
           category: category ?? 'Other',
-          default_price: pricePerUnit,
+          purchase_price: pricePerUnit,
           updated_at: now(),
         })
         .eq('id', existingItem.id)
@@ -632,7 +685,8 @@ export const transactionsApi = {
         category: category ?? 'Other',
         quantity,
         unit,
-        default_price: pricePerUnit,
+        purchase_price: pricePerUnit,
+        selling_price: templateDefaultPrice,
         created_at: now(),
         updated_at: now(),
       }])
@@ -930,7 +984,7 @@ export const activityApi = {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   INVENTORY API
+   INVENTORY API — FIXED FOR DEFAULT_PRICE
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export const inventoryApi = {
@@ -944,6 +998,13 @@ export const inventoryApi = {
     return wrap(data, error)
   },
 
+  /**
+   * FIX (schema-verified): When creating inventory, inherit the item template's
+   * default_price into `inventory.selling_price` — the actual column that exists
+   * on `inventory` and the one POS reads. (The table has no `default_price` column;
+   * writing that key was silently/loudly rejected by PostgREST — see templatesApi.update
+   * for the full root-cause note.)
+   */
   async create({ itemData, branchId, userId, userName }) {
     const { data: existing } = await supabase
       .from('inventory')
@@ -956,9 +1017,25 @@ export const inventoryApi = {
       return wrap(null, { message: `Item "${itemData.name}" already exists in inventory` })
     }
 
+    // FIX: If selling_price not provided, try to inherit it from the matching item template
+    let finalItemData = { ...itemData }
+    if (finalItemData.selling_price == null) {
+      const { data: template } = await supabase
+        .from('item_templates')
+        .select('default_price')
+        .eq('branch_id', branchId)
+        .ilike('name', itemData.name?.trim())
+        .maybeSingle()
+
+      if (template?.default_price != null) {
+        finalItemData.selling_price = template.default_price
+        console.log('[api] inventoryApi.create: inherited selling_price from template:', template.default_price)
+      }
+    }
+
     const { data, error } = await supabase
       .from('inventory')
-      .insert([{ ...itemData, branch_id: branchId, created_by: userId, created_at: now() }])
+      .insert([{ ...finalItemData, branch_id: branchId, created_by: userId, created_at: now() }])
       .select()
       .single()
 
@@ -1139,4 +1216,4 @@ export const posApi = {
       .single()
     return { data, error }
   },
-}	
+}
