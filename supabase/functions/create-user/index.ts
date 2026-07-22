@@ -34,40 +34,61 @@ serve(async (req: Request) => {
       return json({ success: false, error: "Authentication required" }, 401);
     }
 
+    const accessToken = authorization.slice("Bearer ".length).trim();
+    if (!accessToken) {
+      return json({ success: false, error: "Authentication required" }, 401);
+    }
+
     const callerClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authorization } },
-      auth: { autoRefreshToken: false, persistSession: false },
+      auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
     });
-    const admin = createClient(supabaseUrl, serviceRoleKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
     });
 
-    const { data: callerAuth, error: callerAuthError } = await callerClient.auth.getUser();
-    if (callerAuthError || !callerAuth.user) {
+    const {
+      data: { user: callerAuthUser },
+      error: callerAuthError,
+    } = await callerClient.auth.getUser(accessToken);
+    if (callerAuthError || !callerAuthUser) {
+      const callerErrorDetails = callerAuthError as {
+        message?: string;
+        code?: string;
+        status?: number;
+      } | null;
+
+      console.error("Caller authentication failed", {
+        message: callerErrorDetails?.message,
+        code: callerErrorDetails?.code,
+        status: callerErrorDetails?.status,
+        hasAuthorizationHeader: Boolean(authorization),
+        authorizationType: authorization?.split(" ")[0],
+      });
       return json({ success: false, error: "Your session is invalid or expired" }, 401);
     }
 
-    let { data: caller, error: callerError } = await admin
+    let { data: caller, error: callerError } = await supabaseAdmin
       .from("users")
       .select("id, auth_id, email, role, status, branch_id")
-      .eq("auth_id", callerAuth.user.id)
+      .eq("auth_id", callerAuthUser.id)
       .maybeSingle();
 
     if (!callerError && !caller) {
-      const byId = await admin
+      const byId = await supabaseAdmin
         .from("users")
         .select("id, auth_id, email, role, status, branch_id")
-        .eq("id", callerAuth.user.id)
+        .eq("id", callerAuthUser.id)
         .maybeSingle();
       caller = byId.data;
       callerError = byId.error;
     }
 
-    if (!callerError && !caller && callerAuth.user.email) {
-      const byEmail = await admin
+    if (!callerError && !caller && callerAuthUser.email) {
+      const byEmail = await supabaseAdmin
         .from("users")
         .select("id, auth_id, email, role, status, branch_id")
-        .eq("email", callerAuth.user.email.toLowerCase())
+        .eq("email", callerAuthUser.email.toLowerCase())
         .maybeSingle();
       caller = byEmail.data;
       callerError = byEmail.error;
@@ -77,13 +98,13 @@ serve(async (req: Request) => {
     if (!caller || caller.status !== "Active" || !MANAGER_ROLES.has(caller.role)) {
       return json({ success: false, error: "You are not allowed to create users" }, 403);
     }
-    if (caller.auth_id && caller.auth_id !== callerAuth.user.id) {
+    if (caller.auth_id && caller.auth_id !== callerAuthUser.id) {
       return json({ success: false, error: "Your profile is linked to a different Auth account" }, 409);
     }
     if (!caller.auth_id) {
-      const { error: backfillError } = await admin
+      const { error: backfillError } = await supabaseAdmin
         .from("users")
-        .update({ auth_id: callerAuth.user.id })
+        .update({ auth_id: callerAuthUser.id })
         .eq("id", caller.id);
       if (backfillError) return json({ success: false, error: backfillError.message }, 400);
     }
@@ -113,7 +134,7 @@ serve(async (req: Request) => {
       return json({ success: false, error: "A branch is required" }, 400);
     }
 
-    const { data: authData, error: authError } = await admin.auth.admin.createUser({
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
@@ -137,7 +158,7 @@ serve(async (req: Request) => {
     };
 
     // Most projects create this row with an auth trigger. Update it when present, insert otherwise.
-    let { data: userData, error: dbError } = await admin
+    let { data: userData, error: dbError } = await supabaseAdmin
       .from("users")
       .update(profile)
       .or(`auth_id.eq.${authData.user.id},id.eq.${authData.user.id}`)
@@ -145,7 +166,7 @@ serve(async (req: Request) => {
       .maybeSingle();
 
     if (!dbError && !userData) {
-      const inserted = await admin
+      const inserted = await supabaseAdmin
         .from("users")
         .insert(profile)
         .select(PROFILE_SELECT)
@@ -155,7 +176,7 @@ serve(async (req: Request) => {
     }
 
     if (dbError || !userData) {
-      await admin.auth.admin.deleteUser(authData.user.id);
+      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
       return json({ success: false, error: dbError?.message || "Profile creation failed" }, 400);
     }
 

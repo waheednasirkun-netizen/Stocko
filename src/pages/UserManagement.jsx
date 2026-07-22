@@ -247,9 +247,7 @@ export default function UserManagement() {
   // ── Create User ──────────────────────────────────────────────────────────
   const createUser = async (userData) => {
     try {
-      // Get current session to obtain access token
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('You are not logged in. Please refresh.')
+      const session = await getFreshSession()
 
       const payload = {
         ...userData,
@@ -362,8 +360,8 @@ export default function UserManagement() {
     const errs = {}
     if (!form.name.trim()) errs.name = 'Name required'
     if (!form.email.trim()) errs.email = 'Email required'
-    if (!editing && !form.password.trim()) errs.password = 'Password required'
-    if (form.password && form.password.length < 6) errs.password = 'Password must be at least 6 characters'
+    if (!editing && form.password === '') errs.password = 'Password required'
+    if (form.password !== '' && form.password.length < 6) errs.password = 'Password must be at least 6 characters'
 
     if (isDeveloper && !editing && !form.branch_id) {
       errs.branch_id = 'Please select a branch'
@@ -392,7 +390,7 @@ export default function UserManagement() {
         data.branch_id = currentUser?.branch_id || ''
       }
 
-      if (form.password) data.password = form.password
+      if (form.password !== '') data.password = form.password
 
       let result
       if (editing) {
