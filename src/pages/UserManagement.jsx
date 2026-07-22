@@ -41,11 +41,14 @@ export default function UserManagement() {
 
   // Determine if current user is a Developer
   const isDeveloper = currentUser?.role === 'Developer'
+  const canManageUsers = ['Developer', 'Admin', 'Manager'].includes(currentUser?.role)
 
   // Filter users by branch - Developers see all, others see only their branch
-  const visibleUsers = isDeveloper
-    ? users
-    : users?.filter(u => u.branch_id === currentUser?.branch_id)
+  const visibleUsers = !canManageUsers
+    ? []
+    : isDeveloper
+      ? users
+      : users?.filter(u => u.branch_id === currentUser?.branch_id)
 
   // Fetch branches (needed for Developers and for branch management)
   useEffect(() => {
@@ -208,88 +211,102 @@ export default function UserManagement() {
     }
   }
 
-  // ── Create User via RPC (bypasses Edge Function CORS issues) ─────────
-// ── Create User via RPC ───────────────────────────────────────────────
-// ── Create User via Edge Function ──────────────────────────────────────
-const createUser = async (userData) => {
-  try {
-    const payload = {
-      name: userData.name,
-      email: userData.email,
-      password: userData.password,
-      role: userData.role,
-      status: userData.status,
-      phone: userData.phone,
-
-      // Developers can choose a branch.
-      // Admins/Managers always use their own branch.
-      branch_id: isDeveloper
-        ? userData.branch_id
-        : currentUser.branch_id,
-    };
-
-    const { data, error } = await supabase.functions.invoke("create-user", {
-      body: payload,
-    });
-
-    console.log("Function data:", data);
-    console.log("Function error:", error);
-
-    if (error) {
-      throw new Error(data?.error || error.message);
+  const getFunctionError = async (error, fallback = 'Request failed') => {
+    try {
+      const body = await error?.context?.json?.()
+      return body?.error || body?.message || error?.message || fallback
+    } catch {
+      return error?.message || fallback
     }
-
-    if (!data.success) {
-      throw new Error(data.error);
-    }
-
-    setUsers((prev) => [...prev, data.user]);
-
-    return data;
-  } catch (err) {
-    console.error("createUser error:", err);
-
-    return {
-      success: false,
-      error: err.message,
-    };
   }
-};
-  // ── Update User Function ──────────────────────────────────────────────
+
+  // ── Create User ──────────────────────────────────────────────────────────
+  const createUser = async (userData) => {
+    try {
+      // Get current session to obtain access token
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('You are not logged in. Please refresh.')
+
+      const payload = {
+        ...userData,
+        branch_id: isDeveloper ? userData.branch_id : currentUser?.branch_id,
+      }
+
+      const { data, error } = await supabase.functions.invoke('create-user', {
+        body: payload,
+        headers: {
+          Authorization: `Bearer ${session.access_token}`
+        }
+      })
+
+      if (error) throw new Error(await getFunctionError(error, 'Could not create user'))
+      if (!data?.success) throw new Error(data?.error || 'Could not create user')
+
+      setUsers(prev => [...prev, data.user])
+      return data
+    } catch (error) {
+      console.error('Create user error:', error)
+      return { success: false, error: error.message }
+    }
+  }
+
+  // ── Update User ──────────────────────────────────────────────────────────
   const updateUser = async (id, userData) => {
     try {
-      const updatePayload = {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+
+      if (sessionError) throw sessionError
+      if (!session) throw new Error('You are not logged in. Please refresh and try again.')
+
+      const payload = {
+        id,
         name: userData.name,
         email: userData.email,
         role: userData.role,
         status: userData.status,
-        phone: userData.phone || '',
-        updated_at: new Date().toISOString()
+        phone: userData.phone?.trim() || '',
+        branch_id: isDeveloper
+          ? (userData.branch_id || null)
+          : (currentUser?.branch_id || null),
       }
 
-      if (isDeveloper && userData.branch_id !== undefined) {
-        updatePayload.branch_id = userData.branch_id
+      const newPassword = typeof userData.password === 'string' ? userData.password : ''
+      if (newPassword) payload.password = newPassword
+
+      const { data, error } = await supabase.functions.invoke('update-user', {
+        body: payload,
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      })
+
+      if (error) {
+        throw new Error(await getFunctionError(error, 'Could not update user'))
       }
 
-      const { data, error } = await supabase
-        .from('users')
-        .update(updatePayload)
-        .eq('id', id)
-        .select()
-        .single()
+      if (!data?.success) {
+        throw new Error(data?.error || 'User update failed')
+      }
 
-      if (error) throw error
+      if (newPassword && (data.passwordUpdated !== true || data.passwordVerified !== true)) {
+        throw new Error('Supabase Auth did not verify the new password')
+      }
 
-      setUsers(prev => prev.map(u => u.id === id ? { ...u, ...data } : u))
-      return { success: true, user: data }
+      if (!data.user) {
+        throw new Error('User was updated, but the updated profile was not returned')
+      }
 
+      setUsers(prev => prev.map(user =>
+        user.id === id ? { ...user, ...data.user } : user
+      ))
+
+      return data
     } catch (error) {
       console.error('Update user error:', error)
       return { success: false, error: error.message }
     }
   }
-
-  // ── Delete User Function ──────────────────────────────────────────────
+  // ── Delete User ──────────────────────────────────────────────────────────
   const deleteUser = async (id) => {
     try {
       // Delete from public.users first
@@ -325,7 +342,7 @@ const createUser = async (userData) => {
     if (!form.name.trim()) errs.name = 'Name required'
     if (!form.email.trim()) errs.email = 'Email required'
     if (!editing && !form.password.trim()) errs.password = 'Password required'
-    if (!editing && form.password && form.password.length < 6) errs.password = 'Password must be at least 6 characters'
+    if (form.password && form.password.length < 6) errs.password = 'Password must be at least 6 characters'
 
     if (isDeveloper && !editing && !form.branch_id) {
       errs.branch_id = 'Please select a branch'
@@ -377,6 +394,18 @@ const createUser = async (userData) => {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (!canManageUsers) {
+    return (
+      <Card style={{ padding: 32, textAlign: 'center' }}>
+        <Ic n="Shield" size={32} color={theme.danger || '#dc2626'} />
+        <h2 style={{ marginTop: 12, color: theme.text }}>Access Denied</h2>
+        <p style={{ marginTop: 6, color: theme.textMuted }}>
+          Only Developers, Admins, and Managers can manage users.
+        </p>
+      </Card>
+    )
   }
 
   return (
