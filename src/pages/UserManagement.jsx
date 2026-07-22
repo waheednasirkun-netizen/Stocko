@@ -220,6 +220,30 @@ export default function UserManagement() {
     }
   }
 
+  const getFreshSession = async () => {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+
+    if (sessionError) throw sessionError
+
+    let session = sessionData.session
+    const expiresSoon =
+      !session?.expires_at ||
+      session.expires_at <= Math.floor(Date.now() / 1000) + 60
+
+    if (expiresSoon) {
+      const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession()
+
+      if (refreshError || !refreshed.session) {
+        await supabase.auth.signOut()
+        throw new Error('Your session expired. Please sign in again.')
+      }
+
+      session = refreshed.session
+    }
+
+    return session
+  }
+
   // ── Create User ──────────────────────────────────────────────────────────
   const createUser = async (userData) => {
     try {
@@ -253,10 +277,7 @@ export default function UserManagement() {
   // ── Update User ──────────────────────────────────────────────────────────
   const updateUser = async (id, userData) => {
     try {
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-
-      if (sessionError) throw sessionError
-      if (!session) throw new Error('You are not logged in. Please refresh and try again.')
+      const session = await getFreshSession()
 
       const payload = {
         id,

@@ -34,6 +34,11 @@ serve(async (req: Request) => {
       return json({ success: false, error: "Authentication required" }, 401);
     }
 
+    const accessToken = authorization.slice("Bearer ".length).trim();
+    if (!accessToken) {
+      return json({ success: false, error: "Authentication required" }, 401);
+    }
+
     const callerClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authorization } },
       auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
@@ -42,32 +47,48 @@ serve(async (req: Request) => {
       auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
     });
 
-    const { data: callerAuth, error: callerAuthError } = await callerClient.auth.getUser();
-    if (callerAuthError || !callerAuth.user) {
+    const {
+      data: { user: callerAuthUser },
+      error: callerAuthError,
+    } = await callerClient.auth.getUser(accessToken);
+    if (callerAuthError || !callerAuthUser) {
+      const callerErrorDetails = callerAuthError as {
+        message?: string;
+        code?: string;
+        status?: number;
+      } | null;
+
+      console.error("Caller authentication failed", {
+        message: callerErrorDetails?.message,
+        code: callerErrorDetails?.code,
+        status: callerErrorDetails?.status,
+        hasAuthorizationHeader: Boolean(authorization),
+        authorizationType: authorization?.split(" ")[0],
+      });
       return json({ success: false, error: "Your session is invalid or expired" }, 401);
     }
 
     let { data: caller, error: callerError } = await supabaseAdmin
       .from("users")
       .select("id, auth_id, email, role, status, branch_id")
-      .eq("auth_id", callerAuth.user.id)
+      .eq("auth_id", callerAuthUser.id)
       .maybeSingle();
 
     if (!callerError && !caller) {
       const byId = await supabaseAdmin
         .from("users")
         .select("id, auth_id, email, role, status, branch_id")
-        .eq("id", callerAuth.user.id)
+        .eq("id", callerAuthUser.id)
         .maybeSingle();
       caller = byId.data;
       callerError = byId.error;
     }
 
-    if (!callerError && !caller && callerAuth.user.email) {
+    if (!callerError && !caller && callerAuthUser.email) {
       const byEmail = await supabaseAdmin
         .from("users")
         .select("id, auth_id, email, role, status, branch_id")
-        .eq("email", callerAuth.user.email.toLowerCase())
+        .eq("email", callerAuthUser.email.toLowerCase())
         .maybeSingle();
       caller = byEmail.data;
       callerError = byEmail.error;
@@ -77,13 +98,13 @@ serve(async (req: Request) => {
     if (!caller || caller.status !== "Active" || !MANAGER_ROLES.has(caller.role)) {
       return json({ success: false, error: "You are not allowed to manage users" }, 403);
     }
-    if (caller.auth_id && caller.auth_id !== callerAuth.user.id) {
+    if (caller.auth_id && caller.auth_id !== callerAuthUser.id) {
       return json({ success: false, error: "Your profile is linked to a different Auth account" }, 409);
     }
     if (!caller.auth_id) {
       const { error: callerBackfillError } = await supabaseAdmin
         .from("users")
-        .update({ auth_id: callerAuth.user.id })
+        .update({ auth_id: callerAuthUser.id })
         .eq("id", caller.id);
       if (callerBackfillError) {
         return json({ success: false, error: `Could not backfill caller auth_id: ${callerBackfillError.message}` }, 400);
