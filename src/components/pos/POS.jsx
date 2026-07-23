@@ -1,1560 +1,5235 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+// STOCKO POS — COMPACT BRANCH DISPATCH V2
+// If this marker is missing in Cursor, the old POS file is still installed.
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useApp } from '../../context/AppContext'
-import { inventoryApi } from '../../lib/api'
 import { supabase } from '../../lib/supabase'
-import { Ic, Btn, Modal, Input, Select, useConfirm, EmptyState } from '../ui'
+import { Ic } from '../ui'
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   BACKEND HELPERS — talk to the real schema (orders / order_items /
-   order_payments / ledger_entries / activity_logs). Kept intact because this
-   logic already works correctly against the live database.
-   ═══════════════════════════════════════════════════════════════════════════ */
+/**
+ * STOCKO POS — Store Edition (Light Theme)
+ * 
+ * ADJUSTED FOR STORE USE:
+ * ✓ Light theme as default
+ * ✓ Professional design (no emojis)
+ * ✓ Header tabs: Cancelled Orders, Reports, Pending Orders, New Order
+ * ✓ Search bar, customer select, new customer button only on New Order page
+ * ✓ History button shows customer order history
+ * ✓ Reports auto-show today's completed orders
+ * ✓ Payment modal with 4 options: Cash, Credit, Bank Transfer, Debit Card
+ * ✓ All paid orders go to customer ledger
+ * ✓ Manager auth required for cancellations
+ * 
+ * ACCESS CONTROL:
+ * - Cancelled Orders: Storekeeper, Admin, Manager, Developer
+ * - Reports: Admin, Manager, Developer only
+ * - Pending Orders: All authorized users
+ * - New Order: All authorized users
+ */
 
-const _now = () => new Date().toISOString()
+/* ══════════════════════════════════════════════════════════════════════════
+   CONSTANTS & HELPERS
+   ══════════════════════════════════════════════════════════════════════════ */
 
-async function _logPosActivity({ branchId, userId, userName, action, details }) {
-  if (!branchId) return
-  try {
-    await supabase.from('activity_logs').insert([{
-      branch_id: branchId, user_id: userId, user_name: userName,
-      action, details, created_at: _now(),
-    }])
-  } catch (err) { console.warn('[POS] activity log error:', err) }
+const now = () => new Date().toISOString()
+
+const PAYMENT_METHODS = {
+  CASH: 'cash',
+  CREDIT: 'credit',
+  BANK: 'bank_transfer',
+  DEBIT: 'debit_card',
 }
-
-async function _placeOrder({ sale, saleItems, inventoryUpdates, activityLog }) {
-  const { data: orderData, error: orderError } = await supabase
-    .from('orders').insert([{ ...sale, created_at: _now() }]).select().single()
-  if (orderError) return { data: null, error: orderError }
-
-  const lineItems = saleItems.map(item => ({
-    order_id: orderData.id,
-    inventory_id: item.inventory_id,
-    quantity: item.quantity,
-    price: item.price,
-    subtotal: item.subtotal,
-    name: item.name || 'Item',
-    created_at: _now(),
-  }))
-  const { error: itemsError } = await supabase.from('order_items').insert(lineItems)
-  if (itemsError) console.error('[POS] _placeOrder items error:', itemsError)
-
-  for (const upd of inventoryUpdates || []) {
-    if (!upd.inventoryId || !upd.quantity) continue
-    try {
-      const { data: inv } = await supabase.from('inventory').select('id, quantity').eq('id', upd.inventoryId).single()
-      if (inv) {
-        const { error: invErr } = await supabase.from('inventory').update({
-          quantity: Math.max(0, (inv.quantity || 0) - upd.quantity), updated_at: _now()
-        }).eq('id', upd.inventoryId)
-        if (invErr) console.error('[POS] inventory update error:', invErr)
-      }
-    } catch (e) { console.error('[POS] inventory deduction error:', e) }
-  }
-
-  if (activityLog) await _logPosActivity({ ...activityLog, action: 'Order Placed' })
-  return { data: { ...orderData, order_items: lineItems }, error: null }
-}
-
-async function _completeOrder({ orderId, status, payment, paid_amount, due_amount, completed_by, completed_by_name, ledgerEntry, activityLog }) {
-  const { data: orderData, error: orderError } = await supabase.from('orders').update({
-    status, paid_amount, due_amount, completed_by, completed_by_name,
-    completed_at: _now(), updated_at: _now(),
-  }).eq('id', orderId).select().single()
-  if (orderError) return { data: null, error: orderError }
-
-  if (payment?.amount > 0) {
-    const { error: paymentError } = await supabase.from('order_payments').insert([{
-      order_id: orderId, amount: payment.amount, method: payment.method,
-      remarks: payment.remarks || null, created_at: _now(),
-    }])
-    if (paymentError) console.warn('[POS] payment error:', paymentError)
-  }
-
-  if (ledgerEntry) {
-    const { error: ledgerErr } = await supabase.from('ledger_entries').insert([{ ...ledgerEntry, created_at: _now() }])
-    if (ledgerErr) console.error('[POS] ledger insert error:', ledgerErr)
-  }
-
-  if (activityLog) await _logPosActivity({ ...activityLog, action: 'Order Completed' })
-  return { data: orderData, error: null }
-}
-
-async function _cancelOrder({ orderId, cancelledBy, cancelledByName, reason, ledgerEntry, activityLog }) {
-  const { data: orderData, error: orderError } = await supabase.from('orders').update({
-    status: 'cancelled', cancelled_by: cancelledBy, cancelled_by_name: cancelledByName,
-    cancellation_reason: reason, cancelled_at: _now(), updated_at: _now(),
-  }).eq('id', orderId).select().single()
-  if (orderError) return { data: null, error: orderError }
-
-  const { data: items } = await supabase.from('order_items').select('inventory_id, quantity').eq('order_id', orderId)
-  for (const item of items || []) {
-    if (!item.inventory_id || !item.quantity) continue
-    const { data: inv } = await supabase.from('inventory').select('id, quantity').eq('id', item.inventory_id).single()
-    if (inv) {
-      await supabase.from('inventory').update({
-        quantity: (inv.quantity || 0) + item.quantity, updated_at: _now()
-      }).eq('id', item.inventory_id)
-    }
-  }
-  if (ledgerEntry) {
-    const { error: ledgerErr } = await supabase.from('ledger_entries').insert([{ ...ledgerEntry, created_at: _now() }])
-    if (ledgerErr) console.error('[POS] ledger insert error:', ledgerErr.message, ledgerErr.details)
-  }
-  if (activityLog) await _logPosActivity({ ...activityLog, action: 'Order Cancelled' })
-  return { data: orderData, error: null }
-}
-
-async function _processPayment({ orderId, payment, status, paid, due, ledgerEntry, activityLog }) {
-  const { data: orderData, error: orderError } = await supabase.from('orders').update({
-    status, paid_amount: paid, due_amount: due, updated_at: _now(),
-  }).eq('id', orderId).select().single()
-  if (orderError) return { data: null, error: orderError }
-
-  if (payment?.amount > 0) {
-    try {
-      const { error } = await supabase.from('order_payments').insert([{
-        order_id: orderId, amount: payment.amount, method: payment.method,
-        remarks: payment.remarks || null, created_at: _now(),
-      }])
-      if (error) throw error
-    } catch (err) { console.warn('[POS] payment error:', err) }
-  }
-  if (ledgerEntry) {
-    const { error: ledgerErr } = await supabase.from('ledger_entries').insert([{ ...ledgerEntry, created_at: _now() }])
-    if (ledgerErr) console.error('[POS] ledger insert error:', ledgerErr.message, ledgerErr.details)
-  }
-  if (activityLog) await _logPosActivity({ ...activityLog, action: 'Payment Processed' })
-  return { data: orderData, error: null }
-}
-
-async function _editOrder({ orderId, updatedOrder, updatedItems, inventoryDiffs, activityLog }) {
-  const { error: orderError } = await supabase.from('orders').update({
-    ...updatedOrder, updated_at: _now(),
-  }).eq('id', orderId)
-  if (orderError) return { data: null, error: orderError }
-
-  const { error: deleteError } = await supabase.from('order_items').delete().eq('order_id', orderId)
-  if (deleteError) console.error('[POS] _editOrder delete items error:', deleteError)
-
-  const lineItems = (updatedItems || []).map(item => ({
-    order_id: orderId, inventory_id: item.inventory_id, quantity: item.quantity,
-    price: item.price, subtotal: item.subtotal, name: item.name || 'Item', created_at: _now(),
-  }))
-  if (lineItems.length > 0) {
-    const { error: itemsError } = await supabase.from('order_items').insert(lineItems)
-    if (itemsError) console.error('[POS] _editOrder insert items error:', itemsError)
-  }
-
-  for (const d of inventoryDiffs || []) {
-    if (!d.inventoryId || !d.diff) continue
-    try {
-      const { data: inv } = await supabase.from('inventory').select('id, quantity').eq('id', d.inventoryId).single()
-      if (inv) {
-        const newQty = Math.max(0, (inv.quantity || 0) - d.diff)
-        const { error: invErr } = await supabase.from('inventory').update({ quantity: newQty, updated_at: _now() }).eq('id', d.inventoryId)
-        if (invErr) console.error('[POS] _editOrder inventory adjust error:', invErr)
-      }
-    } catch (e) { console.error('[POS] _editOrder inventory adjust exception:', e) }
-  }
-
-  if (activityLog) await _logPosActivity({ ...activityLog, action: 'Order Edited' })
-  return { data: { id: orderId, ...updatedOrder, order_items: lineItems }, error: null }
-}
-
-const PAYMENT_METHODS = { CASH: 'cash', CARD: 'card', BANK_TRANSFER: 'bank_transfer', CREDIT: 'credit' }
 
 const ORDER_STATUS = {
-  PENDING: 'pending', PAID: 'paid', CREDIT: 'credit', CANCELLED: 'cancelled',
-  PARTIALLY_PAID: 'partially_paid', COMPLETED: 'completed',
+  PENDING: 'pending',
+  COMPLETED: 'completed',
+  PAID: 'paid',
+  CREDIT: 'credit',
+  PARTIALLY_PAID: 'partially_paid',
+  CANCELLED: 'cancelled',
 }
 
-const STOREKEEPER_ROLES = ['storekeeper', 'store keeper', 'staff', 'cashier', 'store boy', 'storeboy']
-const ADMIN_ROLES = ['admin', 'manager', 'developer', 'superadmin', 'owner']
-const BLOCKED_ROLES = ['chief', 'viewer']
+const PAYMENT_OPTIONS = [
+  { id: PAYMENT_METHODS.CASH, label: 'Cash', icon: 'DollarSign' },
+  { id: PAYMENT_METHODS.CREDIT, label: 'Credit', icon: 'FileText' },
+  { id: PAYMENT_METHODS.BANK, label: 'Bank Transfer', icon: 'ArrowLeftRight' },
+  { id: PAYMENT_METHODS.DEBIT, label: 'Debit Card', icon: 'CreditCard' },
+]
 
-/* ── Printable 80mm receipt ── */
-const printReceipt = (order, items, user, branchName) => {
-  const printWindow = window.open('', '_blank', 'width=320,height=600')
-  if (!printWindow) { alert('Popup blocked — please allow popups to print receipts.'); return }
+const REPORT_STATUS_OPTIONS = [
+  { id: 'all', label: 'All statuses' },
+  { id: ORDER_STATUS.PENDING, label: 'Pending' },
+  { id: ORDER_STATUS.PARTIALLY_PAID, label: 'Partially paid' },
+  { id: ORDER_STATUS.PAID, label: 'Paid' },
+  { id: ORDER_STATUS.CREDIT, label: 'Credit' },
+  { id: ORDER_STATUS.CANCELLED, label: 'Cancelled' },
+]
 
-  const date = new Date().toLocaleString()
-  const invoice = order.invoice_no || order.id?.slice(0, 8)
-
-  const receiptHTML = `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8"><title>Receipt #${invoice}</title>
-<style>
-  @page { size: 80mm auto; margin: 0; }
-  body { font-family: 'Courier New', monospace; font-size: 12px; width: 76mm; margin: 0 auto; padding: 8px; line-height: 1.4; }
-  .center { text-align: center; } .bold { font-weight: bold; }
-  .line { border-top: 1px dashed #000; margin: 8px 0; } .right { text-align: right; }
-  .total { font-size: 14px; font-weight: bold; } .footer { margin-top: 16px; font-size: 10px; text-align: center; }
-  @media print { body { width: 76mm; } .no-print { display: none; } }
-</style>
-</head>
-<body>
-  <div class="center bold" style="font-size:14px;">STOCKO POS</div>
-  <div class="center">${branchName || user?.branch_name || 'Branch'}</div>
-  <div class="center" style="font-size:10px;">${date}</div>
-  <div class="line"></div>
-  <div>Invoice: #${invoice}</div>
-  <div>Customer: ${order.customer_name || 'Walk-In'}</div>
-  <div>Status: ${order.status?.toUpperCase()}</div>
-  <div class="line"></div>
-  <div style="display:flex; justify-content:space-between; font-weight:bold;">
-    <span style="flex:1;">Item</span><span style="width:30px; text-align:center;">Qty</span>
-    <span style="width:60px; text-align:right;">Price</span><span style="width:60px; text-align:right;">Total</span>
-  </div>
-  <div class="line"></div>
-  ${items.map(item => `
-    <div style="display:flex; justify-content:space-between;">
-      <span style="flex:1;">${item.name}</span>
-      <span style="width:30px; text-align:center;">${item.quantity}</span>
-      <span style="width:60px; text-align:right;">${item.price?.toFixed(2)}</span>
-      <span style="width:60px; text-align:right;">${(item.quantity * item.price)?.toFixed(2)}</span>
-    </div>`).join('')}
-  <div class="line"></div>
-  <div class="right">Subtotal: Rs. ${order.subtotal?.toFixed(2)}</div>
-  ${order.discount > 0 ? `<div class="right">Discount: Rs. ${order.discount?.toFixed(2)}</div>` : ''}
-  ${order.tax > 0 ? `<div class="right">Tax: Rs. ${order.tax?.toFixed(2)}</div>` : ''}
-  <div class="right total">TOTAL: Rs. ${order.total?.toFixed(2)}</div>
-  <div class="line"></div>
-  <div class="footer">Thank you for your business!</div>
-  <div class="footer">Powered by Stocko</div>
-  <div class="no-print" style="margin-top:20px; text-align:center;">
-    <button onclick="window.print();window.close()" style="padding:10px 20px; font-size:14px; cursor:pointer;">Print Receipt</button>
-  </div>
-</body>
-</html>`
-  printWindow.document.write(receiptHTML)
-  printWindow.document.close()
-  setTimeout(() => { printWindow.focus(); printWindow.print() }, 500)
+const ROLE_GROUPS = {
+  POS: ['developer', 'superadmin', 'admin', 'owner', 'manager', 'storekeeper', 'store keeper', 'staff', 'cashier'],
+  MANAGE: ['developer', 'superadmin', 'admin', 'owner', 'manager'],
+  REPORTS: ['developer', 'superadmin', 'admin', 'owner', 'manager'],
 }
 
-/* ── Printable multi-order report ── */
-const printOrdersReport = (rows, meta) => {
-  const printWindow = window.open('', '_blank', 'width=900,height=700')
-  if (!printWindow) { alert('Popup blocked — please allow popups to print.'); return }
-  const html = `
-<!DOCTYPE html><html><head><meta charset="utf-8"><title>POS Report</title>
-<style>
-  body { font-family: Arial, sans-serif; font-size: 12px; padding: 24px; color: #111; }
-  h1 { font-size: 18px; margin: 0 0 4px; } p.meta { color: #555; margin: 0 0 16px; }
-  table { width: 100%; border-collapse: collapse; } th, td { padding: 6px 8px; border-bottom: 1px solid #ddd; text-align: left; }
-  th { background: #f3f4f6; text-transform: uppercase; font-size: 10px; }
-  td.num, th.num { text-align: right; }
-  tfoot td { font-weight: bold; border-top: 2px solid #333; }
-</style></head>
-<body>
-  <h1>STOCKO POS — Orders Report</h1>
-  <p class="meta">${meta}</p>
-  <table>
-    <thead><tr><th>Invoice</th><th>Date</th><th>Customer</th><th>Payment</th><th class="num">Total</th><th>Status</th></tr></thead>
-    <tbody>
-      ${rows.map(o => `<tr>
-        <td>#${o.invoice_no || o.id?.slice(0, 8)}</td>
-        <td>${new Date(o.created_at).toLocaleString()}</td>
-        <td>${o.customer_name || 'Walk-In'}</td>
-        <td>${(o.payment_type || o.status || '').replace('_', ' ')}</td>
-        <td class="num">Rs. ${(o.total || 0).toFixed(2)}</td>
-        <td>${(o.status || '').replace('_', ' ').toUpperCase()}</td>
-      </tr>`).join('')}
-    </tbody>
-    <tfoot><tr><td colspan="4">Total</td><td class="num">Rs. ${rows.reduce((s, o) => s + (o.total || 0), 0).toFixed(2)}</td><td></td></tr></tfoot>
-  </table>
-  <script>window.onload = () => { window.print(); }</script>
-</body></html>`
-  printWindow.document.write(html)
-  printWindow.document.close()
+const normalizeRole = (role) => String(role || '').trim().toLowerCase()
+const safeNumber = (value, fallback = 0) => {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
+const getStock = (product) => Math.max(0, safeNumber(product?.quantity))
+
+// Extract sale price from both current and legacy inventory shapes.
+const extractSalePrice = (product) => {
+  if (!product) return 0
+
+  const price = safeNumber(
+    product?.sale_price ?? 
+    product?.selling_price ?? 
+    product?.default_price ?? 
+    product?.price ?? 
+    0
+  )
+
+  return Math.max(0, price)
 }
 
-/* ── CSV export ── */
-function downloadCSV(filename, rows) {
-  if (!rows.length) return
-  const headers = Object.keys(rows[0])
-  const csv = [
-    headers.join(','),
-    ...rows.map(row => headers.map(h => {
-      const val = row[h] ?? ''
-      const s = String(val).replace(/"/g, '""')
-      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s
-    }).join(',')),
-  ].join('\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+const extractLinePrice = (item) => Math.max(
+  0,
+  safeNumber(item?.price ?? item?.sale_price ?? item?.selling_price)
+)
+
+const formatPrice = (value) => {
+  return new Intl.NumberFormat('en-PK', {
+    style: 'currency',
+    currency: 'PKR',
+    minimumFractionDigits: 2,
+  }).format(value)
+}
+
+const formatDateTime = (value) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString('en-PK', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const escapeHtml = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#039;')
+
+const csvCell = (value) => {
+  const text = String(value ?? '')
+  return `"${text.replaceAll('"', '""')}"`
+}
+
+const downloadTextFile = (filename, content, type = 'text/plain;charset=utf-8') => {
+  const blob = new Blob([content], { type })
   const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
   URL.revokeObjectURL(url)
 }
 
-/* ── Tab config (rendered as one slim strip — no second page header) ── */
-const TABS = [
-  { key: 'new_order', label: 'New Order', icon: 'ShoppingCart' },
-  { key: 'pending', label: 'Pending Orders', icon: 'ClipboardList' },
-  { key: 'cancelled', label: 'Cancelled Orders', icon: 'AlertTriangle' },
-  { key: 'reports', label: 'Reports', icon: 'BarChart2', adminOnly: true },
-]
+const orderReference = (order) => order?.invoice_no || order?.id?.slice(0, 8)?.toUpperCase() || 'N/A'
+const getPaymentMethod = (order) => (
+  order?.payment_type ||
+  order?.order_payments?.at?.(-1)?.method ||
+  order?.order_payments?.[0]?.method ||
+  null
+)
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   MAIN COMPONENT
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-export default function POS() {
-  const { user, currentBranch, theme, showToast } = useApp()
-  const { confirm } = useConfirm()
-
-  // Respect the branch switcher used by the rest of Stocko. A user's assigned
-  // branch remains the fallback for accounts that cannot switch branches.
-  const activeBranchId = currentBranch?.id || user?.branch_id || null
-
-  const userRole = (user?.role || user?.user_role || user?.type || 'storekeeper').toLowerCase()
-  const isStorekeeper = STOREKEEPER_ROLES.includes(userRole)
-  const isAdmin = ADMIN_ROLES.includes(userRole)
-  const isBlockedRole = BLOCKED_ROLES.includes(userRole)
-  const hasAccess = !isBlockedRole && (isAdmin || isStorekeeper)
-  const hasReportAccess = isAdmin
-
-  const [activeTab, setActiveTab] = useState('new_order')
-
-  // Cart / new order
-  const [cart, setCart] = useState([])
-  const [discount, setDiscount] = useState(0)
-  const [taxRate, setTaxRate] = useState(0)
-  const [selectedCustomer, setSelectedCustomer] = useState(null)
-  const [processing, setProcessing] = useState(false)
-  const [inventory, setInventory] = useState([])
-  const [productSearch, setProductSearch] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('all')
-
-  const [branches, setBranches] = useState([])
-  const [customers, setCustomers] = useState([])
-  const [branchesLoading, setBranchesLoading] = useState(false)
-  const [customersLoading, setCustomersLoading] = useState(false)
-
-  const [showCreateCustomerModal, setShowCreateCustomerModal] = useState(false)
-  const [newCustomerName, setNewCustomerName] = useState('')
-  const [newCustomerPhone, setNewCustomerPhone] = useState('')
-  const [newCustomerEmail, setNewCustomerEmail] = useState('')
-  const [newCustomerAddress, setNewCustomerAddress] = useState('')
-  const [creatingCustomer, setCreatingCustomer] = useState(false)
-
-  // Orders (backs Pending + Cancelled + Reports tabs)
-  const [orders, setOrders] = useState([])
-  const [ordersLoading, setOrdersLoading] = useState(false)
-  const [listSearch, setListSearch] = useState('')
-
-  const [selectedOrder, setSelectedOrder] = useState(null)
-
-  const [showPasswordModal, setShowPasswordModal] = useState(false)
-  const [passwordInput, setPasswordInput] = useState('')
-  const [passwordError, setPasswordError] = useState('')
-  const [pendingAction, setPendingAction] = useState(null)
-  const [pendingActionData, setPendingActionData] = useState(null)
-
-  const [showPaymentModal, setShowPaymentModal] = useState(false)
-  const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS.CASH)
-  const [paidAmount, setPaidAmount] = useState(0)
-  const [paymentRemarks, setPaymentRemarks] = useState('')
-
-  const [showCompleteModal, setShowCompleteModal] = useState(false)
-  const [completeOrderData, setCompleteOrderData] = useState(null)
-  const [completePaymentMethod, setCompletePaymentMethod] = useState(PAYMENT_METHODS.CASH)
-  const [completePaidAmount, setCompletePaidAmount] = useState(0)
-  const [completeRemarks, setCompleteRemarks] = useState('')
-
-  const [showCancelModal, setShowCancelModal] = useState(false)
-  const [cancelReason, setCancelReason] = useState('')
-  const [cancelOrderId, setCancelOrderId] = useState(null)
-
-  const [showOrderDetailsModal, setShowOrderDetailsModal] = useState(false)
-  const [customerLedger, setCustomerLedger] = useState([])
-  const [orderDetails, setOrderDetails] = useState(null)
-
-  const [showEditModal, setShowEditModal] = useState(false)
-  const [editOrderData, setEditOrderData] = useState(null)
-  const [editItems, setEditItems] = useState([])
-  const [editDiscount, setEditDiscount] = useState(0)
-  const [editTax, setEditTax] = useState(0)
-
-  // Reports filters
-  const todayStr = () => new Date().toISOString().split('T')[0]
-  const [reportStart, setReportStart] = useState(todayStr())
-  const [reportEnd, setReportEnd] = useState(todayStr())
-  const [reportCustomer, setReportCustomer] = useState('')
-  const [reportStatus, setReportStatus] = useState('all')
-  const [reportPaymentType, setReportPaymentType] = useState('all')
-
-  /* ── Status badge, theme-driven ── */
-  const statusMeta = useCallback((status) => {
-    const map = {
-      pending:         { bg: theme.pending,   color: theme.pendingText,   label: 'Pending' },
-      partially_paid:  { bg: theme.warning,   color: theme.warningText,   label: 'Partially Paid' },
-      paid:            { bg: theme.completed, color: theme.completedText, label: 'Paid' },
-      credit:          { bg: theme.approved,  color: theme.approvedText,  label: 'Credit' },
-      completed:       { bg: theme.completed, color: theme.completedText, label: 'Completed' },
-      cancelled:       { bg: theme.rejected,  color: theme.rejectedText,  label: 'Cancelled' },
-    }
-    return map[status] || { bg: theme.cardHover, color: theme.textMuted, label: status || 'Unknown' }
-  }, [theme])
-
-  const StatusBadge = ({ status }) => {
-    const m = statusMeta(status)
-    return (
-      <span style={{ padding: '3px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700, background: m.bg, color: m.color }}>
-        {m.label}
-      </span>
-    )
+const printReceipt = (order, items, user) => {
+  const printWindow = window.open('', '_blank', 'width=320,height=600')
+  if (!printWindow) {
+    alert('Popup blocked. Please allow popups to print receipts.')
+    return
   }
 
-  /* ── Derived catalog data ── */
+  const date = new Date().toLocaleString('en-PK')
+  const invoice = escapeHtml(orderReference(order))
+  const branchName = escapeHtml(user?.branch_name || order?.branch_name || 'Branch')
+  const customerName = escapeHtml(order.customer_name || 'Walk-In')
+  const cashierName = escapeHtml(order.created_by_name || user?.name || 'Cashier')
+  const paymentMethod = escapeHtml((getPaymentMethod(order) || 'Pending').replaceAll('_', ' '))
+  const safeItems = Array.isArray(items) ? items : []
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Receipt #${invoice}</title>
+  <style>
+    @page { size: 80mm auto; margin: 0; }
+    body {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      width: 76mm;
+      margin: 0 auto;
+      padding: 8px;
+      line-height: 1.4;
+    }
+    .center { text-align: center; }
+    .bold { font-weight: bold; }
+    .line { border-top: 1px dashed #000; margin: 8px 0; }
+    .right { text-align: right; }
+    .total { font-size: 14px; font-weight: bold; }
+    .footer { margin-top: 16px; font-size: 10px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="center bold" style="font-size:14px;">STOCKO POS</div>
+  <div class="center">${branchName}</div>
+  <div class="center" style="font-size:10px;">${date}</div>
+  <div class="line"></div>
+  <div>Invoice: #${invoice}</div>
+  <div>Customer: ${customerName}</div>
+  <div>Cashier: ${cashierName}</div>
+  <div>Type: ${escapeHtml((order.type || order.order_type || 'sale').replaceAll('_', ' '))}</div>
+  <div>Payment: ${paymentMethod}</div>
+  <div>Status: ${escapeHtml((order.status || 'pending').toUpperCase())}</div>
+  <div class="line"></div>
+  <table style="width:100%; border-collapse:collapse;">
+    <tr style="font-weight:bold;">
+      <td style="text-align:left;">Item</td>
+      <td style="text-align:center;">Qty</td>
+      <td style="text-align:right;">Price</td>
+      <td style="text-align:right;">Total</td>
+    </tr>
+  </table>
+  ${safeItems.map(item => {
+    const price = extractLinePrice(item)
+    return `
+    <div style="display:flex; justify-content:space-between; font-size:11px; margin:4px 0;">
+      <span style="flex:1;">${escapeHtml(item.name || 'Item')}</span>
+      <span style="width:40px; text-align:center;">${safeNumber(item.quantity)}</span>
+      <span style="width:50px; text-align:right;">Rs. ${price.toFixed(2)}</span>
+      <span style="width:50px; text-align:right;">Rs. ${(safeNumber(item.quantity) * price).toFixed(2)}</span>
+    </div>
+  `}).join('')}
+  <div class="line"></div>
+  <div style="display:flex; justify-content:space-between; margin:4px 0;">
+    <span>Subtotal:</span>
+    <span class="bold">Rs. ${safeNumber(order.subtotal).toFixed(2)}</span>
+  </div>
+  ${safeNumber(order.discount) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0; color:green;">
+      <span>Discount:</span>
+      <span class="bold">-Rs. ${safeNumber(order.discount).toFixed(2)}</span>
+    </div>
+  ` : ''}
+  ${safeNumber(order.tax) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0;">
+      <span>Tax:</span>
+      <span class="bold">Rs. ${safeNumber(order.tax).toFixed(2)}</span>
+    </div>
+  ` : ''}
+  <div class="line"></div>
+  <div style="display:flex; justify-content:space-between; margin:4px 0;">
+    <span class="total">TOTAL</span>
+    <span class="total">Rs. ${safeNumber(order.total).toFixed(2)}</span>
+  </div>
+  <div class="line"></div>
+  <div class="footer">Thank you for your business!</div>
+  <div class="footer">Powered by Stocko</div>
+  <div style="margin-top:20px; text-align:center; display:no-print;">
+    <button onclick="window.print()" style="padding:10px 20px; font-size:12px;">Print</button>
+  </div>
+</body>
+</html>`
+
+  printWindow.document.write(html)
+  printWindow.document.close()
+  setTimeout(() => { printWindow.focus(); printWindow.print() }, 300)
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME COLOR PALETTE
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const baseColors = {
+  // Backgrounds
+  bgPage: '#f5f6fa',
+  bgCard: '#ffffff',
+  bgHeader: '#ffffff',
+  bgInput: '#ffffff',
+  bgModal: '#ffffff',
+  bgHover: '#f8f9fa',
+  bgDark: '#2c3e50',
+
+  // Borders
+  border: '#e0e0e0',
+  borderLight: '#eeeeee',
+  borderActive: '#2196f3',
+  borderHover: '#bdbdbd',
+
+  // Text
+  textPrimary: '#2c3e50',
+  textSecondary: '#546e7a',
+  textMuted: '#90a4ae',
+  textLight: '#b0bec5',
+  textWhite: '#ffffff',
+
+  // Accent colors
+  primary: '#2196f3',
+  primaryHover: '#1976d2',
+  primaryLight: '#e3f2fd',
+
+  success: '#4caf50',
+  successLight: '#e8f5e9',
+  danger: '#f44336',
+  dangerLight: '#ffebee',
+  warning: '#ff9800',
+  warningLight: '#fff3e0',
+  info: '#00bcd4',
+  infoLight: '#e0f7fa',
+
+  // Special
+  redText: '#e53935',
+  greenText: '#2e7d32',
+  goldText: '#f9a825',
+
+  // Table
+  tableHeader: '#f5f6fa',
+  tableRow: '#ffffff',
+  tableRowAlt: '#fafafa',
+  tableBorder: '#e0e0e0',
+
+  // Shadows
+  shadowSm: '0 1px 3px rgba(0,0,0,0.08)',
+  shadowMd: '0 4px 12px rgba(0,0,0,0.1)',
+  shadowLg: '0 8px 24px rgba(0,0,0,0.12)',
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MAIN POS COMPONENT
+   ══════════════════════════════════════════════════════════════════════════ */
+
+export default function POS() {
+  const {
+    user,
+    currentBranch,
+    theme,
+    dark,
+    showToast,
+    canAccessPOS,
+    canViewReports,
+  } = useApp()
+
+  // ── Role Checks ──
+  const userRole = normalizeRole(user?.role || user?.user_role || user?.type)
+  const isStorekeeper = ['storekeeper', 'store keeper', 'staff', 'cashier'].includes(userRole)
+  const isAdmin = ROLE_GROUPS.MANAGE.includes(userRole)
+  const hasAccess = typeof canAccessPOS === 'function'
+    ? canAccessPOS()
+    : ROLE_GROUPS.POS.includes(userRole)
+  const hasReportAccess = typeof canViewReports === 'function'
+    ? canViewReports()
+    : ROLE_GROUPS.REPORTS.includes(userRole)
+  const branchId = currentBranch?.id || user?.branch_id || null
+
+  // Map the page to Stocko's real light/dark theme while keeping fallbacks for
+  // projects that are still on an older theme object.
+  const colors = useMemo(() => ({
+    ...baseColors,
+    bgPage: theme?.bg || baseColors.bgPage,
+    bgCard: theme?.cardBg || theme?.card || baseColors.bgCard,
+    bgHeader: theme?.cardBg || theme?.card || baseColors.bgHeader,
+    bgInput: theme?.inputBg || baseColors.bgInput,
+    bgModal: theme?.modalBg || theme?.cardBg || baseColors.bgModal,
+    bgHover: theme?.cardHover || theme?.rowHover || baseColors.bgHover,
+    bgDark: dark ? '#020617' : '#0f172a',
+    border: theme?.border || baseColors.border,
+    borderLight: theme?.borderLight || baseColors.borderLight,
+    borderActive: theme?.inputFocus || theme?.primary || baseColors.borderActive,
+    borderHover: dark ? '#64748b' : '#cbd5e1',
+    textPrimary: theme?.text || baseColors.textPrimary,
+    textSecondary: theme?.textLight || theme?.text || baseColors.textSecondary,
+    textMuted: theme?.textMuted || baseColors.textMuted,
+    textLight: theme?.inputPlaceholder || theme?.textMuted || baseColors.textLight,
+    primary: theme?.primary || baseColors.primary,
+    primaryHover: theme?.primaryHover || baseColors.primaryHover,
+    primaryLight: theme?.navActive || baseColors.primaryLight,
+    success: theme?.success || baseColors.success,
+    successLight: theme?.completed || baseColors.successLight,
+    danger: theme?.danger || baseColors.danger,
+    dangerLight: theme?.rejected || baseColors.dangerLight,
+    warning: theme?.warning || baseColors.warning,
+    warningLight: theme?.pending || baseColors.warningLight,
+    info: dark ? '#22d3ee' : '#0891b2',
+    infoLight: dark ? '#083344' : '#cffafe',
+    redText: theme?.danger || baseColors.redText,
+    greenText: theme?.success || baseColors.greenText,
+    goldText: theme?.warning || baseColors.goldText,
+    tableHeader: theme?.tableHeaderBg || baseColors.tableHeader,
+    tableRow: theme?.cardBg || baseColors.tableRow,
+    tableRowAlt: theme?.tableRowAlt || baseColors.tableRowAlt,
+    tableBorder: theme?.border || baseColors.tableBorder,
+    shadowSm: theme?.shadow || baseColors.shadowSm,
+    shadowMd: theme?.shadowMd || baseColors.shadowMd,
+    shadowLg: theme?.shadowLg || baseColors.shadowLg,
+  }), [theme, dark])
+
+  const searchInputRef = useRef(null)
+  const lastSubmissionRef = useRef(0)
+
+  // ── State ──
+  const [inventory, setInventory] = useState([])
+  const [cart, setCart] = useState([])
+  const [customers, setCustomers] = useState([])
+  const [selectedCustomer, setSelectedCustomer] = useState(null)
+  const [discount, setDiscount] = useState(0)
+  const [taxRate, setTaxRate] = useState(0)
+  const [productSearch, setProductSearch] = useState('')
+  const [category, setCategory] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [ordersLoading, setOrdersLoading] = useState(true)
+  const [customersLoading, setCustomersLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [processing, setProcessing] = useState(false)
+  const [orderType, setOrderType] = useState('branch_dispatch')
+  const [orderNotes, setOrderNotes] = useState('')
+  const [orderReferenceText, setOrderReferenceText] = useState('')
+  const [editingOrder, setEditingOrder] = useState(null)
+
+  // Active tab: cancelled, reports, pending, new_order
+  const [activeTab, setActiveTab] = useState('new_order')
+
+  // Modals
+  const [showCustomerModal, setShowCustomerModal] = useState(false)
+  const [showPaymentModal, setShowPaymentModal] = useState(false)
+  const [showAuthModal, setShowAuthModal] = useState(false)
+  const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [showOrderDetailModal, setShowOrderDetailModal] = useState(false)
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [detailOrder, setDetailOrder] = useState(null)
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelTarget, setCancelTarget] = useState(null)
+  const [authAction, setAuthAction] = useState(null)
+  const [authPassword, setAuthPassword] = useState('')
+  const [authProcessing, setAuthProcessing] = useState(false)
+  const [orders, setOrders] = useState([])
+  const [pendingOrders, setPendingOrders] = useState([])
+  const [cancelledOrders, setCancelledOrders] = useState([])
+  const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', email: '' })
+  const [customerHistory, setCustomerHistory] = useState([])
+
+  // Payment modal state
+  const [paymentOrder, setPaymentOrder] = useState(null)
+  const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS.CASH)
+  const [cashReceived, setCashReceived] = useState(0)
+  const [paymentProcessing, setPaymentProcessing] = useState(false)
+  const [printAfterPayment, setPrintAfterPayment] = useState(false)
+  const [paymentRemarks, setPaymentRemarks] = useState('')
+
+  // Report filters
+  const [reportFilters, setReportFilters] = useState({
+    startDate: new Date().toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0],
+    customer: '',
+    paymentType: 'all',
+    status: 'all',
+  })
+  const [reportData, setReportData] = useState([])
+  const [reportLoading, setReportLoading] = useState(false)
+
+  // ── Load Inventory ──
+  const loadInventory = useCallback(async () => {
+    if (!branchId) return
+    setLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('inventory')
+        .select('*')
+        .eq('branch_id', branchId)
+        .order('name')
+
+      if (error) throw error
+      setInventory(data || [])
+    } catch (err) {
+      console.error('[POS] Inventory load error:', err)
+      showToast('error', 'Load Failed', err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [branchId, showToast])
+
+  const loadCustomers = useCallback(async () => {
+    if (!branchId) return
+    setCustomersLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('branch_id', branchId)
+        .order('name')
+
+      if (error) throw error
+      setCustomers(data || [])
+    } catch (err) {
+      console.error('[POS] Customers load error:', err)
+      showToast('error', 'Customers unavailable', err.message)
+    } finally {
+      setCustomersLoading(false)
+    }
+  }, [branchId, showToast])
+
+  const loadOrders = useCallback(async () => {
+    if (!branchId) return
+    setOrdersLoading(true)
+    try {
+      let response = await supabase
+        .from('orders')
+        .select('*, order_items(*), order_payments(*)')
+        .eq('branch_id', branchId)
+        .order('created_at', { ascending: false })
+        .limit(250)
+
+      // Some older deployments do not expose the relationship in PostgREST.
+      // Fall back to orders + items without breaking the page.
+      if (response.error) {
+        response = await supabase
+          .from('orders')
+          .select('*, order_items(*)')
+          .eq('branch_id', branchId)
+          .order('created_at', { ascending: false })
+          .limit(250)
+      }
+
+      if (response.error) throw response.error
+      const nextOrders = response.data || []
+      setOrders(nextOrders)
+      setPendingOrders(nextOrders.filter(order => (
+        order.status === ORDER_STATUS.PENDING ||
+        order.status === ORDER_STATUS.PARTIALLY_PAID
+      )))
+      setCancelledOrders(nextOrders.filter(order => order.status === ORDER_STATUS.CANCELLED))
+    } catch (err) {
+      console.error('[POS] Orders load error:', err)
+      showToast('error', 'Orders unavailable', err.message)
+    } finally {
+      setOrdersLoading(false)
+    }
+  }, [branchId, showToast])
+
+  // Auto-load today's orders for reports
+  const loadTodayOrders = useCallback(async () => {
+    if (!branchId || !hasReportAccess) return
+    const today = new Date().toISOString().split('T')[0]
+    try {
+      let response = await supabase
+        .from('orders')
+        .select('*, order_items(*), order_payments(*)')
+        .eq('branch_id', branchId)
+        .gte('created_at', `${today}T00:00:00`)
+        .lte('created_at', today + 'T23:59:59')
+        .order('created_at', { ascending: false })
+
+      if (response.error) {
+        response = await supabase
+          .from('orders')
+          .select('*, order_items(*)')
+          .eq('branch_id', branchId)
+          .gte('created_at', `${today}T00:00:00`)
+          .lte('created_at', `${today}T23:59:59`)
+          .order('created_at', { ascending: false })
+      }
+
+      if (response.error) throw response.error
+      setReportData(response.data || [])
+    } catch (err) {
+      console.error('[POS] Today orders load error:', err)
+      showToast('error', 'Report unavailable', err.message)
+    }
+  }, [branchId, hasReportAccess, showToast])
+
+  const refreshAll = useCallback(async ({ quiet = false } = {}) => {
+    if (!branchId) return
+    if (!quiet) setRefreshing(true)
+    await Promise.all([
+      loadInventory(),
+      loadCustomers(),
+      loadOrders(),
+      hasReportAccess ? loadTodayOrders() : Promise.resolve(),
+    ])
+    if (!quiet) {
+      setRefreshing(false)
+      showToast('success', 'POS refreshed', 'Inventory, customers and orders are up to date')
+    }
+  }, [branchId, hasReportAccess, loadCustomers, loadInventory, loadOrders, loadTodayOrders, showToast])
+
+  useEffect(() => {
+    if (hasAccess && branchId) {
+      refreshAll({ quiet: true })
+    }
+  }, [hasAccess, branchId, refreshAll])
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target
+      const isTyping = target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+
+      if (event.key === 'F2') {
+        event.preventDefault()
+        setActiveTab('new_order')
+        setTimeout(() => searchInputRef.current?.focus(), 0)
+      }
+
+      if (!isTyping && event.key === '/') {
+        event.preventDefault()
+        setActiveTab('new_order')
+        setTimeout(() => searchInputRef.current?.focus(), 0)
+      }
+
+      if (event.key === 'Escape') {
+        setShowPaymentModal(false)
+        setShowCustomerModal(false)
+        setShowHistoryModal(false)
+        setShowOrderDetailModal(false)
+        setShowCancelModal(false)
+        setShowAuthModal(false)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // ── Derived Data ──
   const categories = useMemo(() => {
-    const cats = new Set(inventory.map(p => p.category).filter(Boolean))
-    return ['all', ...Array.from(cats)]
+    const cats = new Set(inventory.map(i => i.category).filter(Boolean))
+    return ['all', ...Array.from(cats).sort()]
   }, [inventory])
 
   const filteredInventory = useMemo(() => {
     let result = inventory
-    if (selectedCategory !== 'all') result = result.filter(p => p.category === selectedCategory)
+
+    if (category !== 'all') {
+      result = result.filter(i => i.category === category)
+    }
+
     if (productSearch.trim()) {
-      const s = productSearch.toLowerCase()
-      result = result.filter(p => p.name?.toLowerCase().includes(s) || p.sku?.toLowerCase().includes(s) || p.barcode?.toLowerCase().includes(s))
+      const q = productSearch.trim().toLowerCase()
+      result = result.filter(i =>
+        String(i.name || '').toLowerCase().includes(q) ||
+        String(i.sku || '').toLowerCase().includes(q) ||
+        String(i.barcode || '').toLowerCase().includes(q)
+      )
     }
+
     return result
-  }, [inventory, selectedCategory, productSearch])
+  }, [inventory, category, productSearch])
 
-  const subtotal = useMemo(() => cart.reduce((sum, item) => sum + item.qty * item.price, 0), [cart])
-  const tax = useMemo(() => Math.max(0, (subtotal - discount) * (taxRate / 100)), [subtotal, discount, taxRate])
-  const total = useMemo(() => Math.max(0, subtotal - discount + tax), [subtotal, discount, tax])
+  const cartSubtotal = useMemo(() =>
+    cart.reduce((sum, item) => sum + (safeNumber(item.quantity) * extractLinePrice(item)), 0),
+    [cart]
+  )
 
-  /* ── Data loading ── */
-  const loadInventory = useCallback(async () => {
-    if (!hasAccess || !activeBranchId) return
-    const { data, error } = await inventoryApi.getAll(activeBranchId)
-    if (error) showToast('error', 'Inventory Load Failed', error.message)
-    else setInventory(data || [])
-  }, [activeBranchId, hasAccess, showToast])
+  const normalizedDiscount = useMemo(
+    () => clamp(safeNumber(discount), 0, cartSubtotal),
+    [discount, cartSubtotal]
+  )
 
-  useEffect(() => { loadInventory() }, [loadInventory])
+  const cartTax = useMemo(() =>
+    Math.max(0, (cartSubtotal - normalizedDiscount) * (clamp(safeNumber(taxRate), 0, 100) / 100)),
+    [cartSubtotal, normalizedDiscount, taxRate]
+  )
 
-  useEffect(() => {
-    if (!hasAccess) return
-    const loadBranches = async () => {
-      setBranchesLoading(true)
-      try {
-        const { data, error } = await supabase.from('branches').select('id, name, address').neq('id', activeBranchId || '')
-        if (error) console.error('[POS] branches error:', error.message)
-        else setBranches(data || [])
-      } catch (err) { console.error('[POS] branches load failed:', err) }
-      finally { setBranchesLoading(false) }
+  const cartTotal = useMemo(() =>
+    Math.max(0, cartSubtotal - normalizedDiscount + cartTax),
+    [cartSubtotal, normalizedDiscount, cartTax]
+  )
+
+  const paymentDue = useMemo(() => {
+    if (!paymentOrder) return 0
+    return Math.max(
+      0,
+      safeNumber(
+        paymentOrder.due_amount,
+        safeNumber(paymentOrder.total) - safeNumber(paymentOrder.paid_amount)
+      )
+    )
+  }, [paymentOrder])
+
+  const todaySales = useMemo(
+    () => orders.filter(order => {
+      if (![ORDER_STATUS.PAID, ORDER_STATUS.CREDIT, ORDER_STATUS.COMPLETED].includes(order.status)) return false
+      const date = new Date(order.created_at)
+      const today = new Date()
+      return date.getFullYear() === today.getFullYear() &&
+        date.getMonth() === today.getMonth() &&
+        date.getDate() === today.getDate()
+    }).reduce((sum, order) => sum + safeNumber(order.total), 0),
+    [orders]
+  )
+
+  const todayOrderCount = useMemo(
+    () => orders.filter(order => {
+      const date = new Date(order.created_at)
+      const today = new Date()
+      return date.getFullYear() === today.getFullYear() &&
+        date.getMonth() === today.getMonth() &&
+        date.getDate() === today.getDate()
+    }).length,
+    [orders]
+  )
+
+  const statusStyle = useCallback((status) => {
+    switch (status) {
+      case ORDER_STATUS.PENDING:
+      case ORDER_STATUS.PARTIALLY_PAID:
+        return { background: colors.warningLight, color: dark ? '#fbbf24' : '#92400e' }
+      case ORDER_STATUS.PAID:
+      case ORDER_STATUS.COMPLETED:
+        return { background: colors.successLight, color: dark ? '#86efac' : '#166534' }
+      case ORDER_STATUS.CREDIT:
+        return { background: colors.infoLight, color: dark ? '#67e8f9' : '#155e75' }
+      case ORDER_STATUS.CANCELLED:
+        return { background: colors.dangerLight, color: dark ? '#fca5a5' : '#991b1b' }
+      default:
+        return { background: colors.bgHover, color: colors.textSecondary }
     }
-    loadBranches()
-  }, [hasAccess, activeBranchId])
+  }, [colors, dark])
 
-  useEffect(() => {
-    if (!hasAccess) return
-    const loadCustomers = async () => {
-      if (!activeBranchId) return
-      setCustomersLoading(true)
-      try {
-        const { data, error } = await supabase.from('customers').select('*').eq('branch_id', activeBranchId).order('name')
-        if (error) console.error('[POS] customers error:', error.message)
-        else setCustomers(data || [])
-      } catch (err) { console.error('[POS] customers load failed:', err) }
-      finally { setCustomersLoading(false) }
-    }
-    loadCustomers()
-  }, [hasAccess, activeBranchId])
-
-  const loadOrders = useCallback(async () => {
-    if (!activeBranchId) return
-    setOrdersLoading(true)
+  const logPosActivity = useCallback(async (action, details) => {
+    if (!branchId) return
     try {
-      const { data, error } = await supabase.from('orders').select('*, order_items(*), order_payments(*)').eq('branch_id', activeBranchId).order('created_at', { ascending: false })
-      if (error) showToast('error', 'Orders Load Failed', error.message)
-      else setOrders(data || [])
-    } catch (err) { showToast('error', 'Orders Load Failed', err.message) }
-    finally { setOrdersLoading(false) }
-  }, [activeBranchId, showToast])
-
-  // Orders now live in persistent tabs, not a modal — load once access is ready,
-  // and whenever the Pending / Cancelled / Reports tabs are opened.
-  useEffect(() => { if (hasAccess) loadOrders() }, [hasAccess, loadOrders])
-  useEffect(() => {
-    if (hasAccess && ['pending', 'cancelled', 'reports'].includes(activeTab)) loadOrders()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab])
-
-  const handleCreateCustomer = async () => {
-    if (!newCustomerName.trim()) { showToast('error', 'Required', 'Customer name is required'); return }
-    setCreatingCustomer(true)
-    try {
-      const payload = {
-        name: newCustomerName.trim(),
-        phone: newCustomerPhone.trim() || null,
-        email: newCustomerEmail.trim() || null,
-        address: newCustomerAddress.trim() || null,
-        branch_id: activeBranchId,
-      }
-      const { data: newCust, error } = await supabase.from('customers').insert([payload]).select().single()
-      if (error) { showToast('error', 'Create Failed', error.message); return }
-      if (newCust) {
-        setCustomers(prev => [...prev, newCust].sort((a, b) => a.name?.localeCompare(b.name)))
-        setSelectedCustomer({ ...newCust, _partyType: 'customer' })
-      }
-      setShowCreateCustomerModal(false)
-      setNewCustomerName(''); setNewCustomerPhone(''); setNewCustomerEmail(''); setNewCustomerAddress('')
-      showToast('success', 'Customer Created', newCust?.name || '')
-    } catch (err) {
-      showToast('error', 'Create Failed', err.message || 'Unknown error')
+      const { error } = await supabase.from('activity_logs').insert([{
+        branch_id: branchId,
+        user_id: user?.id,
+        user_name: user?.name,
+        action,
+        details,
+        created_at: now(),
+      }])
+      if (error) console.warn('[POS] Activity log failed:', error.message)
+    } catch (error) {
+      console.warn('[POS] Activity log exception:', error)
     }
-    finally { setCreatingCustomer(false) }
-  }
+  }, [branchId, user?.id, user?.name])
 
-  const handleTabChange = (tabKey) => {
-    setActiveTab(tabKey)
-    setListSearch('')
-  }
-
+  // ── Cart Operations ──
   const addToCart = useCallback((product) => {
-    setCart(prev => {
-      const existing = prev.find(x => x.id === product.id)
-      const maxStock = product.quantity || 0
-      if (existing) {
-        if (existing.qty >= maxStock) { showToast('error', 'Stock Limit', `Only ${maxStock} in stock for "${product.name}"`); return prev }
-        return prev.map(x => x.id === product.id ? { ...x, qty: Math.min(x.qty + 1, maxStock) } : x)
-      }
-      if (maxStock <= 0) { showToast('error', 'Out of Stock', `"${product.name}" is out of stock`); return prev }
-      return [...prev, { id: product.id, name: product.name, qty: 1, price: product.selling_price || 0, unit: product.unit || 'unit', inventory_id: product.id, sku: product.sku || '', category: product.category || '' }]
-    })
-  }, [showToast])
+    const salePrice = extractSalePrice(product)
+    const stock = getStock(product)
+    const editedOriginalQty = editingOrder?.order_items?.find(
+      item => item.inventory_id === product.id
+    )?.quantity || 0
+    const availableForCart = editingOrder ? stock + safeNumber(editedOriginalQty) : stock
 
-  const updateQty = useCallback((id, qty) => {
-    if (qty < 1) return
+    if (availableForCart <= 0) {
+      showToast('error', 'Out of Stock', `${product.name} is out of stock`)
+      return
+    }
+
+    const existing = cart.find(item => item.id === product.id)
+    if (existing && existing.quantity >= availableForCart) {
+      showToast('error', 'Stock Limit', `Only ${availableForCart} available`)
+      return
+    }
+
+    if (existing) {
+      setCart(previous => previous.map(item => (
+        item.id === product.id
+          ? { ...item, quantity: item.quantity + 1, max_stock: availableForCart }
+          : item
+      )))
+    } else {
+      setCart(previous => [...previous, {
+        id: product.id,
+        inventory_id: product.id,
+        name: product.name,
+        quantity: 1,
+        price: salePrice,
+        sale_price: salePrice,
+        unit: product.unit || 'unit',
+        sku: product.sku || '',
+        max_stock: availableForCart,
+        original_quantity: safeNumber(editedOriginalQty),
+      }])
+    }
+
+    showToast('success', 'Added', `${product.name} added to cart`)
+  }, [cart, editingOrder, showToast])
+
+  const updateQuantity = useCallback((id, qty) => {
+    const nextQuantity = Math.floor(safeNumber(qty, 1))
+    if (nextQuantity < 1) {
+      removeFromCart(id)
+      return
+    }
+
     const product = inventory.find(p => p.id === id)
-    const maxStock = product ? product.quantity || 0 : Infinity
-    if (qty > maxStock) { showToast('error', 'Stock Limit', `Only ${maxStock} units available`); return }
-    setCart(prev => prev.map(x => x.id === id ? { ...x, qty } : x))
-  }, [inventory, showToast])
+    const cartItem = cart.find(item => item.id === id)
+    const maxStock = editingOrder
+      ? getStock(product) + safeNumber(cartItem?.original_quantity)
+      : getStock(product)
 
-  const removeItem = useCallback((id) => setCart(prev => prev.filter(x => x.id !== id)), [])
-  const clearCart = useCallback(() => { setCart([]); setSelectedCustomer(null); setDiscount(0); setTaxRate(0) }, [])
+    if (nextQuantity > maxStock) {
+      showToast('error', 'Stock Limit', `Only ${maxStock} available`)
+      return
+    }
 
-  // Never carry cart items or a customer across branches.
-  useEffect(() => {
+    setCart(prev => prev.map(item =>
+      item.id === id ? { ...item, quantity: nextQuantity, max_stock: maxStock } : item
+    ))
+  }, [cart, editingOrder, inventory, showToast])
+
+  const removeFromCart = useCallback((id) => {
+    setCart(prev => prev.filter(item => item.id !== id))
+  }, [])
+
+  const clearCart = useCallback(() => {
+    setCart([])
+    setSelectedCustomer(null)
+    setDiscount(0)
+    setTaxRate(0)
+    setOrderType('branch_dispatch')
+    setOrderNotes('')
+    setOrderReferenceText('')
+    setEditingOrder(null)
+  }, [])
+
+  const cancelEditing = useCallback(() => {
     clearCart()
-    setProductSearch('')
-    setSelectedCategory('all')
-  }, [activeBranchId, clearCart])
+    setActiveTab('pending')
+    showToast('info', 'Edit cancelled', 'The original order was not changed')
+  }, [clearCart, showToast])
 
-  /* ── Manager password verification (real Supabase auth check) ── */
-  const verifyPasswordAndExecute = async () => {
-    setPasswordError(''); setProcessing(true)
+  // ── Create Customer ──
+  const createCustomer = async () => {
+    if (!branchId) {
+      showToast('error', 'No branch', 'Select a branch before creating customers')
+      return
+    }
+
+    if (!newCustomer.name.trim()) {
+      showToast('error', 'Required', 'Customer name is required')
+      return
+    }
+
+    const normalizedPhone = newCustomer.phone.trim()
+    if (normalizedPhone && customers.some(customer => customer.phone === normalizedPhone)) {
+      showToast('warning', 'Customer exists', 'A customer with this phone number already exists')
+      return
+    }
+
     try {
-      const { data: userRow } = await supabase.from('users').select('email').eq('id', user?.id).single()
-      if (!userRow?.email) { setPasswordError('User not found'); setProcessing(false); return }
-      const { error: authError } = await supabase.auth.signInWithPassword({ email: userRow.email, password: passwordInput })
-      if (authError) { setPasswordError('Invalid password'); setProcessing(false); return }
-      await executePendingAction()
-    } catch (err) { setPasswordError('Authentication failed'); setProcessing(false) }
+      const { data, error } = await supabase
+        .from('customers')
+        .insert([{
+          branch_id: branchId,
+          name: newCustomer.name.trim(),
+          phone: normalizedPhone || null,
+          email: newCustomer.email.trim() || null,
+        }])
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setCustomers(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)))
+      setSelectedCustomer(data)
+      setNewCustomer({ name: '', phone: '', email: '' })
+      setShowCustomerModal(false)
+      showToast('success', 'Created', 'Customer created successfully')
+    } catch (err) {
+      showToast('error', 'Failed', err.message)
+    }
   }
 
-  const executePendingAction = async () => {
-    try {
-      switch (pendingAction) {
-        case 'cancel': await doCancelOrder(pendingActionData); break
-        case 'payment': await doProcessPayment(pendingActionData); break
-        case 'complete': await doCompleteOrder(pendingActionData); break
-        case 'edit': openEditModal(pendingActionData); break
+  const insertOrderWithFallback = async (corePayload, optionalPayload) => {
+    let response = await supabase
+      .from('orders')
+      .insert([{ ...corePayload, ...optionalPayload }])
+      .select()
+      .single()
+
+    if (response.error && Object.keys(optionalPayload).length > 0) {
+      const schemaError = response.error.code === 'PGRST204' ||
+        response.error.code === '42703' ||
+        /column|schema cache/i.test(response.error.message || '')
+
+      if (schemaError) {
+        response = await supabase
+          .from('orders')
+          .insert([corePayload])
+          .select()
+          .single()
       }
-      setShowPasswordModal(false); setPasswordInput(''); setPendingAction(null); setPendingActionData(null)
-    } catch (err) { showToast('error', 'Action Failed', err.message) }
-    finally { setProcessing(false) }
+    }
+
+    return response
   }
 
-  const requirePassword = (action, data) => {
-    if (!isAdmin) { showToast('error', 'Not Allowed', 'Only managers can perform this action'); return }
-    setPendingAction(action); setPendingActionData(data); setShowPasswordModal(true)
+  const adjustInventoryBy = async (inventoryId, delta) => {
+    if (!inventoryId || !delta) return
+    const { data: item, error: readError } = await supabase
+      .from('inventory')
+      .select('id, quantity')
+      .eq('id', inventoryId)
+      .eq('branch_id', branchId)
+      .single()
+
+    if (readError) throw readError
+    const nextQuantity = safeNumber(item.quantity) + delta
+    if (nextQuantity < 0) {
+      throw new Error(`Insufficient stock for inventory item ${inventoryId}`)
+    }
+
+    const { error: updateError } = await supabase
+      .from('inventory')
+      .update({ quantity: nextQuantity, updated_at: now() })
+      .eq('id', inventoryId)
+      .eq('branch_id', branchId)
+
+    if (updateError) throw updateError
   }
 
-  /* ── Order workflow ── */
-  const placeOrder = async () => {
-    if (cart.length === 0) { showToast('error', 'Empty Cart', 'Add items to place an order'); return }
-    const ok = await confirm({
-      title: 'Place Order',
-      message: `Place order for ${selectedCustomer?.name || 'Walk-In'}?\nTotal: Rs. ${total.toFixed(2)} · ${cart.length} item(s) in cart.`,
-      variant: 'primary',
-      confirmLabel: 'Place Order',
+  const saveEditedOrder = async () => {
+    if (!editingOrder) return
+
+    const oldItems = editingOrder.order_items || []
+    const oldById = new Map(oldItems.map(item => [item.inventory_id, item]))
+    const newById = new Map(cart.map(item => [item.id, item]))
+    const ids = new Set([...oldById.keys(), ...newById.keys()])
+    const inventoryDiffs = []
+
+    ids.forEach(id => {
+      const previousQuantity = safeNumber(oldById.get(id)?.quantity)
+      const nextQuantity = safeNumber(newById.get(id)?.quantity)
+      const difference = nextQuantity - previousQuantity
+      if (difference !== 0) inventoryDiffs.push({ id, difference })
     })
-    if (!ok) return
 
+    for (const difference of inventoryDiffs) {
+      const item = inventory.find(product => product.id === difference.id)
+      if (difference.difference > getStock(item)) {
+        throw new Error(`Only ${getStock(item)} additional units are available for ${item?.name || 'this product'}`)
+      }
+    }
+
+    const updatePayload = {
+      customer_id: selectedCustomer?.id || null,
+      customer_name: selectedCustomer?.name || 'Walk-In',
+      subtotal: cartSubtotal,
+      discount: normalizedDiscount,
+      tax: cartTax,
+      total: cartTotal,
+      updated_at: now(),
+    }
+
+    const optionalPayload = {
+      type: orderType,
+      notes: orderNotes.trim() || null,
+      reference: orderReferenceText.trim() || null,
+    }
+
+    let updateResponse = await supabase
+      .from('orders')
+      .update({ ...updatePayload, ...optionalPayload })
+      .eq('id', editingOrder.id)
+      .eq('branch_id', branchId)
+
+    if (updateResponse.error && (
+      updateResponse.error.code === 'PGRST204' ||
+      updateResponse.error.code === '42703' ||
+      /column|schema cache/i.test(updateResponse.error.message || '')
+    )) {
+      updateResponse = await supabase
+        .from('orders')
+        .update(updatePayload)
+        .eq('id', editingOrder.id)
+        .eq('branch_id', branchId)
+    }
+
+    if (updateResponse.error) throw updateResponse.error
+
+    const replacementItems = cart.map(item => ({
+      order_id: editingOrder.id,
+      inventory_id: item.id,
+      quantity: safeNumber(item.quantity),
+      price: extractLinePrice(item),
+      subtotal: safeNumber(item.quantity) * extractLinePrice(item),
+      name: item.name,
+      created_at: now(),
+    }))
+
+    const { error: deleteError } = await supabase
+      .from('order_items')
+      .delete()
+      .eq('order_id', editingOrder.id)
+
+    if (deleteError) throw deleteError
+
+    const { error: insertError } = await supabase
+      .from('order_items')
+      .insert(replacementItems)
+
+    if (insertError) {
+      const originalItems = oldItems.map(item => ({
+        order_id: editingOrder.id,
+        inventory_id: item.inventory_id,
+        quantity: safeNumber(item.quantity),
+        price: extractLinePrice(item),
+        subtotal: safeNumber(item.quantity) * extractLinePrice(item),
+        name: item.name,
+        created_at: item.created_at || now(),
+      }))
+      if (originalItems.length > 0) {
+        await supabase.from('order_items').insert(originalItems)
+      }
+      throw insertError
+    }
+
+    for (const difference of inventoryDiffs) {
+      await adjustInventoryBy(difference.id, -difference.difference)
+    }
+
+    await logPosActivity(
+      'Order Edited',
+      `Order #${orderReference(editingOrder)} updated; ${cart.length} line items; total ${cartTotal.toFixed(2)}`
+    )
+
+    const updatedOrder = {
+      ...editingOrder,
+      ...updatePayload,
+      ...optionalPayload,
+      order_items: replacementItems,
+    }
+
+    showToast('success', 'Order updated', `Order #${orderReference(editingOrder)} was updated`)
+    clearCart()
+    await Promise.all([loadInventory(), loadOrders(), loadTodayOrders()])
+    printReceipt(updatedOrder, replacementItems, {
+      ...user,
+      branch_name: currentBranch?.name || user?.branch_name,
+    })
+  }
+
+  // ── Place Order ──
+  const placeOrder = async () => {
+    if (!branchId) {
+      showToast('error', 'No branch', 'Select a branch before placing orders')
+      return
+    }
+
+    if (cart.length === 0) {
+      showToast('error', 'Empty Cart', 'Add items to place an order')
+      return
+    }
+
+    if (processing || Date.now() - lastSubmissionRef.current < 1200) return
+    lastSubmissionRef.current = Date.now()
     setProcessing(true)
+
     try {
-      const saleData = {
-        branch_id: activeBranchId,
-        // A branch may be selected as the order destination, but a branch id
-        // must never be written into the customers foreign-key column.
-        customer_id: selectedCustomer?._partyType === 'branch' ? null : (selectedCustomer?.id || null),
+      if (editingOrder) {
+        await saveEditedOrder()
+        return
+      }
+
+      const invalidItem = cart.find(item => (
+        safeNumber(item.quantity) <= 0 ||
+        safeNumber(item.quantity) > getStock(inventory.find(product => product.id === item.id))
+      ))
+      if (invalidItem) {
+        throw new Error(`Stock changed for ${invalidItem.name}. Refresh the cart and try again.`)
+      }
+
+      const coreOrderData = {
+        branch_id: branchId,
+        customer_id: selectedCustomer?.id || null,
         customer_name: selectedCustomer?.name || 'Walk-In',
-        subtotal, tax, discount, total,
+        subtotal: cartSubtotal,
+        discount: normalizedDiscount,
+        tax: cartTax,
+        total: cartTotal,
         status: ORDER_STATUS.PENDING,
         created_by: user?.id,
         created_by_name: user?.name,
+        created_at: now(),
       }
-      const saleItems = cart.map(item => ({
-        inventory_id: item.inventory_id, quantity: item.qty, price: item.price,
-        subtotal: item.qty * item.price, name: item.name,
-      }))
-      const inventoryUpdates = cart.map(item => ({ inventoryId: item.inventory_id, quantity: item.qty }))
 
-      const { data, error } = await _placeOrder({
-        sale: saleData, saleItems, inventoryUpdates,
-        activityLog: {
-          branchId: activeBranchId, userId: user?.id, userName: user?.name,
-          description: `Order placed: ${cart.length} items, Total: ${total}`,
-        },
-      })
-      if (error) { showToast('error', 'Order Failed', error.message || error.details || 'Unknown error'); return }
-      showToast('success', 'Order Placed', `Total Rs. ${total.toFixed(2)}`)
-      clearCart()
-      await Promise.all([loadOrders(), loadInventory()])
-      if (data) printReceipt(data, saleItems, user, currentBranch?.name)
-    } catch (err) {
-      showToast('error', 'Order Failed', err.message || 'Unknown error')
-    }
-    finally { setProcessing(false) }
-  }
+      const optionalOrderData = {
+        type: orderType,
+        notes: orderNotes.trim() || null,
+        reference: orderReferenceText.trim() || null,
+      }
 
-  const initiateCompleteOrder = (order) => {
-    if (!isAdmin) { showToast('error', 'Not Allowed', 'Only managers can complete orders'); return }
-    setCompleteOrderData(order)
-    setCompletePaidAmount(order.total || 0)
-    setCompletePaymentMethod(PAYMENT_METHODS.CASH)
-    setCompleteRemarks('')
-    setShowCompleteModal(true)
-  }
+      const { data: order, error: orderError } = await insertOrderWithFallback(
+        coreOrderData,
+        optionalOrderData
+      )
 
-  const confirmCompleteOrder = () => {
-    const totalDue = completeOrderData?.due_amount ?? completeOrderData?.total ?? 0
-    if (completePaymentMethod !== PAYMENT_METHODS.CREDIT && completePaidAmount <= 0) {
-      showToast('error', 'Invalid Amount', 'Enter a valid paid amount')
-      return
-    }
-    if (completePaymentMethod !== PAYMENT_METHODS.CREDIT && completePaidAmount > totalDue) {
-      showToast('error', 'Amount Too High', `Maximum payable amount is Rs. ${totalDue.toFixed(2)}`)
-      return
-    }
-    setShowCompleteModal(false)
-    requirePassword('complete', completeOrderData.id)
-  }
+      if (orderError) throw orderError
 
-  const doCompleteOrder = async (orderId) => {
-    try {
-      const order = orders.find(o => o.id === orderId)
-      if (!order) { showToast('error', 'Not Found', 'Order not found'); return }
-      const totalDue = order.due_amount ?? order.total ?? 0
-      const isCreditSale = completePaymentMethod === PAYMENT_METHODS.CREDIT
-      const paid = isCreditSale ? 0 : Math.min(Number(completePaidAmount) || 0, totalDue)
-      const newDue = Math.max(0, totalDue - paid)
-      const finalStatus = isCreditSale ? ORDER_STATUS.CREDIT
-        : (newDue > 0 ? ORDER_STATUS.PARTIALLY_PAID : ORDER_STATUS.PAID)
-
-      const ledgerEntry = order.customer_id && paid > 0 ? {
-        customer_id: order.customer_id, branch_id: activeBranchId, amount: paid, type: 'payment',
-        description: `Payment received - ${completePaymentMethod} - Order #${order.invoice_no || order.id}`,
-        order_id: order.id, balance_after: newDue,
-      } : null
-      const { error } = await _completeOrder({
-        orderId, status: finalStatus,
-        payment: { amount: paid, method: completePaymentMethod, remarks: completeRemarks },
-        paid_amount: paid, due_amount: newDue, completed_by: user?.id, completed_by_name: user?.name,
-        ledgerEntry,
-        activityLog: {
-          branchId: activeBranchId, userId: user?.id, userName: user?.name,
-          description: `Order completed: #${order.invoice_no || order.id} - Paid: ${paid} via ${completePaymentMethod}`,
-        },
-      })
-      if (error) { showToast('error', 'Completion Failed', error.message); return }
-      showToast('success', 'Order Completed', `#${order.invoice_no || order.id?.slice(0, 8)}`)
-      setCompleteOrderData(null)
-      await loadOrders()
-    } catch (err) { showToast('error', 'Completion Failed', err.message) }
-  }
-
-  const initiateCancel = (orderId) => {
-    if (!isAdmin) { showToast('error', 'Not Allowed', 'Only managers can cancel orders'); return }
-    setCancelOrderId(orderId); setCancelReason(''); setShowCancelModal(true)
-  }
-
-  const confirmCancel = () => {
-    if (!cancelReason.trim()) { showToast('error', 'Reason Required', 'Please provide a cancellation reason'); return }
-    setShowCancelModal(false)
-    requirePassword('cancel', cancelOrderId)
-  }
-
-  const doCancelOrder = async (orderId) => {
-    try {
-      const order = orders.find(o => o.id === orderId)
-      if (!order) { showToast('error', 'Not Found', 'Order not found'); return }
-      const ledgerEntry = order.customer_id && (order.paid_amount || 0) > 0 ? {
-        customer_id: order.customer_id, branch_id: activeBranchId, amount: -(order.paid_amount || 0),
-        type: 'refund', description: `Refund for cancelled order #${order.invoice_no || order.id} - Reason: ${cancelReason}`,
+      const lineItems = cart.map(item => ({
         order_id: order.id,
-      } : null
+        inventory_id: item.id,
+        quantity: safeNumber(item.quantity),
+        price: extractLinePrice(item),
+        subtotal: safeNumber(item.quantity) * extractLinePrice(item),
+        name: item.name,
+        created_at: now(),
+      }))
 
-      const { error } = await _cancelOrder({
-        orderId, cancelledBy: user?.id, cancelledByName: user?.name, reason: cancelReason, ledgerEntry,
-        activityLog: {
-          branchId: activeBranchId, userId: user?.id, userName: user?.name,
-          description: `Order cancelled: #${order.invoice_no || order.id} - Reason: ${cancelReason}`,
-        },
+      const { error: itemsError } = await supabase
+        .from('order_items')
+        .insert(lineItems)
+
+      if (itemsError) {
+        await supabase.from('orders').delete().eq('id', order.id)
+        throw itemsError
+      }
+
+      const adjustedItems = []
+      try {
+        for (const item of cart) {
+          await adjustInventoryBy(item.id, -safeNumber(item.quantity))
+          adjustedItems.push(item)
+        }
+      } catch (inventoryError) {
+        for (const item of adjustedItems) {
+          await adjustInventoryBy(item.id, safeNumber(item.quantity))
+        }
+        await supabase.from('order_items').delete().eq('order_id', order.id)
+        await supabase.from('orders').delete().eq('id', order.id)
+        throw inventoryError
+      }
+
+      const completedOrder = {
+        ...order,
+        ...optionalOrderData,
+        order_items: lineItems,
+      }
+
+      await logPosActivity(
+        'Order Placed',
+        `Order #${orderReference(order)}; ${cart.length} line items; ${orderType}; total ${cartTotal.toFixed(2)}`
+      )
+
+      showToast('success', 'Order placed', `Order #${orderReference(order)} is ready for payment`)
+      printReceipt(completedOrder, lineItems, {
+        ...user,
+        branch_name: currentBranch?.name || user?.branch_name,
       })
-      if (error) { showToast('error', 'Cancel Failed', error.message); return }
-      showToast('success', 'Order Cancelled', 'Inventory has been restored')
-      await Promise.all([loadOrders(), loadInventory()])
-    } catch (err) { showToast('error', 'Cancel Failed', err.message) }
+      clearCart()
+      await Promise.all([loadInventory(), loadOrders()])
+    } catch (err) {
+      console.error('[POS] Order error:', err)
+      showToast('error', editingOrder ? 'Update failed' : 'Order failed', err.message)
+    } finally {
+      setProcessing(false)
+    }
   }
 
-  const initiatePayment = (order) => {
-    if (!isAdmin) { showToast('error', 'Not Allowed', 'Only managers can process payments'); return }
-    setSelectedOrder(order)
-    setPaidAmount(order.due_amount ?? order.total ?? 0)
+  // ── Open Payment Modal ──
+  const openPaymentModal = (order, shouldPrint = false) => {
+    const paidSoFar = safeNumber(order.paid_amount)
+    const due = Math.max(0, safeNumber(order.due_amount, safeNumber(order.total) - paidSoFar))
+    setPaymentOrder(order)
+    setCashReceived(due)
     setPaymentMethod(PAYMENT_METHODS.CASH)
     setPaymentRemarks('')
+    setPrintAfterPayment(shouldPrint)
     setShowPaymentModal(true)
   }
 
-  const confirmPayment = () => {
-    if (!paidAmount || paidAmount <= 0) { showToast('error', 'Invalid Amount', 'Enter a valid paid amount'); return }
-    const due = selectedOrder?.due_amount ?? selectedOrder?.total ?? 0
-    if (paidAmount > due) { showToast('error', 'Amount Too High', `Maximum payable amount is Rs. ${due.toFixed(2)}`); return }
-    setShowPaymentModal(false)
-    requirePassword('payment', selectedOrder.id)
-  }
+  const ensureLedgerSale = async (order) => {
+    if (!order.customer_id) return
+    const { data: existing, error: lookupError } = await supabase
+      .from('ledger_entries')
+      .select('id')
+      .eq('order_id', order.id)
+      .eq('branch_id', branchId)
+      .eq('type', 'sale')
+      .limit(1)
 
-  const doProcessPayment = async (orderId) => {
-    try {
-      const order = orders.find(o => o.id === orderId)
-      if (!order) { showToast('error', 'Not Found', 'Order not found'); return }
-      const totalDue = order.due_amount ?? order.total ?? 0
-      const newPaid = (order.paid_amount || 0) + paidAmount
-      const newDue = Math.max(0, totalDue - paidAmount)
-      const finalStatus = newDue > 0 ? ORDER_STATUS.PARTIALLY_PAID : ORDER_STATUS.PAID
-
-      const ledgerEntry = order.customer_id ? {
-        customer_id: order.customer_id, branch_id: activeBranchId, amount: paidAmount, type: 'payment',
-        description: `Payment received - ${paymentMethod} - Order #${order.invoice_no || order.id}`,
-        order_id: order.id, balance_after: newDue,
-      } : null
-      const { error } = await _processPayment({
-        orderId, payment: { amount: paidAmount, method: paymentMethod, remarks: paymentRemarks },
-        status: finalStatus, paid: newPaid, due: newDue, ledgerEntry,
-        activityLog: {
-          branchId: activeBranchId, userId: user?.id, userName: user?.name,
-          description: `Payment processed: ${paidAmount} via ${paymentMethod} for Order #${order.invoice_no || order.id}`,
-        },
-      })
-      if (error) { showToast('error', 'Payment Failed', error.message); return }
-      showToast('success', 'Payment Processed', `Rs. ${paidAmount.toFixed(2)}`)
-      setPaidAmount(0); setPaymentRemarks(''); setPaymentMethod(PAYMENT_METHODS.CASH)
-      await loadOrders()
-    } catch (err) { showToast('error', 'Payment Failed', err.message) }
-  }
-
-  const initiateEditOrder = (order) => {
-    if (!isAdmin) { showToast('error', 'Not Allowed', 'Only managers can edit orders'); return }
-    if (order.status !== ORDER_STATUS.PENDING) { showToast('error', 'Edit Locked', 'Only unpaid pending orders can be edited'); return }
-    requirePassword('edit', order)
-  }
-
-  const openEditModal = (order) => {
-    setEditOrderData(order)
-    setEditItems((order.order_items || []).map(it => ({ ...it, originalQuantity: it.quantity })))
-    setEditDiscount(order.discount || 0)
-    setEditTax(order.tax || 0)
-    setShowEditModal(true)
-  }
-
-  const editSubtotal = useMemo(() => editItems.reduce((s, i) => s + (i.quantity * i.price), 0), [editItems])
-  const editTotal = useMemo(() => Math.max(0, editSubtotal - editDiscount + editTax), [editSubtotal, editDiscount, editTax])
-
-  const updateEditQty = (idx, qty) => {
-    if (qty < 1) return
-    setEditItems(prev => prev.map((it, i) => {
-      if (i !== idx) return it
-      const invItem = inventory.find(p => p.id === it.inventory_id)
-      const maxAvailable = (invItem?.quantity || 0) + (it.originalQuantity || 0)
-      if (qty > maxAvailable) { showToast('error', 'Stock Limit', `Only ${maxAvailable} units available for "${it.name}"`); return it }
-      return { ...it, quantity: qty }
-    }))
-  }
-
-  const removeEditItem = (idx) => setEditItems(prev => prev.filter((_, i) => i !== idx))
-
-  const saveEditOrder = async () => {
-    if (!editOrderData) return
-    if (editItems.length === 0) { showToast('error', 'Empty Order', 'Order must have at least one item'); return }
-    setProcessing(true)
-    try {
-      const editIds = editItems.map(i => i.inventory_id)
-      const inventoryDiffs = editItems.map(item => ({ inventoryId: item.inventory_id, diff: item.quantity - (item.originalQuantity || 0) }))
-      const removedDiffs = (editOrderData.order_items || [])
-        .filter(i => !editIds.includes(i.inventory_id))
-        .map(i => ({ inventoryId: i.inventory_id, diff: -i.quantity }))
-
-      const { error } = await _editOrder({
-        orderId: editOrderData.id,
-        updatedOrder: { subtotal: editSubtotal, discount: editDiscount, tax: editTax, total: editTotal },
-        updatedItems: editItems.map(i => ({ ...i, subtotal: i.quantity * i.price })),
-        inventoryDiffs: [...inventoryDiffs, ...removedDiffs],
-        activityLog: {
-          branchId: activeBranchId, userId: user?.id, userName: user?.name,
-          description: `Order edited: #${editOrderData.invoice_no || editOrderData.id}`,
-        },
-      })
-      if (error) { showToast('error', 'Edit Failed', error.message); return }
-      showToast('success', 'Order Updated', `#${editOrderData.invoice_no || editOrderData.id?.slice(0, 8)}`)
-      setShowEditModal(false); setEditOrderData(null)
-      await Promise.all([loadOrders(), loadInventory()])
-    } catch (err) { showToast('error', 'Edit Failed', err.message) }
-    finally { setProcessing(false) }
-  }
-
-  const printOrderRow = (order) => printReceipt(order, order.order_items || [], user, currentBranch?.name)
-
-  const viewOrderDetails = async (order) => {
-    setOrderDetails(order)
-    setShowOrderDetailsModal(true)
-    if (order?.customer_id) {
-      const { data: ledgerData } = await supabase.from('ledger_entries').select('*')
-        .eq('customer_id', order.customer_id).eq('branch_id', activeBranchId)
-        .order('created_at', { ascending: false })
-      setCustomerLedger(ledgerData || [])
-    } else setCustomerLedger([])
-  }
-
-  const canModifyOrder = (order) => isAdmin && [ORDER_STATUS.PENDING, ORDER_STATUS.PARTIALLY_PAID, ORDER_STATUS.CREDIT].includes(order.status)
-  const canEditOrder = (order) => isAdmin && order.status === ORDER_STATUS.PENDING
-
-  /* ── Tab datasets ── */
-  const pendingOrders = useMemo(() => {
-    let list = orders.filter(o => [ORDER_STATUS.PENDING, ORDER_STATUS.PARTIALLY_PAID, ORDER_STATUS.CREDIT].includes(o.status))
-    if (listSearch.trim()) {
-      const s = listSearch.toLowerCase()
-      list = list.filter(o => o.invoice_no?.toLowerCase().includes(s) || o.customer_name?.toLowerCase().includes(s) || o.id?.toLowerCase().includes(s))
+    if (lookupError) {
+      console.warn('[POS] Ledger lookup failed:', lookupError.message)
+      return
     }
-    return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-  }, [orders, listSearch])
 
-  const cancelledOrders = useMemo(() => {
-    let list = orders.filter(o => o.status === ORDER_STATUS.CANCELLED)
-    if (listSearch.trim()) {
-      const s = listSearch.toLowerCase()
-      list = list.filter(o => o.invoice_no?.toLowerCase().includes(s) || o.customer_name?.toLowerCase().includes(s) || o.id?.toLowerCase().includes(s))
+    if ((existing || []).length === 0) {
+      const { error } = await supabase.from('ledger_entries').insert([{
+        customer_id: order.customer_id,
+        branch_id: branchId,
+        order_id: order.id,
+        amount: safeNumber(order.total),
+        type: 'sale',
+        description: `Sale order #${orderReference(order)}`,
+        created_by: user?.id,
+        created_by_name: user?.name,
+        created_at: now(),
+      }])
+      if (error) console.warn('[POS] Sale ledger entry failed:', error.message)
     }
-    return list.sort((a, b) => new Date(b.cancelled_at || b.created_at) - new Date(a.cancelled_at || a.created_at))
-  }, [orders, listSearch])
+  }
 
-  const reportRows = useMemo(() => {
-    let list = orders
-    if (reportStart) list = list.filter(o => new Date(o.created_at) >= new Date(reportStart + 'T00:00:00'))
-    if (reportEnd) list = list.filter(o => new Date(o.created_at) <= new Date(reportEnd + 'T23:59:59'))
-    if (reportCustomer) list = list.filter(o => o.customer_id === reportCustomer)
-    if (reportStatus !== 'all') list = list.filter(o => o.status === reportStatus)
-    if (reportPaymentType !== 'all') list = list.filter(o =>
-      o.payment_type === reportPaymentType ||
-      (o.order_payments || []).some(p => p.method === reportPaymentType) ||
-      (reportPaymentType === PAYMENT_METHODS.CREDIT && o.status === ORDER_STATUS.CREDIT)
+  // ── Process Payment ──
+  const processPayment = async (shouldPrint = printAfterPayment) => {
+    if (!paymentOrder || paymentProcessing) return
+
+    const total = safeNumber(paymentOrder.total)
+    const alreadyPaid = safeNumber(paymentOrder.paid_amount)
+    const dueBefore = Math.max(
+      0,
+      safeNumber(paymentOrder.due_amount, total - alreadyPaid)
     )
-    return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-  }, [orders, reportStart, reportEnd, reportCustomer, reportStatus, reportPaymentType])
 
-  const resetReportFilters = () => {
-    setReportStart(todayStr()); setReportEnd(todayStr())
-    setReportCustomer(''); setReportStatus('all'); setReportPaymentType('all')
+    if (dueBefore <= 0) {
+      showToast('info', 'Already paid', 'This order has no outstanding balance')
+      setShowPaymentModal(false)
+      return
+    }
+
+    const paymentAmount = paymentMethod === PAYMENT_METHODS.CREDIT ? 0 : dueBefore
+    if (paymentMethod === PAYMENT_METHODS.CASH && safeNumber(cashReceived) < paymentAmount) {
+      showToast('error', 'Insufficient cash', `Receive at least ${formatPrice(paymentAmount)}`)
+      return
+    }
+
+    setPaymentProcessing(true)
+
+    try {
+      const status = paymentMethod === PAYMENT_METHODS.CREDIT 
+        ? ORDER_STATUS.CREDIT 
+        : ORDER_STATUS.PAID
+      const paidTotal = alreadyPaid + paymentAmount
+      const dueAfter = Math.max(0, total - paidTotal)
+      let paymentRecord = null
+
+      if (paymentAmount > 0) {
+        const { data, error: paymentError } = await supabase
+          .from('order_payments')
+          .insert([{
+            order_id: paymentOrder.id,
+            amount: paymentAmount,
+            method: paymentMethod,
+            remarks: paymentRemarks.trim() || null,
+            created_at: now(),
+          }])
+          .select()
+          .single()
+
+        if (paymentError) throw paymentError
+        paymentRecord = data
+      }
+
+      const { data: order, error } = await supabase
+        .from('orders')
+        .update({ 
+          status,
+          paid_amount: paidTotal,
+          due_amount: paymentMethod === PAYMENT_METHODS.CREDIT ? dueBefore : dueAfter,
+          completed_by: user?.id,
+          completed_by_name: user?.name,
+          completed_at: now(),
+          updated_at: now(),
+        })
+        .eq('id', paymentOrder.id)
+        .eq('branch_id', branchId)
+        .select()
+        .single()
+
+      if (error) {
+        if (paymentRecord?.id) {
+          await supabase.from('order_payments').delete().eq('id', paymentRecord.id)
+        }
+        throw error
+      }
+
+      if (order.customer_id) {
+        await ensureLedgerSale({ ...paymentOrder, ...order })
+        if (paymentAmount > 0) {
+          const { error: ledgerPaymentError } = await supabase.from('ledger_entries').insert([{
+            customer_id: order.customer_id,
+            branch_id: branchId,
+            order_id: order.id,
+            amount: -paymentAmount,
+            type: 'payment',
+            description: `Payment received via ${paymentMethod.replaceAll('_', ' ')} for order #${orderReference(order)}`,
+            created_by: user?.id,
+            created_by_name: user?.name,
+            created_at: now(),
+          }])
+          if (ledgerPaymentError) {
+            console.warn('[POS] Payment ledger entry failed:', ledgerPaymentError.message)
+            showToast('warning', 'Payment saved', 'The ledger entry could not be recorded automatically')
+          }
+        }
+      }
+
+      const printableOrder = {
+        ...paymentOrder,
+        ...order,
+        payment_type: paymentMethod,
+        order_payments: [
+          ...(paymentOrder.order_payments || []),
+          ...(paymentRecord ? [paymentRecord] : []),
+        ],
+      }
+
+      await logPosActivity(
+        'Payment Processed',
+        `Order #${orderReference(order)}; ${paymentMethod}; amount ${paymentAmount.toFixed(2)}; status ${status}`
+      )
+
+      showToast('success', 'Payment processed', `Order #${orderReference(order)} is ${status.replaceAll('_', ' ')}`)
+
+      if (shouldPrint) {
+        printReceipt(printableOrder, paymentOrder.order_items || [], {
+          ...user,
+          branch_name: currentBranch?.name || user?.branch_name,
+        })
+      }
+
+      setShowPaymentModal(false)
+      setPaymentOrder(null)
+      setCashReceived(0)
+      setPaymentRemarks('')
+      setPrintAfterPayment(false)
+      await Promise.all([loadOrders(), loadTodayOrders()])
+    } catch (err) {
+      showToast('error', 'Payment failed', err.message)
+    } finally {
+      setPaymentProcessing(false)
+    }
+  }
+
+  // ── Cancel Order ──
+  const cancelOrder = (order) => {
+    if (!isAdmin) {
+      showToast('error', 'Manager required', 'Only managers and administrators can cancel orders')
+      return
+    }
+    if (!order || order.status === ORDER_STATUS.CANCELLED) return
+    setCancelTarget(order)
+    setCancelReason('')
+    setShowCancelModal(true)
+  }
+
+  const requestCancellationAuthorization = () => {
+    if (!cancelTarget || !cancelReason.trim()) {
+      showToast('error', 'Reason required', 'Enter a cancellation reason before continuing')
+      return
+    }
+    setShowCancelModal(false)
+    setAuthAction({ type: 'cancel', order: cancelTarget })
+    setShowAuthModal(true)
+  }
+
+  const confirmCancelOrder = async (targetOrder) => {
+    if (!targetOrder || targetOrder.status === ORDER_STATUS.CANCELLED) return
+
+    try {
+      const { data: order, error } = await supabase
+        .from('orders')
+        .update({ 
+          status: ORDER_STATUS.CANCELLED,
+          cancelled_by: user?.id,
+          cancelled_by_name: user?.name,
+          cancellation_reason: cancelReason.trim(),
+          cancelled_at: now(),
+          updated_at: now(),
+        })
+        .eq('id', targetOrder.id)
+        .eq('branch_id', branchId)
+        .neq('status', ORDER_STATUS.CANCELLED)
+        .select()
+        .single()
+
+      if (error) throw error
+
+      const { data: items } = await supabase
+        .from('order_items')
+        .select('*')
+        .eq('order_id', targetOrder.id)
+
+      for (const item of (items || [])) {
+        if (item.inventory_id && safeNumber(item.quantity) > 0) {
+          await adjustInventoryBy(item.inventory_id, safeNumber(item.quantity))
+        }
+      }
+
+      if (order.customer_id) {
+        const { data: ledgerRows, error: ledgerLookupError } = await supabase
+          .from('ledger_entries')
+          .select('amount')
+          .eq('order_id', order.id)
+          .eq('branch_id', branchId)
+
+        if (!ledgerLookupError) {
+          const netAmount = (ledgerRows || []).reduce(
+            (sum, entry) => sum + safeNumber(entry.amount),
+            0
+          )
+          if (Math.abs(netAmount) > 0.0001) {
+            await supabase.from('ledger_entries').insert([{
+              customer_id: order.customer_id,
+              branch_id: branchId,
+              order_id: order.id,
+              amount: -netAmount,
+              type: 'cancellation',
+              description: `Cancellation adjustment for order #${orderReference(order)}: ${cancelReason.trim()}`,
+              created_by: user?.id,
+              created_by_name: user?.name,
+              created_at: now(),
+            }])
+          }
+        }
+      }
+
+      await logPosActivity(
+        'Order Cancelled',
+        `Order #${orderReference(order)}; reason: ${cancelReason.trim()}`
+      )
+
+      showToast('success', 'Order cancelled', `Order #${orderReference(order)} was cancelled and stock restored`)
+      setShowAuthModal(false)
+      setAuthAction(null)
+      setAuthPassword('')
+      setCancelTarget(null)
+      setCancelReason('')
+      await Promise.all([loadOrders(), loadInventory(), loadTodayOrders()])
+    } catch (err) {
+      showToast('error', 'Cancellation failed', err.message)
+    }
+  }
+
+  const beginEditOrder = (order) => {
+    if (!order || ![ORDER_STATUS.PENDING, ORDER_STATUS.PARTIALLY_PAID].includes(order.status)) {
+      showToast('error', 'Cannot edit', 'Only pending or partially paid orders can be edited')
+      return
+    }
+
+    const selected = customers.find(customer => customer.id === order.customer_id) || null
+    const editableItems = (order.order_items || []).map(item => {
+      const product = inventory.find(inventoryItem => inventoryItem.id === item.inventory_id)
+      const originalQuantity = safeNumber(item.quantity)
+      return {
+        id: item.inventory_id,
+        inventory_id: item.inventory_id,
+        name: item.name || product?.name || 'Item',
+        quantity: originalQuantity,
+        original_quantity: originalQuantity,
+        price: extractLinePrice(item),
+        sale_price: extractLinePrice(item),
+        unit: product?.unit || 'unit',
+        sku: product?.sku || '',
+        max_stock: getStock(product) + originalQuantity,
+      }
+    })
+
+    setEditingOrder(order)
+    setCart(editableItems)
+    setSelectedCustomer(selected)
+    setDiscount(safeNumber(order.discount))
+    const taxableBase = Math.max(0, safeNumber(order.subtotal) - safeNumber(order.discount))
+    setTaxRate(taxableBase > 0 ? (safeNumber(order.tax) / taxableBase) * 100 : 0)
+    setOrderType(order.type || order.order_type || 'branch_dispatch')
+    setOrderNotes(order.notes || '')
+    setOrderReferenceText(order.reference || '')
+    setActiveTab('new_order')
+    setTimeout(() => searchInputRef.current?.focus(), 0)
+    showToast('info', 'Editing order', `Changes will update order #${orderReference(order)} without creating a duplicate`)
+  }
+
+  const requestEditAuthorization = (order) => {
+    if (!isAdmin) {
+      showToast('error', 'Manager required', 'Only managers and administrators can edit existing orders')
+      return
+    }
+    setAuthAction({ type: 'edit', order })
+    setShowAuthModal(true)
+  }
+
+  // ── View Customer History ──
+  const viewCustomerHistory = async () => {
+    if (!selectedCustomer) {
+      showToast('error', 'No Customer', 'Please select a customer first')
+      return
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*, order_items(*)')
+        .eq('customer_id', selectedCustomer.id)
+        .eq('branch_id', branchId)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setCustomerHistory(data || [])
+      setShowHistoryModal(true)
+    } catch (err) {
+      showToast('error', 'Failed', err.message)
+    }
+  }
+
+  // ── Generate Report ──
+  const generateReport = async () => {
+    if (!hasReportAccess) {
+      showToast('error', 'Access Denied', 'You do not have permission to view reports')
+      return
+    }
+
+    setReportLoading(true)
+    try {
+      let query = supabase
+        .from('orders')
+        .select('*, order_items(*), order_payments(*)')
+        .eq('branch_id', branchId)
+        .order('created_at', { ascending: false })
+
+      if (reportFilters.startDate) {
+        query = query.gte('created_at', `${reportFilters.startDate}T00:00:00`)
+      }
+      if (reportFilters.endDate) {
+        query = query.lte('created_at', reportFilters.endDate + 'T23:59:59')
+      }
+      if (reportFilters.customer) {
+        query = query.eq('customer_id', reportFilters.customer)
+      }
+      if (reportFilters.status !== 'all') {
+        query = query.eq('status', reportFilters.status)
+      }
+
+      let { data, error } = await query
+
+      if (error) {
+        let fallbackQuery = supabase
+          .from('orders')
+          .select('*, order_items(*)')
+          .eq('branch_id', branchId)
+          .order('created_at', { ascending: false })
+        if (reportFilters.startDate) fallbackQuery = fallbackQuery.gte('created_at', `${reportFilters.startDate}T00:00:00`)
+        if (reportFilters.endDate) fallbackQuery = fallbackQuery.lte('created_at', `${reportFilters.endDate}T23:59:59`)
+        if (reportFilters.customer) fallbackQuery = fallbackQuery.eq('customer_id', reportFilters.customer)
+        if (reportFilters.status !== 'all') fallbackQuery = fallbackQuery.eq('status', reportFilters.status)
+        const fallback = await fallbackQuery
+        data = fallback.data
+        error = fallback.error
+      }
+
+      if (error) throw error
+      const filtered = reportFilters.paymentType === 'all'
+        ? (data || [])
+        : (data || []).filter(order => getPaymentMethod(order) === reportFilters.paymentType)
+      setReportData(filtered)
+    } catch (err) {
+      showToast('error', 'Report failed', err.message)
+    } finally {
+      setReportLoading(false)
+    }
+  }
+
+  const viewOrderDetail = (order) => {
+    setDetailOrder(order)
+    setShowOrderDetailModal(true)
+  }
+
+  const handlePrintOrder = async (order) => {
+    let items = order.order_items || []
+    if (items.length === 0) {
+      const { data, error } = await supabase
+        .from('order_items')
+        .select('*')
+        .eq('order_id', order.id)
+      if (error) {
+        showToast('error', 'Print failed', error.message)
+        return
+      }
+      items = data || []
+    }
+    printReceipt(order, items, {
+      ...user,
+      branch_name: currentBranch?.name || user?.branch_name,
+    })
   }
 
   const exportReportCSV = () => {
-    if (reportRows.length === 0) { showToast('info', 'Nothing to Export', 'No orders match the current filters'); return }
-    const rows = reportRows.map(o => ({
-      Invoice: o.invoice_no || o.id?.slice(0, 8),
-      Date: new Date(o.created_at).toLocaleString(),
-      Customer: o.customer_name || 'Walk-In',
-      Subtotal: (o.subtotal || 0).toFixed(2),
-      Discount: (o.discount || 0).toFixed(2),
-      Tax: (o.tax || 0).toFixed(2),
-      Total: (o.total || 0).toFixed(2),
-      Status: o.status,
-    }))
-    downloadCSV(`pos-report-${reportStart}_to_${reportEnd}.csv`, rows)
-    showToast('success', 'Exported', `${rows.length} order(s) exported to CSV`)
+    if (reportData.length === 0) {
+      showToast('info', 'Nothing to export', 'Run a report that contains at least one order')
+      return
+    }
+
+    const rows = [
+      ['Invoice', 'Created', 'Customer', 'Type', 'Payment', 'Subtotal', 'Discount', 'Tax', 'Total', 'Status'],
+      ...reportData.map(order => [
+        orderReference(order),
+        formatDateTime(order.created_at),
+        order.customer_name || 'Walk-In',
+        (order.type || order.order_type || 'sale').replaceAll('_', ' '),
+        (getPaymentMethod(order) || 'N/A').replaceAll('_', ' '),
+        safeNumber(order.subtotal).toFixed(2),
+        safeNumber(order.discount).toFixed(2),
+        safeNumber(order.tax).toFixed(2),
+        safeNumber(order.total).toFixed(2),
+        order.status || 'pending',
+      ]),
+    ]
+
+    const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n')
+    downloadTextFile(
+      `stocko-pos-report-${reportFilters.startDate || 'all'}-${reportFilters.endDate || 'all'}.csv`,
+      `\uFEFF${csv}`,
+      'text/csv;charset=utf-8'
+    )
+    showToast('success', 'CSV exported', `${reportData.length} orders were exported`)
   }
 
   const printReport = () => {
-    if (reportRows.length === 0) { showToast('info', 'Nothing to Print', 'No orders match the current filters'); return }
-    printOrdersReport(reportRows, `${reportStart} to ${reportEnd} · ${reportRows.length} order(s) · ${currentBranch?.name || ''}`)
+    if (reportData.length === 0) {
+      showToast('info', 'Nothing to print', 'Run a report that contains at least one order')
+      return
+    }
+
+    const printWindow = window.open('', '_blank', 'width=1100,height=760')
+    if (!printWindow) {
+      showToast('error', 'Popup blocked', 'Allow popups to print the report')
+      return
+    }
+
+    const totalRevenue = reportData.reduce((sum, order) => (
+      order.status === ORDER_STATUS.CANCELLED ? sum : sum + safeNumber(order.total)
+    ), 0)
+
+    const rows = reportData.map((order, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(orderReference(order))}</td>
+        <td>${escapeHtml(formatDateTime(order.created_at))}</td>
+        <td>${escapeHtml(order.customer_name || 'Walk-In')}</td>
+        <td>${escapeHtml((getPaymentMethod(order) || 'N/A').replaceAll('_', ' '))}</td>
+        <td class="right">Rs. ${safeNumber(order.total).toFixed(2)}</td>
+        <td>${escapeHtml((order.status || 'pending').replaceAll('_', ' '))}</td>
+      </tr>
+    `).join('')
+
+    printWindow.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Stocko POS Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 28px; color: #111827; }
+            h1 { font-size: 22px; margin: 0 0 4px; }
+            p { color: #6b7280; margin: 0 0 18px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+            th { background: #f8fafc; }
+            .right { text-align: right; }
+            .summary { margin: 18px 0; display: flex; gap: 24px; font-weight: 700; }
+            @media print { button { display: none; } }
+          </style>
+        </head>
+        <body>
+          <h1>Stocko POS Sales Report</h1>
+          <p>${escapeHtml(currentBranch?.name || user?.branch_name || 'Branch')} · ${escapeHtml(reportFilters.startDate || 'Beginning')} to ${escapeHtml(reportFilters.endDate || 'Today')}</p>
+          <div class="summary">
+            <span>Orders: ${reportData.length}</span>
+            <span>Revenue: Rs. ${totalRevenue.toFixed(2)}</span>
+          </div>
+          <table>
+            <thead>
+              <tr><th>#</th><th>Invoice</th><th>Time</th><th>Customer</th><th>Payment</th><th>Total</th><th>Status</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <button onclick="window.print()" style="margin-top:18px;padding:10px 18px;">Print report</button>
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+    printWindow.focus()
   }
 
-  /* ══════════════════════════════════════════════════════════════════════
-     ACCESS GATE
-     ══════════════════════════════════════════════════════════════════════ */
+  // ── Auth Check ──
+  const checkAuth = async () => {
+    if (!isAdmin || !authAction) {
+      showToast('error', 'Access denied', 'Manager authorization is required')
+      return
+    }
+    if (!authPassword) {
+      showToast('error', 'Password required', 'Enter your current Stocko password')
+      return
+    }
+
+    setAuthProcessing(true)
+    try {
+      let email = user?.email
+      if (!email && user?.id) {
+        const { data } = await supabase
+          .from('users')
+          .select('email')
+          .eq('id', user.id)
+          .single()
+        email = data?.email
+      }
+
+      if (!email) throw new Error('The current user email could not be verified')
+
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password: authPassword,
+      })
+      if (error) throw new Error('The password is incorrect')
+
+      const action = authAction
+      setShowAuthModal(false)
+      setAuthAction(null)
+      setAuthPassword('')
+
+      if (action.type === 'cancel') {
+        await confirmCancelOrder(action.order)
+      } else if (action.type === 'edit') {
+        beginEditOrder(action.order)
+      }
+    } catch (error) {
+      showToast('error', 'Authorization failed', error.message)
+      setAuthPassword('')
+    } finally {
+      setAuthProcessing(false)
+    }
+  }
+
+  // ── Access Gate ──
   if (!hasAccess) {
     return (
-      <EmptyState
-        icon="Shield"
-        title="Access Restricted"
-        message={`Your role (${user?.role || 'unknown'}) does not have access to the Point of Sale module. Only Admins, Developers, Managers, and Storekeepers can use POS.`}
-      />
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '60vh',
+        background: colors.bgPage,
+        textAlign: 'center',
+        padding: '20px',
+      }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px', color: colors.danger }}>!</div>
+        <h2 style={{ fontSize: '20px', fontWeight: 700, color: colors.textPrimary, marginBottom: '8px' }}>
+          Access Denied
+        </h2>
+        <p style={{ fontSize: '14px', color: colors.textMuted, maxWidth: '400px' }}>
+          Your role ({user?.role || 'unknown'}) does not have access to POS.
+          Only Admins, Managers, and Storekeepers can access this.
+        </p>
+      </div>
     )
   }
 
-  const visibleTabs = TABS.filter(t => !t.adminOnly || hasReportAccess)
-
-  /* ══════════════════════════════════════════════════════════════════════
-     RENDER
-     ══════════════════════════════════════════════════════════════════════ */
   return (
-    <>
-      {/* ── Single tab strip (page title already lives in the global Header) ── */}
-      <div className="pos-toolbar" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <div className="pos-tabs" style={{ display: 'flex', gap: 8, overflowX: 'auto' }}>
-          {visibleTabs.map(t => {
-            const active = activeTab === t.key
+    <div className="stocko-pos-shell animate-fade-in" style={{
+      display: 'flex',
+      flexDirection: 'column',
+      width: '100%',
+      height: 'calc(100dvh - 100px)',
+      minHeight: '660px',
+      background: colors.bgPage,
+      border: `1px solid ${colors.border}`,
+      borderRadius: '12px',
+      fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      overflow: 'hidden',
+      boxShadow: colors.shadowSm,
+    }}>
+      <style>{`
+        .stocko-pos-shell, .stocko-pos-shell * {
+          box-sizing: border-box;
+        }
+        .stocko-pos-shell {
+          font-size: 13px;
+        }
+        .stocko-pos-shell button,
+        .stocko-pos-shell input,
+        .stocko-pos-shell select,
+        .stocko-pos-shell textarea {
+          font: inherit;
+        }
+        .stocko-pos-shell button:focus-visible,
+        .stocko-pos-shell input:focus-visible,
+        .stocko-pos-shell select:focus-visible,
+        .stocko-pos-shell textarea:focus-visible {
+          outline: 3px solid ${dark ? 'rgba(96,165,250,.35)' : 'rgba(37,99,235,.22)'};
+          outline-offset: 2px;
+        }
+        .stocko-pos-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: ${theme?.scrollbarThumb || '#94a3b8'} transparent;
+        }
+        .stocko-pos-scroll::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+        .stocko-pos-scroll::-webkit-scrollbar-thumb {
+          background: ${theme?.scrollbarThumb || '#94a3b8'};
+          border-radius: 999px;
+        }
+        .stocko-pos-tab-strip {
+          min-width: 0;
+        }
+        .stocko-pos-product-card:hover {
+          transform: translateY(-1px);
+        }
+        .stocko-pos-product-grid {
+          align-content: start;
+          grid-auto-rows: minmax(82px, auto);
+        }
+        .stocko-pos-product-card {
+          min-height: 82px;
+          align-self: start;
+        }
+        .stocko-pos-product-name,
+        .stocko-pos-product-price {
+          font-size: 13px !important;
+        }
+        .stocko-pos-cart-panel {
+          width: clamp(440px, 35%, 540px) !important;
+          min-width: 440px;
+        }
+        .stocko-pos-table-row:hover {
+          background: ${colors.bgHover} !important;
+        }
+        @media (max-width: 1180px) {
+          .stocko-pos-cart-panel {
+            width: 410px !important;
+            min-width: 410px !important;
+          }
+          .stocko-pos-product-grid {
+            grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)) !important;
+          }
+          .stocko-pos-toolbar-metric {
+            display: none !important;
+          }
+        }
+        @media (max-width: 900px) {
+          .stocko-pos-shell {
+            height: auto !important;
+            min-height: calc(100vh - 145px) !important;
+            overflow: visible !important;
+          }
+          .stocko-pos-tab-strip {
+            overflow-x: auto !important;
+            justify-content: flex-start !important;
+          }
+          .stocko-pos-main {
+            overflow: visible !important;
+          }
+          .stocko-pos-sale-layout {
+            flex-direction: column !important;
+            overflow: visible !important;
+          }
+          .stocko-pos-products-panel {
+            min-height: 560px;
+            border-right: 0 !important;
+          }
+          .stocko-pos-cart-panel {
+            width: 100% !important;
+            min-width: 0 !important;
+            min-height: 620px;
+            border-left: 0 !important;
+            border-top: 1px solid ${colors.border};
+          }
+          .stocko-pos-payment-layout {
+            flex-direction: column !important;
+          }
+          .stocko-pos-payment-options {
+            width: 100% !important;
+            border-left: 0 !important;
+            border-top: 1px solid ${colors.border};
+          }
+        }
+        @media (max-width: 640px) {
+          .stocko-pos-shell {
+            border-radius: 10px !important;
+          }
+          .stocko-pos-command-bar {
+            align-items: stretch !important;
+            flex-direction: column !important;
+          }
+          .stocko-pos-tab-strip {
+            width: 100%;
+          }
+          .stocko-pos-tab-button {
+            padding: 9px 11px !important;
+          }
+          .stocko-pos-search-bar {
+            align-items: stretch !important;
+            flex-direction: column !important;
+          }
+          .stocko-pos-search-bar > * {
+            width: 100% !important;
+            max-width: none !important;
+          }
+          .stocko-pos-product-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            padding: 8px !important;
+            gap: 8px !important;
+          }
+          .stocko-pos-product-card {
+            padding: 10px !important;
+          }
+          .stocko-pos-order-card-header,
+          .stocko-pos-order-actions,
+          .stocko-pos-report-header {
+            align-items: stretch !important;
+            flex-direction: column !important;
+          }
+          .stocko-pos-modal {
+            width: calc(100vw - 20px) !important;
+            max-height: calc(100vh - 20px) !important;
+          }
+        }
+      `}</style>
+
+      {/* ═══════════════════════════════════════════════════════════════
+          POS COMMAND BAR — global application Header remains the only header
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="stocko-pos-command-bar" style={{
+        background: colors.bgHeader,
+        borderBottom: `1px solid ${colors.border}`,
+        padding: '8px 10px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '12px',
+        minHeight: '52px',
+        flexShrink: 0,
+      }}>
+        <div className="stocko-pos-tab-strip stocko-pos-scroll" style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          flex: 1,
+        }}>
+          {[
+            { id: 'new_order', label: editingOrder ? 'Edit Dispatch' : 'New Dispatch', icon: editingOrder ? 'Edit' : 'Plus', count: null },
+            { id: 'pending', label: 'Pending', icon: 'History', count: pendingOrders.length },
+            { id: 'cancelled', label: 'Cancelled', icon: 'X', count: cancelledOrders.length },
+            { id: 'reports', label: 'Reports', icon: 'BarChart2', restricted: true, count: null },
+          ].map((tab) => {
+            if (tab.restricted && !hasReportAccess) return null
+
+            const isActive = activeTab === tab.id
             return (
               <button
-                key={t.key}
-                onClick={() => handleTabChange(t.key)}
+                key={tab.id}
+                className="stocko-pos-tab-button"
+                onClick={() => {
+                  if (editingOrder && tab.id !== 'new_order') {
+                    showToast('warning', 'Finish editing first', 'Save or cancel the current order edit before leaving')
+                    return
+                  }
+                  setActiveTab(tab.id)
+                  if (tab.id === 'reports' && reportData.length === 0) loadTodayOrders()
+                }}
                 style={{
-                  padding: '10px 18px', borderRadius: 10, fontSize: 13, fontWeight: 700,
-                  cursor: 'pointer', whiteSpace: 'nowrap',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  background: active ? theme.primary : theme.cardBg,
-                  color: active ? theme.primaryText : theme.textMuted,
-                  boxShadow: active ? `0 4px 12px ${theme.primary}40` : theme.shadow,
-                  border: `1px solid ${active ? theme.primary : theme.border}`,
-                  transition: 'all 0.15s',
-                }}>
-                <Ic n={t.icon} size={15} color={active ? theme.primaryText : theme.textMuted} />
-                {t.label}
-                {t.key === 'pending' && pendingOrders.length > 0 && (
-                  <span style={{ background: active ? 'rgba(255,255,255,0.25)' : theme.navActive, color: active ? '#fff' : theme.primary, borderRadius: 999, padding: '1px 7px', fontSize: 11, fontWeight: 800 }}>
-                    {pendingOrders.length}
+                  padding: '7px 11px',
+                  background: isActive ? colors.primaryLight : colors.bgCard,
+                  color: isActive ? colors.primary : colors.textSecondary,
+                  border: `1px solid ${isActive ? colors.primary : colors.border}`,
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: isActive ? 700 : 600,
+                  transition: 'all 0.2s',
+                  whiteSpace: 'nowrap',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Ic n={tab.icon} size={14} />
+                {tab.label}
+                {tab.count !== null && (
+                  <span style={{
+                    minWidth: '18px',
+                    height: '18px',
+                    padding: '0 5px',
+                    borderRadius: '999px',
+                    background: isActive ? colors.primary : colors.bgHover,
+                    color: isActive ? '#fff' : colors.textMuted,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '10px',
+                    fontWeight: 800,
+                  }}>
+                    {tab.count}
                   </span>
                 )}
               </button>
             )
           })}
         </div>
-        <div className="pos-user-summary" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: theme.textMuted }}>{currentBranch?.name || user?.branch_name || ''}</span>
-          <span style={{
-            padding: '6px 14px', borderRadius: 8, fontSize: 12, fontWeight: 700,
-            background: isAdmin ? theme.primary : theme.success, color: '#fff',
+
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          flexShrink: 0,
+        }}>
+          <div className="stocko-pos-toolbar-metric" style={{
+            padding: '5px 9px',
+            borderRadius: '8px',
+            background: colors.bgHover,
+            border: `1px solid ${colors.border}`,
           }}>
-            {user?.name || 'User'} — {isAdmin ? 'Manager' : 'Storekeeper'}
-          </span>
+            <div style={{ fontSize: '9px', color: colors.textMuted, fontWeight: 700, textTransform: 'uppercase' }}>
+              Today
+            </div>
+            <div style={{ fontSize: '11px', color: colors.textPrimary, fontWeight: 750 }}>
+              {formatPrice(todaySales)} · {todayOrderCount} orders
+            </div>
+          </div>
+
+          <button
+            onClick={() => refreshAll()}
+            disabled={refreshing}
+            title="Refresh POS data"
+            style={{
+              width: '34px',
+              height: '34px',
+              borderRadius: '8px',
+              border: `1px solid ${colors.border}`,
+              background: colors.bgCard,
+              color: colors.textMuted,
+              cursor: refreshing ? 'wait' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: refreshing ? 0.6 : 1,
+            }}
+          >
+            <Ic n="RefreshCw" size={14} />
+          </button>
         </div>
       </div>
 
-      {/* ═══════════════════════ NEW ORDER TAB ═══════════════════════ */}
-      {activeTab === 'new_order' && (
-        <div className="pos-order-layout" style={{ display: 'flex', height: 'calc(100vh - 160px)', minHeight: 480, background: theme.bg, borderRadius: 12, overflow: 'hidden', border: `1px solid ${theme.border}` }}>
-          {/* Products */}
-          <div className="pos-products-pane" style={{ flex: 1, display: 'flex', flexDirection: 'column', background: theme.bg, borderRight: `1px solid ${theme.border}`, overflow: 'hidden' }}>
-            <div className="pos-product-filters" style={{ padding: '12px 16px', borderBottom: `1px solid ${theme.border}`, display: 'flex', gap: 10, alignItems: 'center', background: theme.cardBg }}>
-              <div style={{ position: 'relative', flex: 1, maxWidth: 400 }}>
-                <input type="text" placeholder="Search products by name, SKU, or barcode..." value={productSearch} onChange={(e) => setProductSearch(e.target.value)}
-                  style={{ width: '100%', padding: '10px 14px 10px 36px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, background: theme.inputBg, color: theme.text, fontSize: 14, outline: 'none' }} />
-                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: theme.textMuted }}>
-                  <Ic n="Search" size={14} />
-                </span>
-              </div>
-              <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)}
-                style={{ padding: '10px 14px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, background: theme.inputBg, color: theme.text, fontSize: 14, cursor: 'pointer', minWidth: 150 }}>
-                {categories.map(cat => <option key={cat} value={cat}>{cat === 'all' ? 'All Categories' : cat}</option>)}
-              </select>
-            </div>
+      {/* ═══════════════════════════════════════════════════════════════
+          MAIN CONTENT AREA
+          ═══════════════════════════════════════════════════════════════ */}
+      <div className="stocko-pos-main" style={{
+        flex: 1,
+        display: 'flex',
+        overflow: 'hidden',
+      }}>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
-              {filteredInventory.length === 0 ? (
-                <EmptyState icon="Package" title="No products found" message="Try adjusting your search or category filter" />
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
-                  {filteredInventory.map(product => {
+        {/* ── TAB: NEW ORDER ── */}
+        {activeTab === 'new_order' && (
+          <div className="stocko-pos-sale-layout" style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            {/* LEFT: PRODUCTS */}
+            <div className="stocko-pos-products-panel" style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              background: colors.bgPage,
+              borderRight: `1px solid ${colors.border}`,
+              overflow: 'hidden',
+            }}>
+              {/* Search & Filter Bar */}
+              <div className="stocko-pos-search-bar" style={{
+                padding: '10px 12px',
+                borderBottom: `1px solid ${colors.border}`,
+                display: 'flex',
+                gap: '8px',
+                background: colors.bgCard,
+                alignItems: 'center',
+              }}>
+                <div style={{
+                  flex: 1,
+                  position: 'relative',
+                }}>
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    placeholder="Search products by name, SKU, or barcode..."
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: productSearch ? '8px 38px 8px 36px' : '8px 10px 8px 36px',
+                      background: colors.bgInput,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '8px',
+                      color: colors.textPrimary,
+                      fontSize: '13px',
+                      outline: 'none',
+                      transition: 'border-color 0.2s, box-shadow 0.2s',
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = colors.borderActive
+                      e.target.style.boxShadow = `0 0 0 3px ${colors.primaryLight}`
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = colors.border
+                      e.target.style.boxShadow = 'none'
+                    }}
+                  />
+                  <span aria-hidden="true" style={{
+                    position: 'absolute',
+                    left: '11px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: colors.textMuted,
+                    display: 'inline-flex',
+                  }}>
+                    <Ic n="Search" size={15} />
+                  </span>
+                  {productSearch && (
+                    <button
+                      onClick={() => {
+                        setProductSearch('')
+                        searchInputRef.current?.focus()
+                      }}
+                      aria-label="Clear product search"
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        width: '28px',
+                        height: '28px',
+                        border: 'none',
+                        borderRadius: '7px',
+                        background: colors.bgHover,
+                        color: colors.textMuted,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Ic n="X" size={14} />
+                    </button>
+                  )}
+                </div>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  style={{
+                    padding: '8px 10px',
+                    background: colors.bgInput,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '8px',
+                    color: colors.textPrimary,
+                    fontSize: '13px',
+                    minWidth: '150px',
+                    cursor: 'pointer',
+                    outline: 'none',
+                  }}
+                >
+                  {categories.map(cat => (
+                    <option key={cat} value={cat}>
+                      {cat === 'all' ? 'All Categories' : cat}
+                    </option>
+                  ))}
+                </select>
+                <div style={{
+                  padding: '8px 11px',
+                  background: colors.bgHover,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: '8px',
+                  color: colors.textMuted,
+                  fontSize: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  whiteSpace: 'nowrap',
+                }}>
+                  <Ic n="Package" size={14} />
+                  {filteredInventory.length} items
+                </div>
+              </div>
+
+              {/* Products Grid */}
+              <div className="stocko-pos-product-grid stocko-pos-scroll" style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '12px',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+                gridAutoRows: 'minmax(82px, auto)',
+                alignContent: 'start',
+                gap: '8px',
+              }}>
+                {loading ? (
+                  <div style={{ 
+                    gridColumn: '1 / -1', 
+                    textAlign: 'center', 
+                    padding: '60px 20px', 
+                    color: colors.textMuted 
+                  }}>
+                    <div style={{ fontSize: '14px', marginBottom: '8px' }}>Loading inventory...</div>
+                  </div>
+                ) : filteredInventory.length === 0 ? (
+                  <div style={{ 
+                    gridColumn: '1 / -1', 
+                    textAlign: 'center', 
+                    padding: '60px 20px', 
+                    color: colors.textMuted 
+                  }}>
+                    <div style={{ fontSize: '14px', marginBottom: '8px' }}>No products found</div>
+                  </div>
+                ) : (
+                  filteredInventory.map(product => {
+                    const salePrice = extractSalePrice(product)
+                    const stock = getStock(product)
+                    const inStock = stock > 0
                     const inCart = cart.find(c => c.id === product.id)
-                    const stock = product.quantity || 0
-                    const lowStock = stock > 0 && stock <= 5
-                    const badge = stock === 0
-                      ? { bg: theme.rejected, color: theme.rejectedText, label: 'Out of Stock' }
-                      : lowStock ? { bg: theme.pending, color: theme.pendingText, label: `Low: ${stock}` }
-                        : { bg: theme.completed, color: theme.completedText, label: `Stock: ${stock}` }
+                    const lowStock = stock > 0 && stock <= Math.max(5, safeNumber(product.threshold))
+
                     return (
-                      <div key={product.id} onClick={() => stock > 0 && addToCart(product)} className="card-hover"
+                      <div
+                        key={product.id}
+                        className="stocko-pos-product-card"
+                        onClick={() => inStock && addToCart(product)}
+                        onKeyDown={(event) => {
+                          if (inStock && (event.key === 'Enter' || event.key === ' ')) {
+                            event.preventDefault()
+                            addToCart(product)
+                          }
+                        }}
+                        role="button"
+                        tabIndex={inStock ? 0 : -1}
+                        aria-disabled={!inStock}
                         style={{
-                          background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 14,
-                          cursor: stock > 0 ? 'pointer' : 'not-allowed', opacity: stock > 0 ? 1 : 0.55,
-                          position: 'relative', boxShadow: theme.shadow, transition: 'all 0.15s',
+                          background: colors.bgCard,
+                          border: `1px solid ${colors.border}`,
+                          borderRadius: '8px',
+                          padding: '11px 12px',
+                          cursor: inStock ? 'pointer' : 'not-allowed',
+                          opacity: inStock ? 1 : 0.5,
+                          transition: 'border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease',
+                          position: 'relative',
+                          boxShadow: colors.shadowSm,
+                        }}
+                        onMouseEnter={(e) => {
+                          if (inStock) {
+                            e.currentTarget.style.borderColor = colors.borderActive
+                            e.currentTarget.style.boxShadow = colors.shadowMd
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = colors.border
+                          e.currentTarget.style.boxShadow = colors.shadowSm
+                        }}
+                      >
+                        <div style={{
+                          position: 'absolute',
+                          top: '10px',
+                          right: '10px',
+                          fontSize: '10px',
+                          padding: '3px 7px',
+                          borderRadius: '20px',
+                          background: !inStock ? colors.dangerLight : lowStock ? colors.warningLight : colors.successLight,
+                          color: !inStock ? colors.danger : lowStock ? colors.warning : colors.success,
+                          fontWeight: 700,
+                          border: `1px solid ${inStock ? 'rgba(76, 175, 80, 0.2)' : 'rgba(244, 67, 54, 0.2)'}`,
                         }}>
-                        <div style={{ position: 'absolute', top: 10, right: 10, padding: '3px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700, background: badge.bg, color: badge.color }}>
-                          {badge.label}
+                          {inStock ? `${stock} ${product.unit || ''}`.trim() : 'Out of stock'}
                         </div>
-                        <div style={{ marginTop: 8 }}>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: theme.text, marginBottom: 4, lineHeight: 1.3, paddingRight: 70 }}>{product.name}</div>
-                          {product.sku && <div style={{ fontSize: 11, color: theme.textMuted, marginBottom: 4 }}>SKU: {product.sku}</div>}
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
-                            <span style={{ fontSize: 16, fontWeight: 800, color: theme.primary }}>Rs. {product.selling_price?.toFixed(2) || '0.00'}</span>
-                            {inCart && <span style={{ background: theme.primary, color: theme.primaryText, padding: '3px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700 }}>In Cart: {inCart.qty}</span>}
+
+                        <div>
+                          <div className="stocko-pos-product-name" style={{
+                            fontSize: '13px',
+                            fontWeight: 700,
+                            color: colors.textPrimary,
+                            marginBottom: '3px',
+                            lineHeight: 1.3,
+                            paddingRight: '72px',
+                          }}>
+                            {product.name}
+                          </div>
+                          <div style={{ fontSize: '10px', color: colors.textMuted, marginBottom: '6px', minHeight: '12px' }}>
+                            {product.sku && `SKU: ${product.sku}`}
+                            {product.barcode && ` | Barcode: ${product.barcode}`}
+                          </div>
+                          <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                          }}>
+                            <span className="stocko-pos-product-price" style={{
+                              fontSize: '13px',
+                              fontWeight: 650,
+                              color: colors.textSecondary,
+                            }}>
+                              {formatPrice(salePrice)}
+                            </span>
+                            {inCart && (
+                              <span style={{
+                                fontSize: '10px',
+                                background: colors.primary,
+                                color: '#fff',
+                                padding: '3px 7px',
+                                borderRadius: '20px',
+                                fontWeight: 700,
+                              }}>
+                                {inCart.quantity} in cart
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
                     )
-                  })}
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* RIGHT: CART & CHECKOUT */}
+            <div className="stocko-pos-cart-panel" style={{
+              width: 'clamp(440px, 35%, 540px)',
+              minWidth: '440px',
+              display: 'flex',
+              flexDirection: 'column',
+              background: colors.bgCard,
+              borderLeft: `1px solid ${colors.border}`,
+              boxShadow: '-1px 0 4px rgba(0,0,0,0.04)',
+              overflow: 'hidden',
+            }}>
+              {/* Cart Header */}
+              <div className="stocko-pos-report-header" style={{
+                padding: '11px 13px',
+                borderBottom: `1px solid ${colors.border}`,
+                background: colors.bgPage,
+              }}>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '10px',
+                  marginBottom: '10px',
+                }}>
+                  <h2 style={{
+                    fontSize: '14px',
+                    fontWeight: 750,
+                    color: colors.textPrimary,
+                    margin: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}>
+                    <Ic n="Package" size={16} />
+                    Current dispatch
+                    <span style={{
+                      minWidth: '20px',
+                      height: '20px',
+                      padding: '0 6px',
+                      borderRadius: '999px',
+                      background: colors.primaryLight,
+                      color: colors.primary,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '10px',
+                      fontWeight: 800,
+                    }}>
+                      {cart.reduce((sum, item) => sum + safeNumber(item.quantity), 0)}
+                    </span>
+                  </h2>
+                  {cart.length > 0 && !editingOrder && (
+                    <button
+                      onClick={clearCart}
+                      style={{
+                        padding: '6px 9px',
+                        background: 'transparent',
+                        color: colors.danger,
+                        border: `1px solid ${colors.danger}`,
+                        borderRadius: '8px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                      }}
+                    >
+                      <Ic n="Trash2" size={13} />
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                {editingOrder && (
+                  <div style={{
+                    marginBottom: '10px',
+                    padding: '9px 10px',
+                    borderRadius: '8px',
+                    background: colors.warningLight,
+                    color: dark ? '#fcd34d' : '#92400e',
+                    border: `1px solid ${colors.warning}`,
+                    fontSize: '12px',
+                    fontWeight: 650,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '7px',
+                  }}>
+                    <Ic n="Edit" size={14} />
+                    Editing #{orderReference(editingOrder)} — saving updates this order
+                  </div>
+                )}
+
+                {/* Receiving branch/customer selection */}
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <select
+                      value={selectedCustomer?.id || ''}
+                      disabled={customersLoading}
+                      onChange={(e) => {
+                        const cust = customers.find(c => c.id === e.target.value)
+                        setSelectedCustomer(cust || null)
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '8px 28px 8px 10px',
+                        background: colors.bgInput,
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: '8px',
+                        color: colors.textPrimary,
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                        appearance: 'none',
+                        outline: 'none',
+                      }}
+                    >
+                      <option value="">{customersLoading ? 'Loading destinations…' : 'Select receiving branch / customer'}</option>
+                      {customers.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} {c.phone ? `(${c.phone})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <span aria-hidden="true" style={{
+                      position: 'absolute',
+                      right: '10px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      color: colors.textMuted,
+                      fontSize: '10px',
+                      pointerEvents: 'none',
+                    }}>▾</span>
+                  </div>
+                </div>
+
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+                  gap: '7px',
+                  marginTop: '8px',
+                }}>
+                  <input
+                    value={orderReferenceText}
+                    onChange={event => setOrderReferenceText(event.target.value)}
+                    placeholder="Demand / transfer reference"
+                    maxLength={80}
+                    style={{
+                      minWidth: 0,
+                      width: '100%',
+                      padding: '8px 9px',
+                      borderRadius: '8px',
+                      border: `1px solid ${colors.border}`,
+                      background: colors.bgInput,
+                      color: colors.textPrimary,
+                      fontSize: '11px',
+                      outline: 'none',
+                    }}
+                  />
+                  <input
+                    value={orderNotes}
+                    onChange={event => setOrderNotes(event.target.value)}
+                    placeholder="Dispatch note"
+                    maxLength={240}
+                    style={{
+                      minWidth: 0,
+                      width: '100%',
+                      padding: '8px 9px',
+                      borderRadius: '8px',
+                      border: `1px solid ${colors.border}`,
+                      background: colors.bgInput,
+                      color: colors.textPrimary,
+                      fontSize: '11px',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+
+                {selectedCustomer && (
+                  <div style={{
+                    fontSize: '11px',
+                    color: colors.textMuted,
+                    marginTop: '7px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                  }}>
+                    <Ic n="User" size={12} />
+                    <strong style={{ color: colors.textSecondary }}>{selectedCustomer.name}</strong>
+                    {selectedCustomer.phone && <span>· {selectedCustomer.phone}</span>}
+                  </div>
+                )}
+              </div>
+
+              {/* Cart Items */}
+              <div className="stocko-pos-scroll" style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '10px 12px',
+                background: colors.bgPage,
+              }}>
+                {cart.length === 0 ? (
+                  <div style={{ 
+                    textAlign: 'center', 
+                    padding: '42px 20px',
+                    color: colors.textMuted 
+                  }}>
+                    <div style={{
+                      width: '48px',
+                      height: '48px',
+                      margin: '0 auto 12px',
+                      borderRadius: '14px',
+                      background: colors.primaryLight,
+                      color: colors.primary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      <Ic n="ShoppingCart" size={22} />
+                    </div>
+                    <div style={{ fontSize: '15px', fontWeight: 700, color: colors.textSecondary, marginBottom: '6px' }}>
+                      Dispatch is empty
+                    </div>
+                    <div style={{ fontSize: '12px' }}>Select stock items to prepare this dispatch</div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                    {cart.map(item => (
+                      <div
+                        key={item.id}
+                        style={{
+                          background: colors.bgCard,
+                          padding: '10px 11px',
+                          borderRadius: '8px',
+                          border: `1px solid ${colors.border}`,
+                          boxShadow: colors.shadowSm,
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          marginBottom: '7px',
+                        }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ 
+                              fontSize: '13px',
+                              fontWeight: 600, 
+                              color: colors.textPrimary 
+                            }}>
+                              {item.name}
+                            </div>
+                            <div style={{ 
+                              fontSize: '11px',
+                              color: colors.textMuted, 
+                              marginTop: '3px' 
+                            }}>
+                              {formatPrice(extractLinePrice(item))} each
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => removeFromCart(item.id)}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: colors.danger,
+                              cursor: 'pointer',
+                              fontSize: '20px',
+                              padding: '0 4px',
+                              opacity: 0.6,
+                              transition: 'opacity 0.2s',
+                              lineHeight: 1,
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
+                            onMouseLeave={(e) => e.currentTarget.style.opacity = '0.6'}
+                          >
+                            <Ic n="X" size={15} />
+                          </button>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                            style={{
+                              width: '30px',
+                              height: '30px',
+                              border: `1px solid ${colors.border}`,
+                              background: colors.bgPage,
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: '16px',
+                              color: colors.textSecondary,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s',
+                              fontWeight: 700,
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.borderColor = colors.borderActive
+                              e.currentTarget.style.color = colors.primary
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.borderColor = colors.border
+                              e.currentTarget.style.color = colors.textSecondary
+                            }}
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.quantity}
+                            onChange={(e) => updateQuantity(item.id, parseInt(e.target.value) || 1)}
+                            style={{
+                              width: '55px',
+                              textAlign: 'center',
+                              padding: '6px',
+                              border: `1px solid ${colors.border}`,
+                              borderRadius: '6px',
+                              fontSize: '14px',
+                              background: colors.bgInput,
+                              color: colors.textPrimary,
+                              outline: 'none',
+                            }}
+                          />
+                          <button
+                            onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                            style={{
+                              width: '30px',
+                              height: '30px',
+                              border: `1px solid ${colors.border}`,
+                              background: colors.bgPage,
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: '16px',
+                              color: colors.textSecondary,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              transition: 'all 0.2s',
+                              fontWeight: 700,
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.borderColor = colors.borderActive
+                              e.currentTarget.style.color = colors.primary
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.borderColor = colors.border
+                              e.currentTarget.style.color = colors.textSecondary
+                            }}
+                          >
+                            +
+                          </button>
+                          <div style={{
+                            flex: 1,
+                            textAlign: 'right',
+                            fontSize: '15px',
+                            fontWeight: 700,
+                            color: colors.primary,
+                          }}>
+                            {formatPrice(safeNumber(item.quantity) * extractLinePrice(item))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Discount & Tax */}
+              {cart.length > 0 && (
+                <div style={{
+                  padding: '10px 14px',
+                  borderTop: `1px solid ${colors.border}`,
+                  borderBottom: `1px solid ${colors.border}`,
+                  background: colors.bgPage,
+                  display: 'flex',
+                  gap: '10px',
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ 
+                      fontSize: '11px', 
+                      fontWeight: 700, 
+                      color: colors.textMuted, 
+                      display: 'block', 
+                      marginBottom: '4px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Discount (Rs)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={cartSubtotal}
+                      value={discount}
+                      onChange={(e) => setDiscount(
+                        clamp(safeNumber(e.target.value), 0, cartSubtotal)
+                      )}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        background: colors.bgInput,
+                        color: colors.textPrimary,
+                        outline: 'none',
+                      }}
+                      onFocus={(e) => e.target.style.borderColor = colors.borderActive}
+                      onBlur={(e) => e.target.style.borderColor = colors.border}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ 
+                      fontSize: '11px', 
+                      fontWeight: 700, 
+                      color: colors.textMuted, 
+                      display: 'block', 
+                      marginBottom: '4px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Tax (%)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={taxRate}
+                      onChange={(e) => setTaxRate(
+                        clamp(safeNumber(e.target.value), 0, 100)
+                      )}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        background: colors.bgInput,
+                        color: colors.textPrimary,
+                        outline: 'none',
+                      }}
+                      onFocus={(e) => e.target.style.borderColor = colors.borderActive}
+                      onBlur={(e) => e.target.style.borderColor = colors.border}
+                    />
+                  </div>
                 </div>
               )}
+
+              {/* Totals */}
+              {cart.length > 0 && (
+                <div style={{
+                  padding: '11px 14px',
+                  borderBottom: `1px solid ${colors.border}`,
+                  background: colors.bgCard,
+                }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between', 
+                    marginBottom: '6px', 
+                    fontSize: '12px'
+                  }}>
+                    <span style={{ color: colors.textMuted }}>Subtotal:</span>
+                    <span style={{ fontWeight: 600, color: colors.textSecondary }}>{formatPrice(cartSubtotal)}</span>
+                  </div>
+                  {normalizedDiscount > 0 && (
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      marginBottom: '6px', 
+                      fontSize: '14px' 
+                    }}>
+                      <span style={{ color: colors.textMuted }}>Discount:</span>
+                      <span style={{ color: colors.success, fontWeight: 600 }}>-{formatPrice(normalizedDiscount)}</span>
+                    </div>
+                  )}
+                  {cartTax > 0 && (
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      marginBottom: '8px', 
+                      fontSize: '14px' 
+                    }}>
+                      <span style={{ color: colors.textMuted }}>Tax:</span>
+                      <span style={{ fontWeight: 600, color: colors.textSecondary }}>{formatPrice(cartTax)}</span>
+                    </div>
+                  )}
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '12px 0 0',
+                    borderTop: `2px solid ${colors.border}`,
+                    fontSize: '13px',
+                  }}>
+                    <span style={{ fontWeight: 700, color: colors.textPrimary }}>TOTAL</span>
+                    <span style={{ 
+                      fontSize: '20px',
+                      fontWeight: 900, 
+                      color: colors.primary 
+                    }}>
+                      {formatPrice(cartTotal)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div style={{
+                padding: '10px 12px',
+                display: 'flex',
+                gap: '10px',
+                background: colors.bgCard,
+              }}>
+                <button
+                  onClick={editingOrder ? cancelEditing : clearCart}
+                  disabled={cart.length === 0 && !editingOrder}
+                  style={{
+                    padding: '9px 13px',
+                    background: editingOrder ? colors.bgHover : colors.dangerLight,
+                    color: editingOrder ? colors.textSecondary : colors.danger,
+                    border: `1px solid ${editingOrder ? colors.border : colors.danger}`,
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    cursor: cart.length === 0 && !editingOrder ? 'not-allowed' : 'pointer',
+                    opacity: cart.length === 0 && !editingOrder ? 0.4 : 1,
+                    transition: 'opacity 0.2s',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Ic n={editingOrder ? 'X' : 'Trash2'} size={15} />
+                  {editingOrder ? 'Cancel edit' : 'Clear'}
+                </button>
+                <button
+                  onClick={placeOrder}
+                  disabled={processing || cart.length === 0}
+                  style={{
+                    flex: 1,
+                    padding: '9px 12px',
+                    background: colors.primary,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: processing || cart.length === 0 ? 'not-allowed' : 'pointer',
+                    opacity: processing || cart.length === 0 ? 0.5 : 1,
+                    transition: 'all 0.2s',
+                    boxShadow: processing || cart.length === 0 ? 'none' : '0 2px 8px rgba(33, 150, 243, 0.3)',
+                  }}
+                >
+                  <Ic n={editingOrder ? 'Edit' : 'CheckCircle'} size={17} />
+                  {processing
+                    ? (editingOrder ? 'Saving…' : 'Placing…')
+                    : (editingOrder ? 'Save dispatch changes' : 'Create dispatch')}
+                </button>
+              </div>
             </div>
           </div>
+        )}
 
-          {/* Cart */}
-          <div className="pos-cart-pane" style={{ width: 400, display: 'flex', flexDirection: 'column', background: theme.cardBg }}>
-            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: theme.text, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Ic n="ShoppingCart" size={16} /> Cart ({cart.length})
-              </h2>
-              {cart.length > 0 && <Btn variant="danger" onClick={clearCart} style={{ padding: '6px 12px', fontSize: 12 }}>Clear All</Btn>}
-            </div>
-
-            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.border}` }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <label style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Customer / Branch</label>
-                <Btn variant="success" onClick={() => setShowCreateCustomerModal(true)} style={{ padding: '4px 10px', fontSize: 11 }}>+ New</Btn>
+        {/* ── TAB: PENDING ORDERS ── */}
+        {activeTab === 'pending' && (
+          <div className="stocko-pos-scroll" style={{
+            flex: 1,
+            padding: '16px',
+            overflowY: 'auto',
+            background: colors.bgPage,
+          }}>
+            <div className="stocko-pos-order-card-header" style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '16px',
+            }}>
+              <div>
+                <h2 style={{
+                  fontSize: '18px',
+                  fontWeight: 750,
+                  color: colors.textPrimary,
+                  margin: '0 0 4px',
+                }}>
+                  Pending orders
+                </h2>
+                <p style={{ margin: 0, fontSize: '12px', color: colors.textMuted }}>
+                  Review branch dispatches, print details, or use manager controls.
+                </p>
               </div>
-              <select value={selectedCustomer ? `${selectedCustomer._partyType || 'customer'}:${selectedCustomer.id}` : 'walkin'} onChange={(e) => {
-                const val = e.target.value
-                if (val === 'walkin' || val === '') setSelectedCustomer(null)
-                else {
-                  const [partyType, partyId] = val.split(':')
-                  const found = partyType === 'branch' ? branches.find(b => b.id === partyId) : customers.find(c => c.id === partyId)
-                  setSelectedCustomer(found ? { ...found, _partyType: partyType } : null)
-                }
-              }} style={{ width: '100%', padding: '10px 12px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, background: theme.inputBg, color: theme.text, fontSize: 14, cursor: 'pointer' }}>
-                <option value="walkin">Walk-In Customer</option>
-                {customers.length > 0 && (
-                  <optgroup label="Customers">
-                    {customers.map(c => <option key={c.id} value={`customer:${c.id}`}>{c.name} {c.phone ? `(${c.phone})` : ''}</option>)}
-                  </optgroup>
-                )}
-                {branches.length > 0 && (
-                  <optgroup label="Branches">
-                    {branches.map(b => <option key={b.id} value={`branch:${b.id}`}>{b.name} {b.address ? `- ${b.address}` : ''}</option>)}
-                  </optgroup>
-                )}
-              </select>
-              {customersLoading && <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 4 }}>Loading customers...</div>}
-              {branchesLoading && <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 4 }}>Loading branches...</div>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{
+                  padding: '7px 11px',
+                  background: colors.bgCard,
+                  borderRadius: '9px',
+                  color: colors.textMuted,
+                  fontSize: '12px',
+                  border: `1px solid ${colors.border}`,
+                  fontWeight: 700,
+                }}>
+                  {pendingOrders.length} open
+                </div>
+                <button
+                  onClick={() => loadOrders()}
+                  disabled={ordersLoading}
+                  style={{
+                    width: '34px',
+                    height: '34px',
+                    border: `1px solid ${colors.border}`,
+                    background: colors.bgCard,
+                    borderRadius: '9px',
+                    color: colors.textMuted,
+                    cursor: ordersLoading ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ic n="RefreshCw" size={15} />
+                </button>
+              </div>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '12px 20px', background: theme.bg }}>
-              {cart.length === 0 ? (
-                <EmptyState icon="ShoppingCart" title="Your cart is empty" message="Click products on the left to add them" />
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {cart.map(item => (
-                    <div key={item.id} style={{ background: theme.cardBg, padding: 12, borderRadius: 8, border: `1px solid ${theme.border}`, boxShadow: theme.shadow }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, lineHeight: 1.3 }}>{item.name}</div>
-                          <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>Rs. {item.price?.toFixed(2)} / {item.unit}</div>
+            {ordersLoading ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '80px 20px',
+                color: colors.textMuted,
+                background: colors.bgCard,
+                borderRadius: '12px',
+                border: `1px solid ${colors.border}`,
+              }}>
+                Loading pending orders…
+              </div>
+            ) : pendingOrders.length === 0 ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '80px 20px',
+                color: colors.textMuted,
+                background: colors.bgCard,
+                borderRadius: '12px',
+                border: `1px solid ${colors.border}`,
+              }}>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: colors.textSecondary, marginBottom: '8px' }}>
+                  No pending orders
+                </div>
+                <div style={{ fontSize: '14px' }}>All orders have been processed</div>
+              </div>
+            ) : (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}>
+                {pendingOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    className="stocko-pos-table-row"
+                    style={{
+                      background: colors.bgCard,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '10px',
+                      padding: '14px',
+                      transition: 'all 0.2s',
+                      boxShadow: colors.shadowSm,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = colors.borderHover
+                      e.currentTarget.style.boxShadow = colors.shadowMd
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = colors.border
+                      e.currentTarget.style.boxShadow = colors.shadowSm
+                    }}
+                  >
+                    <div className="stocko-pos-order-card-header" style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'flex-start',
+                      marginBottom: '10px',
+                    }}>
+                      <div>
+                        <div style={{
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          color: colors.textPrimary,
+                          marginBottom: '4px',
+                        }}>
+                          Order #{orderReference(order)}
                         </div>
-                        <button onClick={() => removeItem(item.id)} style={{ background: 'transparent', color: theme.danger, border: 'none', cursor: 'pointer', fontSize: 18, padding: '0 4px', lineHeight: 1 }}>×</button>
+                        <div style={{
+                          fontSize: '12px',
+                          color: colors.textMuted,
+                        }}>
+                          {formatDateTime(order.created_at)} · {order.customer_name || 'Walk-In'} · {(order.type || order.order_type || 'sale').replaceAll('_', ' ')}
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <button onClick={() => updateQty(item.id, item.qty - 1)} style={{ width: 28, height: 28, background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 6, cursor: 'pointer', fontSize: 16, color: theme.text }}>−</button>
-                        <input type="number" min="1" value={item.qty} onChange={(e) => updateQty(item.id, parseInt(e.target.value) || 1)}
-                          style={{ width: 50, textAlign: 'center', padding: 6, border: `1px solid ${theme.inputBorder}`, borderRadius: 6, background: theme.inputBg, color: theme.text, fontSize: 14, fontWeight: 600 }} />
-                        <button onClick={() => updateQty(item.id, item.qty + 1)} style={{ width: 28, height: 28, background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 6, cursor: 'pointer', fontSize: 16, color: theme.text }}>+</button>
-                        <div style={{ flex: 1, textAlign: 'right', fontSize: 14, fontWeight: 700, color: theme.primary }}>Rs. {(item.qty * item.price).toFixed(2)}</div>
+                      <div style={{
+                        padding: '5px 10px',
+                        ...statusStyle(order.status),
+                        borderRadius: '20px',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        border: `1px solid rgba(255, 152, 0, 0.2)`,
+                      }}>
+                        {(order.status || ORDER_STATUS.PENDING).replaceAll('_', ' ').toUpperCase()}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
 
-            {cart.length > 0 && (
-              <div style={{ padding: '14px 20px', borderTop: `1px solid ${theme.border}`, borderBottom: `1px solid ${theme.border}`, background: theme.cardBg }}>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: 10, fontWeight: 700, color: theme.textMuted, marginBottom: 4, textTransform: 'uppercase' }}>Discount (Rs)</label>
-                    <input type="number" min="0" value={discount || ''} onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
-                      style={{ width: '100%', padding: '8px 10px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, background: theme.inputBg, color: theme.text, fontSize: 13, boxSizing: 'border-box' }} />
+                    <div style={{
+                      display: 'flex',
+                      gap: '18px',
+                      marginBottom: '10px',
+                      fontSize: '12px',
+                    }}>
+                      <div>
+                        <span style={{ color: colors.textMuted }}>Items: </span>
+                        <span style={{ color: colors.textSecondary, fontWeight: 700 }}>
+                          {order.order_items?.length || 0}
+                        </span>
+                      </div>
+                      <div>
+                        <span style={{ color: colors.textMuted }}>Total: </span>
+                        <span style={{ color: colors.primary, fontWeight: 800 }}>
+                          {formatPrice(order.total)}
+                        </span>
+                      </div>
+                      <div>
+                        <span style={{ color: colors.textMuted }}>By: </span>
+                        <span style={{ color: colors.textSecondary }}>
+                          {order.created_by_name || 'Unknown'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="stocko-pos-order-actions" style={{
+                      display: 'flex',
+                      gap: '8px',
+                      flexWrap: 'wrap',
+                      paddingTop: '10px',
+                      borderTop: `1px solid ${colors.border}`,
+                    }}>
+                      <button
+                        onClick={() => viewOrderDetail(order)}
+                        style={{
+                          padding: '7px 10px',
+                          background: colors.bgHover,
+                          color: colors.textSecondary,
+                          border: `1px solid ${colors.border}`,
+                          borderRadius: '7px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Ic n="Eye" size={14} />
+                        View
+                      </button>
+                      <button
+                        onClick={() => handlePrintOrder(order)}
+                        style={{
+                          padding: '7px 10px',
+                          background: colors.bgHover,
+                          color: colors.textSecondary,
+                          border: `1px solid ${colors.border}`,
+                          borderRadius: '7px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Ic n="Printer" size={14} />
+                        Print
+                      </button>
+                      <button
+                        onClick={() => openPaymentModal(order)}
+                        style={{
+                          padding: '7px 11px',
+                          background: colors.success,
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '7px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Ic n="DollarSign" size={14} />
+                        Pay
+                      </button>
+                      {isAdmin && (
+                        <>
+                          <button
+                            onClick={() => requestEditAuthorization(order)}
+                            style={{
+                              padding: '7px 10px',
+                              background: colors.primaryLight,
+                              color: colors.primary,
+                              border: `1px solid ${colors.primary}`,
+                              borderRadius: '7px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <Ic n="Edit" size={14} />
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => cancelOrder(order)}
+                            style={{
+                              padding: '7px 10px',
+                              background: colors.dangerLight,
+                              color: colors.danger,
+                              border: `1px solid ${colors.danger}`,
+                              borderRadius: '7px',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                            }}
+                          >
+                            <Ic n="X" size={14} />
+                            Cancel
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: 10, fontWeight: 700, color: theme.textMuted, marginBottom: 4, textTransform: 'uppercase' }}>Tax Rate (%)</label>
-                    <input type="number" min="0" max="100" value={taxRate || ''} onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
-                      style={{ width: '100%', padding: '8px 10px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, background: theme.inputBg, color: theme.text, fontSize: 13, boxSizing: 'border-box' }} />
-                  </div>
-                </div>
+                ))}
               </div>
             )}
+          </div>
+        )}
 
-            {cart.length > 0 && (
-              <div style={{ padding: '14px 20px', borderBottom: `1px solid ${theme.border}`, background: theme.cardBg }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
-                  <span style={{ color: theme.textMuted }}>Subtotal:</span><span style={{ fontWeight: 600, color: theme.text }}>Rs. {subtotal.toFixed(2)}</span>
+        {/* ── TAB: CANCELLED ORDERS ── */}
+        {activeTab === 'cancelled' && (
+          <div className="stocko-pos-scroll" style={{
+            flex: 1,
+            padding: '16px',
+            overflowY: 'auto',
+            background: colors.bgPage,
+          }}>
+            <div className="stocko-pos-order-card-header" style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '16px',
+            }}>
+              <div>
+                <h2 style={{
+                  fontSize: '18px',
+                  fontWeight: 750,
+                  color: colors.textPrimary,
+                  margin: '0 0 4px',
+                }}>
+                  Cancelled orders
+                </h2>
+                <p style={{ margin: 0, fontSize: '12px', color: colors.textMuted }}>
+                  Audit cancellation reasons and reprint archived receipts.
+                </p>
+              </div>
+              <div style={{
+                padding: '7px 11px',
+                background: colors.bgCard,
+                borderRadius: '20px',
+                color: colors.textMuted,
+                fontSize: '12px',
+                border: `1px solid ${colors.border}`,
+                fontWeight: 600,
+              }}>
+                {cancelledOrders.length} orders
+              </div>
+            </div>
+
+            {cancelledOrders.length === 0 ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '80px 20px',
+                color: colors.textMuted,
+                background: colors.bgCard,
+                borderRadius: '12px',
+                border: `1px solid ${colors.border}`,
+              }}>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: colors.textSecondary, marginBottom: '8px' }}>
+                  No cancelled orders
                 </div>
-                {discount > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}><span style={{ color: theme.textMuted }}>Discount:</span><span style={{ fontWeight: 600, color: theme.success }}>−Rs. {discount.toFixed(2)}</span></div>}
-                {tax > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}><span style={{ color: theme.textMuted }}>Tax:</span><span style={{ fontWeight: 600, color: theme.text }}>Rs. {tax.toFixed(2)}</span></div>}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0 0', borderTop: `2px solid ${theme.border}`, marginTop: 8 }}>
-                  <span style={{ fontSize: 15, fontWeight: 800, color: theme.text }}>GRAND TOTAL</span>
-                  <span style={{ fontSize: 20, fontWeight: 900, color: theme.primary }}>Rs. {total.toFixed(2)}</span>
-                </div>
+                <div style={{ fontSize: '14px' }}>No orders have been cancelled</div>
+              </div>
+            ) : (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}>
+                {cancelledOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    className="stocko-pos-table-row"
+                    style={{
+                      background: colors.bgCard,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '10px',
+                      padding: '14px',
+                      opacity: 0.85,
+                      boxShadow: colors.shadowSm,
+                    }}
+                  >
+                    <div className="stocko-pos-order-card-header" style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'flex-start',
+                      marginBottom: '10px',
+                    }}>
+                      <div>
+                        <div style={{
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          color: colors.textPrimary,
+                          marginBottom: '4px',
+                        }}>
+                          Order #{orderReference(order)}
+                        </div>
+                        <div style={{
+                          fontSize: '12px',
+                          color: colors.textMuted,
+                        }}>
+                          {formatDateTime(order.created_at)} · {order.customer_name || 'Walk-In'}
+                        </div>
+                      </div>
+                      <div style={{
+                        padding: '6px 14px',
+                        background: colors.dangerLight,
+                        borderRadius: '20px',
+                        color: colors.danger,
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        border: `1px solid rgba(244, 67, 54, 0.2)`,
+                      }}>
+                        CANCELLED
+                      </div>
+                    </div>
+
+                    <div style={{
+                      display: 'flex',
+                      gap: '24px',
+                      marginBottom: '14px',
+                      fontSize: '14px',
+                    }}>
+                      <div>
+                        <span style={{ color: colors.textMuted }}>Items: </span>
+                        <span style={{ color: colors.textSecondary, fontWeight: 700 }}>
+                          {order.order_items?.length || 0}
+                        </span>
+                      </div>
+                      <div>
+                        <span style={{ color: colors.textMuted }}>Total: </span>
+                        <span style={{ color: colors.primary, fontWeight: 800 }}>
+                          {formatPrice(order.total)}
+                        </span>
+                      </div>
+                      <div>
+                        <span style={{ color: colors.textMuted }}>Cancelled By: </span>
+                        <span style={{ color: colors.textSecondary }}>
+                          {order.cancelled_by_name || order.cancelled_by || 'Unknown'}
+                        </span>
+                      </div>
+                    </div>
+                    {order.cancellation_reason && (
+                      <div style={{
+                        padding: '10px 12px',
+                        marginBottom: '12px',
+                        borderRadius: '8px',
+                        background: colors.dangerLight,
+                        color: dark ? '#fecaca' : '#991b1b',
+                        fontSize: '12px',
+                        lineHeight: 1.5,
+                      }}>
+                        <strong>Reason:</strong> {order.cancellation_reason}
+                      </div>
+                    )}
+                    <div className="stocko-pos-order-actions" style={{
+                      display: 'flex',
+                      gap: '8px',
+                      paddingTop: '12px',
+                      borderTop: `1px solid ${colors.border}`,
+                    }}>
+                      <button
+                        onClick={() => viewOrderDetail(order)}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '7px',
+                          border: `1px solid ${colors.border}`,
+                          background: colors.bgHover,
+                          color: colors.textSecondary,
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Ic n="Eye" size={14} />
+                        Details
+                      </button>
+                      <button
+                        onClick={() => handlePrintOrder(order)}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '7px',
+                          border: `1px solid ${colors.border}`,
+                          background: colors.bgHover,
+                          color: colors.textSecondary,
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <Ic n="Printer" size={14} />
+                        Receipt
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
-
-            <div style={{ padding: '14px 20px', display: 'flex', gap: 8, background: theme.cardBg }}>
-              <Btn variant="danger" onClick={clearCart} disabled={cart.length === 0} style={{ padding: '10px 14px' }}>Clear</Btn>
-              {cart.length > 0 && (
-                <Btn variant={isStorekeeper && !isAdmin ? 'success' : 'primary'} onClick={placeOrder} disabled={processing} style={{ flex: 1, padding: '10px 14px', fontSize: 13 }}>
-                  {processing ? 'Processing...' : (isAdmin && !isStorekeeper ? 'Complete Sale' : 'Place Order')}
-                </Btn>
-              )}
-            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ═══════════════════════ PENDING ORDERS TAB ═══════════════════════ */}
-      {activeTab === 'pending' && (
-        <OrdersListView
-          theme={theme} title="Pending Orders" icon="ClipboardList"
-          orders={pendingOrders} loading={ordersLoading}
-          search={listSearch} onSearch={setListSearch}
-          StatusBadge={StatusBadge}
-          emptyTitle="No pending orders" emptyMessage="All orders have been processed"
-          renderActions={(order) => (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <Btn variant="outline" onClick={() => viewOrderDetails(order)} style={{ padding: '5px 10px', fontSize: 11 }}>View</Btn>
-              <Btn variant="outline" onClick={() => printOrderRow(order)} style={{ padding: '5px 10px', fontSize: 11 }}>Print</Btn>
-              {canModifyOrder(order) && (
-                <>
-                  {canEditOrder(order) && <Btn variant="warning" onClick={() => initiateEditOrder(order)} style={{ padding: '5px 10px', fontSize: 11 }}>Edit</Btn>}
-                  {order.status === ORDER_STATUS.PENDING && (
-                    <Btn variant="success" onClick={() => initiateCompleteOrder(order)} style={{ padding: '5px 10px', fontSize: 11 }}>Complete</Btn>
-                  )}
-                  <Btn variant="primary" onClick={() => initiatePayment(order)} style={{ padding: '5px 10px', fontSize: 11 }}>Pay</Btn>
-                  <Btn variant="danger" onClick={() => initiateCancel(order.id)} style={{ padding: '5px 10px', fontSize: 11 }}>Cancel</Btn>
-                </>
-              )}
-            </div>
-          )}
-        />
-      )}
-
-      {/* ═══════════════════════ CANCELLED ORDERS TAB ═══════════════════════ */}
-      {activeTab === 'cancelled' && (
-        <OrdersListView
-          theme={theme} title="Cancelled Orders" icon="AlertTriangle"
-          orders={cancelledOrders} loading={ordersLoading}
-          search={listSearch} onSearch={setListSearch}
-          StatusBadge={StatusBadge}
-          emptyTitle="No cancelled orders" emptyMessage="No orders have been cancelled"
-          faded
-          renderActions={(order) => (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <Btn variant="outline" onClick={() => viewOrderDetails(order)} style={{ padding: '5px 10px', fontSize: 11 }}>View</Btn>
-              <Btn variant="outline" onClick={() => printOrderRow(order)} style={{ padding: '5px 10px', fontSize: 11 }}>Print</Btn>
-            </div>
-          )}
-          extraColumn={{ label: 'Cancelled By', render: (o) => o.cancelled_by_name || '—' }}
-        />
-      )}
-
-      {/* ═══════════════════════ REPORTS TAB ═══════════════════════ */}
-      {activeTab === 'reports' && hasReportAccess && (
-        <div>
-          <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 12, padding: 20, marginBottom: 20, boxShadow: theme.shadow }}>
-            <h3 style={{ fontSize: 16, fontWeight: 700, color: theme.text, margin: '0 0 16px' }}>Filter Orders</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-              <Input label="Start Date" type="date" value={reportStart} onChange={e => setReportStart(e.target.value)} />
-              <Input label="End Date" type="date" value={reportEnd} onChange={e => setReportEnd(e.target.value)} />
-              <Select label="Customer" value={reportCustomer} onChange={e => setReportCustomer(e.target.value)}>
-                <option value="">All Customers</option>
-                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </Select>
-              <Select label="Payment Method" value={reportPaymentType} onChange={e => setReportPaymentType(e.target.value)}>
-                <option value="all">All</option>
-                <option value={PAYMENT_METHODS.CASH}>Cash</option>
-                <option value={PAYMENT_METHODS.CARD}>Card</option>
-                <option value={PAYMENT_METHODS.BANK_TRANSFER}>Bank Transfer</option>
-                <option value={PAYMENT_METHODS.CREDIT}>Credit</option>
-              </Select>
-              <Select label="Order Status" value={reportStatus} onChange={e => setReportStatus(e.target.value)}>
-                <option value="all">All</option>
-                <option value={ORDER_STATUS.PENDING}>Pending</option>
-                <option value={ORDER_STATUS.PARTIALLY_PAID}>Partially Paid</option>
-                <option value={ORDER_STATUS.PAID}>Paid</option>
-                <option value={ORDER_STATUS.CREDIT}>Credit</option>
-                <option value={ORDER_STATUS.COMPLETED}>Completed</option>
-                <option value={ORDER_STATUS.CANCELLED}>Cancelled</option>
-              </Select>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16, gap: 8 }}>
-              <Btn variant="outline" onClick={resetReportFilters}>Reset</Btn>
-              <Btn variant="primary" onClick={loadOrders} disabled={ordersLoading}>{ordersLoading ? 'Loading...' : 'Refresh'}</Btn>
-            </div>
-          </div>
-
-          <div style={{ background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 12, overflow: 'hidden', boxShadow: theme.shadow }}>
-            <div style={{ padding: '14px 20px', borderBottom: `1px solid ${theme.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-              <div style={{ fontSize: 14, color: theme.textMuted, fontWeight: 600 }}>
-                Showing {reportRows.length} order(s) — Rs. {reportRows.reduce((s, o) => s + (o.total || 0), 0).toFixed(2)} total
+        {/* ── TAB: REPORTS ── */}
+        {activeTab === 'reports' && hasReportAccess && (
+          <div className="stocko-pos-scroll" style={{
+            flex: 1,
+            padding: '16px',
+            overflowY: 'auto',
+            background: colors.bgPage,
+          }}>
+            {/* Filter Section */}
+            <div style={{
+              background: colors.bgCard,
+              border: `1px solid ${colors.border}`,
+              borderRadius: '10px',
+              padding: '18px',
+              marginBottom: '16px',
+              boxShadow: colors.shadowSm,
+            }}>
+              <div className="stocko-pos-report-header" style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: '14px',
+                marginBottom: '14px',
+              }}>
+                <div>
+                  <h3 style={{
+                    fontSize: '16px',
+                    fontWeight: 750,
+                    color: colors.textPrimary,
+                    margin: '0 0 4px',
+                  }}>
+                    Dispatch report
+                  </h3>
+                  <p style={{ margin: 0, color: colors.textMuted, fontSize: '12px' }}>
+                    Filter branch orders, export CSV, or print an audit-ready summary.
+                  </p>
+                </div>
+                <div style={{
+                  padding: '8px 11px',
+                  borderRadius: '8px',
+                  background: colors.primaryLight,
+                  color: colors.primary,
+                  fontSize: '12px',
+                  fontWeight: 750,
+                }}>
+                  {currentBranch?.name || user?.branch_name || 'Current branch'}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <Btn variant="outline" onClick={exportReportCSV} style={{ padding: '6px 12px', fontSize: 12 }}>
-                  <Ic n="Download" size={13} /> Export CSV
-                </Btn>
-                <Btn variant="outline" onClick={printReport} style={{ padding: '6px 12px', fontSize: 12 }}>
-                  <Ic n="Printer" size={13} /> Print
-                </Btn>
-              </div>
-            </div>
 
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: theme.tableHeaderBg, borderBottom: `2px solid ${theme.border}` }}>
-                    {['Invoice', 'Order Time', 'Customer', 'Bill', 'Disc', 'Tax', 'Grand Total', 'Status', 'Action'].map(h => (
-                      <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: theme.tableHeaderText, fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, whiteSpace: 'nowrap' }}>{h}</th>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: '10px',
+              }}>
+                <div>
+                  <label style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: colors.textMuted,
+                    display: 'block',
+                    marginBottom: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                  }}>
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    value={reportFilters.startDate}
+                    onChange={(e) => setReportFilters(prev => ({ ...prev, startDate: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      background: colors.bgInput,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '6px',
+                      color: colors.textPrimary,
+                      fontSize: '14px',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: colors.textMuted,
+                    display: 'block',
+                    marginBottom: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                  }}>
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    value={reportFilters.endDate}
+                    onChange={(e) => setReportFilters(prev => ({ ...prev, endDate: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      background: colors.bgInput,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '6px',
+                      color: colors.textPrimary,
+                      fontSize: '14px',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: colors.textMuted,
+                    display: 'block',
+                    marginBottom: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                  }}>
+                    Customer
+                  </label>
+                  <select
+                    value={reportFilters.customer}
+                    onChange={(e) => setReportFilters(prev => ({ ...prev, customer: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      background: colors.bgInput,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '6px',
+                      color: colors.textPrimary,
+                      fontSize: '14px',
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="">All Customers</option>
+                    {customers.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {reportRows.length === 0 ? (
-                    <tr><td colSpan={9} style={{ padding: 0 }}><EmptyState icon="FileText" title="No data found" message="Adjust the filters above and press Refresh" /></td></tr>
-                  ) : (
-                    reportRows.map((order, i) => (
-                      <tr key={order.id} style={{ background: i % 2 === 0 ? theme.cardBg : theme.tableRowAlt, borderBottom: `1px solid ${theme.borderLight}` }}>
-                        <td style={{ padding: '10px 12px', color: theme.primary, fontWeight: 700 }}>#{order.invoice_no || order.id?.slice(0, 8)}</td>
-                        <td style={{ padding: '10px 12px', color: theme.textMuted, whiteSpace: 'nowrap' }}>{new Date(order.created_at).toLocaleString()}</td>
-                        <td style={{ padding: '10px 12px', color: theme.text }}>{order.customer_name || 'Walk-In'}</td>
-                        <td style={{ padding: '10px 12px', color: theme.text, fontWeight: 700 }}>Rs. {(order.subtotal || 0).toFixed(2)}</td>
-                        <td style={{ padding: '10px 12px', color: theme.success }}>{order.discount > 0 ? `Rs. ${order.discount.toFixed(2)}` : '—'}</td>
-                        <td style={{ padding: '10px 12px', color: theme.text }}>{order.tax > 0 ? `Rs. ${order.tax.toFixed(2)}` : '—'}</td>
-                        <td style={{ padding: '10px 12px', color: theme.primary, fontWeight: 800 }}>Rs. {(order.total || 0).toFixed(2)}</td>
-                        <td style={{ padding: '10px 12px' }}><StatusBadge status={order.status} /></td>
-                        <td style={{ padding: '10px 12px' }}>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <Btn variant="outline" onClick={() => viewOrderDetails(order)} style={{ padding: '4px 8px', fontSize: 11 }}>View</Btn>
-                            <Btn variant="outline" onClick={() => printOrderRow(order)} style={{ padding: '4px 8px', fontSize: 11 }}>Print</Btn>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: colors.textMuted,
+                    display: 'block',
+                    marginBottom: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                  }}>
+                    Payment Type
+                  </label>
+                  <select
+                    value={reportFilters.paymentType}
+                    onChange={(e) => setReportFilters(prev => ({ ...prev, paymentType: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      background: colors.bgInput,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '6px',
+                      color: colors.textPrimary,
+                      fontSize: '14px',
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="all">All</option>
+                    <option value="cash">Cash</option>
+                    <option value="credit">Credit</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                    <option value="debit_card">Debit Card</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    color: colors.textMuted,
+                    display: 'block',
+                    marginBottom: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                  }}>
+                    Status
+                  </label>
+                  <select
+                    value={reportFilters.status}
+                    onChange={(e) => setReportFilters(prev => ({ ...prev, status: e.target.value }))}
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      background: colors.bgInput,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '6px',
+                      color: colors.textPrimary,
+                      fontSize: '14px',
+                      outline: 'none',
+                    }}
+                  >
+                    {REPORT_STATUS_OPTIONS.map(option => (
+                      <option key={option.id} value={option.id}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                marginTop: '20px',
+                gap: '10px',
+              }}>
+                <button
+                  onClick={() => {
+                    setReportFilters({
+                      startDate: new Date().toISOString().split('T')[0],
+                      endDate: new Date().toISOString().split('T')[0],
+                      customer: '',
+                      paymentType: 'all',
+                      status: 'all',
+                    })
+                    loadTodayOrders()
+                  }}
+                  style={{
+                    padding: '10px 20px',
+                    background: colors.bgPage,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '6px',
+                    color: colors.textSecondary,
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={generateReport}
+                  disabled={reportLoading}
+                  style={{
+                    padding: '10px 24px',
+                    background: colors.primary,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    cursor: reportLoading ? 'not-allowed' : 'pointer',
+                    opacity: reportLoading ? 0.6 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: '0 2px 8px rgba(33, 150, 243, 0.3)',
+                  }}
+                >
+                  <Ic n="Search" size={14} />
+                  {reportLoading ? 'Searching...' : 'Search'}
+                </button>
+              </div>
+            </div>
+
+            {/* Report Results */}
+            <div style={{
+              background: colors.bgCard,
+              border: `1px solid ${colors.border}`,
+              borderRadius: '10px',
+              overflow: 'hidden',
+              boxShadow: colors.shadowSm,
+            }}>
+              <div style={{
+                padding: '14px 20px',
+                borderBottom: `1px solid ${colors.border}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}>
+                <div style={{
+                  fontSize: '14px',
+                  color: colors.textMuted,
+                  fontWeight: 600,
+                }}>
+                  {reportData.length} orders · {formatPrice(reportData.reduce((sum, order) => (
+                    order.status === ORDER_STATUS.CANCELLED ? sum : sum + safeNumber(order.total)
+                  ), 0))}
+                </div>
+                <div style={{
+                  display: 'flex',
+                  gap: '6px',
+                }}>
+                  <button
+                    onClick={exportReportCSV}
+                    style={{
+                      padding: '7px 11px',
+                      background: colors.bgPage,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '7px',
+                      color: colors.textSecondary,
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <Ic n="Download" size={14} />
+                    Export CSV
+                  </button>
+                  <button
+                    onClick={printReport}
+                    style={{
+                      padding: '7px 11px',
+                      background: colors.primary,
+                      border: `1px solid ${colors.primary}`,
+                      borderRadius: '7px',
+                      color: '#fff',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <Ic n="Printer" size={14} />
+                    Print report
+                  </button>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="stocko-pos-scroll" style={{ overflowX: 'auto' }}>
+                <table style={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontSize: '13px',
+                }}>
+                  <thead>
+                    <tr style={{
+                      background: colors.tableHeader,
+                      borderBottom: `2px solid ${colors.tableBorder}`,
+                    }}>
+                      {['Sr.', 'Type', 'ID', 'Invoice#', 'Order Time', 'Customer', 'Payment', 'Bill', 'Disc', 'Tax', 'Grand Total', 'Status', 'Action'].map((header) => (
+                        <th key={header} style={{
+                          padding: '12px 10px',
+                          textAlign: 'left',
+                          color: colors.textSecondary,
+                          fontWeight: 700,
+                          fontSize: '12px',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.5px',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportData.length === 0 ? (
+                      <tr>
+                        <td colSpan="13" style={{
+                          padding: '50px',
+                          textAlign: 'center',
+                          color: colors.textMuted,
+                        }}>
+                          <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>
+                            No data found
                           </div>
+                          <div>Click Search to generate report</div>
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      reportData.map((order, index) => (
+                        <tr
+                          key={order.id}
+                          style={{
+                            background: index % 2 === 0 ? colors.tableRow : colors.tableRowAlt,
+                            borderBottom: `1px solid ${colors.tableBorder}`,
+                            transition: 'background 0.2s',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = colors.bgHover
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = index % 2 === 0 ? colors.tableRow : colors.tableRowAlt
+                          }}
+                        >
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary }}>{index + 1}</td>
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary }}>
+                            {(order.type || order.order_type || 'sale').replaceAll('_', ' ')}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.primary, fontWeight: 700 }}>
+                            {orderReference(order)}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary }}>{order.invoice_no || orderReference(order)}</td>
+                          <td style={{ padding: '12px 10px', color: colors.textMuted, whiteSpace: 'nowrap' }}>
+                            {formatDateTime(order.created_at)}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary }}>
+                            {order.customer_name || 'Walk-In'}
+                          </td>
+                          <td style={{ padding: '12px 10px' }}>
+                            <span style={{
+                              padding: '3px 10px',
+                              borderRadius: '12px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              background: getPaymentMethod(order) === 'cash' ? colors.successLight : 
+                                         getPaymentMethod(order) === 'credit' ? colors.infoLight : 
+                                         colors.bgPage,
+                              color: getPaymentMethod(order) === 'cash' ? colors.success : 
+                                    getPaymentMethod(order) === 'credit' ? colors.info : 
+                                    colors.textSecondary,
+                              border: `1px solid ${colors.border}`,
+                            }}>
+                              {getPaymentMethod(order)?.replaceAll('_', ' ') || 'N/A'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary, fontWeight: 700 }}>
+                            {formatPrice(order.subtotal)}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.success }}>
+                            {safeNumber(order.discount) > 0 ? formatPrice(order.discount) : '—'}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary }}>
+                            {safeNumber(order.tax) > 0 ? formatPrice(order.tax) : '—'}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.primary, fontWeight: 800 }}>
+                            {formatPrice(order.total)}
+                          </td>
+                          <td style={{ padding: '12px 10px' }}>
+                            <span style={{
+                              padding: '3px 10px',
+                              borderRadius: '12px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              ...statusStyle(order.status),
+                              border: `1px solid ${colors.border}`,
+                            }}>
+                              {(order.status || 'pending').replaceAll('_', ' ').toUpperCase()}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px 10px' }}>
+                            <div style={{ display: 'flex', gap: '4px' }}>
+                              <button
+                                onClick={() => handlePrintOrder(order)}
+                                style={{
+                                  padding: '5px 10px',
+                                  background: colors.primary,
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  color: '#fff',
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <Ic n="Printer" size={12} />
+                              </button>
+                              <button
+                                onClick={() => viewOrderDetail(order)}
+                                style={{
+                                  padding: '5px 10px',
+                                  background: colors.bgPage,
+                                  border: `1px solid ${colors.border}`,
+                                  borderRadius: '4px',
+                                  color: colors.textSecondary,
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <Ic n="Eye" size={12} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════════
-          MODALS
-          ═══════════════════════════════════════════════════════════════════ */}
-
-      <Modal open={showCreateCustomerModal} onClose={() => setShowCreateCustomerModal(false)} title="New Customer" width={420}>
-        <Input label="Full Name *" value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)} placeholder="e.g. Ali Raza" />
-        <Input label="Phone" value={newCustomerPhone} onChange={e => setNewCustomerPhone(e.target.value)} placeholder="03xx-xxxxxxx" />
-        <Input label="Email" type="email" value={newCustomerEmail} onChange={e => setNewCustomerEmail(e.target.value)} />
-        <Input label="Address" value={newCustomerAddress} onChange={e => setNewCustomerAddress(e.target.value)} />
-        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          <Btn variant="outline" onClick={() => setShowCreateCustomerModal(false)} style={{ flex: 1, justifyContent: 'center' }}>Cancel</Btn>
-          <Btn variant="success" onClick={handleCreateCustomer} disabled={creatingCustomer} style={{ flex: 1, justifyContent: 'center' }}>
-            {creatingCustomer ? 'Creating...' : 'Create Customer'}
-          </Btn>
-        </div>
-      </Modal>
-
-      <Modal open={showPasswordModal} onClose={() => { setShowPasswordModal(false); setPasswordInput(''); setPasswordError(''); setPendingAction(null); setPendingActionData(null) }} title="Manager Verification" width={360}>
-        <p style={{ fontSize: 13, color: theme.textMuted, margin: '0 0 16px' }}>Enter your password to confirm this action</p>
-        <Input type="password" placeholder="Password" value={passwordInput} onChange={e => setPasswordInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && verifyPasswordAndExecute()} error={passwordError} />
-        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          <Btn variant="outline" onClick={() => { setShowPasswordModal(false); setPasswordInput(''); setPasswordError(''); setPendingAction(null); setPendingActionData(null) }} style={{ flex: 1, justifyContent: 'center' }}>Cancel</Btn>
-          <Btn variant="primary" onClick={verifyPasswordAndExecute} disabled={processing} style={{ flex: 1, justifyContent: 'center' }}>
-            {processing ? 'Verifying...' : 'Confirm'}
-          </Btn>
-        </div>
-      </Modal>
-
-      <Modal open={showPaymentModal} onClose={() => setShowPaymentModal(false)} title="Process Payment" width={400}>
-        <p style={{ fontSize: 14, color: theme.textMuted, margin: '0 0 8px' }}>Order: #{selectedOrder?.invoice_no || selectedOrder?.id?.slice(0, 8)}</p>
-        <p style={{ fontSize: 16, fontWeight: 700, margin: '0 0 16px', color: theme.text }}>Due: Rs. {(selectedOrder?.due_amount ?? selectedOrder?.total ?? 0).toFixed(2)}</p>
-        <Select label="Payment Method" value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
-          <option value={PAYMENT_METHODS.CASH}>Cash</option>
-          <option value={PAYMENT_METHODS.CARD}>Card</option>
-          <option value={PAYMENT_METHODS.BANK_TRANSFER}>Bank Transfer</option>
-        </Select>
-        <Input label="Amount Paid" type="number" min="0" max={selectedOrder?.due_amount ?? selectedOrder?.total ?? 0} step="0.01" value={paidAmount} onChange={e => setPaidAmount(parseFloat(e.target.value) || 0)} />
-        <Input label="Remarks" value={paymentRemarks} onChange={e => setPaymentRemarks(e.target.value)} />
-        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          <Btn variant="outline" onClick={() => setShowPaymentModal(false)} style={{ flex: 1, justifyContent: 'center' }}>Cancel</Btn>
-          <Btn variant="primary" onClick={confirmPayment} style={{ flex: 1, justifyContent: 'center' }}>Confirm Payment</Btn>
-        </div>
-      </Modal>
-
-      <Modal open={showCompleteModal} onClose={() => setShowCompleteModal(false)} title="Complete Order" width={400}>
-        <p style={{ fontSize: 14, color: theme.textMuted, margin: '0 0 8px' }}>Order: #{completeOrderData?.invoice_no || completeOrderData?.id?.slice(0, 8)}</p>
-        <p style={{ fontSize: 16, fontWeight: 700, margin: '0 0 16px', color: theme.text }}>Total: Rs. {completeOrderData?.total?.toFixed(2)}</p>
-        <Select label="Payment Method" value={completePaymentMethod} onChange={e => {
-          const method = e.target.value
-          setCompletePaymentMethod(method)
-          setCompletePaidAmount(method === PAYMENT_METHODS.CREDIT ? 0 : (completeOrderData?.due_amount ?? completeOrderData?.total ?? 0))
-        }}>
-          <option value={PAYMENT_METHODS.CASH}>Cash</option>
-          <option value={PAYMENT_METHODS.CARD}>Card</option>
-          <option value={PAYMENT_METHODS.BANK_TRANSFER}>Bank Transfer</option>
-          <option value={PAYMENT_METHODS.CREDIT}>Credit</option>
-        </Select>
-        <Input label="Amount Paid" type="number" min="0" max={completeOrderData?.due_amount ?? completeOrderData?.total ?? 0} step="0.01" value={completePaidAmount} disabled={completePaymentMethod === PAYMENT_METHODS.CREDIT} onChange={e => setCompletePaidAmount(parseFloat(e.target.value) || 0)} />
-        <Input label="Remarks" value={completeRemarks} onChange={e => setCompleteRemarks(e.target.value)} />
-        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-          <Btn variant="outline" onClick={() => setShowCompleteModal(false)} style={{ flex: 1, justifyContent: 'center' }}>Cancel</Btn>
-          <Btn variant="success" onClick={confirmCompleteOrder} style={{ flex: 1, justifyContent: 'center' }}>Complete Order</Btn>
-        </div>
-      </Modal>
-
-      <Modal open={showCancelModal} onClose={() => setShowCancelModal(false)} title="Cancel Order" width={400}>
-        <p style={{ fontSize: 13, color: theme.textMuted, margin: '0 0 16px' }}>This action cannot be undone. Inventory will be restored.</p>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: theme.text, marginBottom: 6 }}>Cancellation Reason *</label>
-          <textarea value={cancelReason} onChange={e => setCancelReason(e.target.value)} rows={3}
-            style={{ width: '100%', padding: '8px 12px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, background: theme.inputBg, color: theme.text, fontSize: 14, resize: 'vertical', boxSizing: 'border-box' }} />
-        </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <Btn variant="outline" onClick={() => setShowCancelModal(false)} style={{ flex: 1, justifyContent: 'center' }}>Back</Btn>
-          <Btn variant="danger" onClick={confirmCancel} style={{ flex: 1, justifyContent: 'center' }}>Confirm Cancel</Btn>
-        </div>
-      </Modal>
-
-      <Modal open={showEditModal && !!editOrderData} onClose={() => setShowEditModal(false)} title="Edit Order" width={560}>
-        {editOrderData && (
-          <>
-            <p style={{ fontSize: 13, color: theme.textMuted, margin: '0 0 16px' }}>Order: #{editOrderData.invoice_no || editOrderData.id?.slice(0, 8)}</p>
-            <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflow: 'hidden', marginBottom: 16 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: theme.tableHeaderBg }}>
-                    <th style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Item</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'center', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Qty</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Price</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Total</th>
-                    <th style={{ padding: '8px 10px' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {editItems.map((item, idx) => (
-                    <tr key={idx} style={{ borderTop: `1px solid ${theme.borderLight}` }}>
-                      <td style={{ padding: '8px 10px', color: theme.text }}>{item.name}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'center' }}>
-                          <button onClick={() => updateEditQty(idx, item.quantity - 1)} style={{ width: 22, height: 22, border: `1px solid ${theme.border}`, background: theme.bg, borderRadius: 4, cursor: 'pointer', color: theme.text }}>−</button>
-                          <span style={{ minWidth: 20, display: 'inline-block', textAlign: 'center', color: theme.text }}>{item.quantity}</span>
-                          <button onClick={() => updateEditQty(idx, item.quantity + 1)} style={{ width: 22, height: 22, border: `1px solid ${theme.border}`, background: theme.bg, borderRadius: 4, cursor: 'pointer', color: theme.text }}>+</button>
-                        </div>
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: theme.text }}>Rs. {item.price?.toFixed(2)}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: theme.text }}>Rs. {(item.quantity * item.price).toFixed(2)}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                        <button onClick={() => removeEditItem(idx)} style={{ background: 'transparent', color: theme.danger, border: 'none', cursor: 'pointer', fontSize: 16 }}>×</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-              <Input label="Discount (Rs)" type="number" min="0" value={editDiscount || ''} onChange={e => setEditDiscount(parseFloat(e.target.value) || 0)} style={{ marginBottom: 0 }} />
-              <Input label="Tax (Rs)" type="number" min="0" value={editTax || ''} onChange={e => setEditTax(parseFloat(e.target.value) || 0)} style={{ marginBottom: 0 }} />
-            </div>
-            <div style={{ borderTop: `2px solid ${theme.border}`, paddingTop: 12, marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
-                <span style={{ color: theme.textMuted }}>Subtotal:</span><span style={{ fontWeight: 600, color: theme.text }}>Rs. {editSubtotal.toFixed(2)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 800, color: theme.text }}>
-                <span>New Total</span><span>Rs. {editTotal.toFixed(2)}</span>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <Btn variant="outline" onClick={() => setShowEditModal(false)} style={{ flex: 1, justifyContent: 'center' }}>Cancel</Btn>
-              <Btn variant="warning" onClick={saveEditOrder} disabled={processing} style={{ flex: 1, justifyContent: 'center' }}>
-                {processing ? 'Saving...' : 'Save Changes'}
-              </Btn>
-            </div>
-          </>
         )}
-      </Modal>
+      </div>
 
-      <Modal open={showOrderDetailsModal && !!orderDetails} onClose={() => setShowOrderDetailsModal(false)} title="Order Details" width={520}>
-        {orderDetails && (
-          <>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginBottom: 12, marginTop: -12 }}>
-              <Btn variant="outline" onClick={() => printOrderRow(orderDetails)} style={{ padding: '6px 10px', fontSize: 11 }}>Print</Btn>
-              {canEditOrder(orderDetails) && (
-                <Btn variant="warning" onClick={() => { setShowOrderDetailsModal(false); initiateEditOrder(orderDetails) }} style={{ padding: '6px 10px', fontSize: 11 }}>Edit</Btn>
-              )}
-            </div>
-            <div style={{ marginBottom: 16, padding: 12, background: theme.bg, borderRadius: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
-                <span style={{ color: theme.textMuted }}>Invoice:</span><span style={{ fontWeight: 600, color: theme.text }}>#{orderDetails.invoice_no || orderDetails.id?.slice(0, 8)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
-                <span style={{ color: theme.textMuted }}>Customer:</span><span style={{ fontWeight: 600, color: theme.text }}>{orderDetails.customer_name || 'Walk-In'}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
-                <span style={{ color: theme.textMuted }}>Date:</span><span style={{ color: theme.text }}>{new Date(orderDetails.created_at).toLocaleString()}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                <span style={{ color: theme.textMuted }}>Status:</span><StatusBadge status={orderDetails.status} />
-              </div>
-            </div>
-            <h4 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 10px', color: theme.text }}>Items</h4>
-            <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflow: 'hidden', marginBottom: 16 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: theme.tableHeaderBg }}>
-                    <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Item</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Qty</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Price</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: theme.tableHeaderText, fontSize: 11 }}>Subtotal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(orderDetails.order_items || []).map((item, idx) => (
-                    <tr key={idx} style={{ borderTop: `1px solid ${theme.borderLight}` }}>
-                      <td style={{ padding: '8px 12px', color: theme.text }}>{item.name || `Item #${idx + 1}`}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'center', color: theme.text }}>{item.quantity}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'right', color: theme.text }}>Rs. {item.price?.toFixed(2)}</td>
-                      <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: theme.text }}>Rs. {(item.quantity * item.price)?.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ borderTop: `2px solid ${theme.border}`, paddingTop: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}>
-                <span style={{ color: theme.textMuted }}>Subtotal:</span><span style={{ fontWeight: 600, color: theme.text }}>Rs. {orderDetails.subtotal?.toFixed(2)}</span>
-              </div>
-              {orderDetails.discount > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}><span style={{ color: theme.textMuted }}>Discount:</span><span style={{ fontWeight: 600, color: theme.success }}>−Rs. {orderDetails.discount?.toFixed(2)}</span></div>}
-              {orderDetails.tax > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 13 }}><span style={{ color: theme.textMuted }}>Tax:</span><span style={{ fontWeight: 600, color: theme.text }}>Rs. {orderDetails.tax?.toFixed(2)}</span></div>}
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 800, color: theme.text }}>
-                <span>Total</span><span>Rs. {orderDetails.total?.toFixed(2)}</span>
-              </div>
+      {/* ═══════════════════════════════════════════════════════════════
+          MODALS
+          ═══════════════════════════════════════════════════════════════ */}
+
+      {/* Payment Modal */}
+      {showPaymentModal && paymentOrder && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }} onClick={() => { setShowPaymentModal(false); setPaymentOrder(null) }}>
+          <div className="stocko-pos-modal" style={{
+            background: colors.bgModal,
+            borderRadius: '14px',
+            width: '90%',
+            maxWidth: '900px',
+            maxHeight: '90vh',
+            overflowY: 'auto',
+            boxShadow: colors.shadowLg,
+            border: `1px solid ${colors.border}`,
+          }} onClick={e => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div style={{
+              padding: '20px 24px',
+              borderBottom: `1px solid ${colors.border}`,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <h3 style={{ 
+                fontSize: '20px', 
+                fontWeight: 700, 
+                margin: 0, 
+                color: colors.textPrimary 
+              }}>
+                Make Payment
+              </h3>
+              <button
+                onClick={() => { setShowPaymentModal(false); setPaymentOrder(null) }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: colors.textMuted,
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Ic n="X" size={18} />
+              </button>
             </div>
 
-            {orderDetails?.customer_id && customerLedger.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <h4 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 10px', color: theme.text }}>Customer Ledger</h4>
-                <div style={{ border: `1px solid ${theme.border}`, borderRadius: 8, overflow: 'hidden' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <div className="stocko-pos-payment-layout" style={{ display: 'flex' }}>
+              {/* Left: Order Details */}
+              <div style={{
+                flex: 1,
+                padding: '24px',
+                borderRight: `1px solid ${colors.border}`,
+              }}>
+                {/* Order Info */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '10px',
+                  marginBottom: '20px',
+                  fontSize: '13px',
+                }}>
+                  <div><span style={{ color: colors.textMuted }}>Order ID:</span> <span style={{ fontWeight: 600 }}>{orderReference(paymentOrder)}</span></div>
+                  <div><span style={{ color: colors.textMuted }}>Customer:</span> <span style={{ fontWeight: 600 }}>{paymentOrder.customer_name || 'Walk-In'}</span></div>
+                  <div><span style={{ color: colors.textMuted }}>Order Status:</span> <span style={{ ...statusStyle(paymentOrder.status), fontWeight: 700, padding: '2px 7px', borderRadius: '999px' }}>{(paymentOrder.status || 'pending').replaceAll('_', ' ')}</span></div>
+                  <div><span style={{ color: colors.textMuted }}>Order Date:</span> <span>{formatDateTime(paymentOrder.created_at)}</span></div>
+                </div>
+
+                {/* Items Table */}
+                <div style={{ marginBottom: '20px' }}>
+                  <h4 style={{
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    color: colors.textPrimary,
+                    margin: '0 0 12px',
+                    paddingBottom: '8px',
+                    borderBottom: `1px solid ${colors.border}`,
+                  }}>
+                    Items Detail
+                  </h4>
+                  <table style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    fontSize: '13px',
+                  }}>
                     <thead>
-                      <tr style={{ background: theme.tableHeaderBg }}>
-                        <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 700, color: theme.tableHeaderText, fontSize: 10 }}>Date</th>
-                        <th style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 700, color: theme.tableHeaderText, fontSize: 10 }}>Type</th>
-                        <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: theme.tableHeaderText, fontSize: 10 }}>Amount</th>
-                        <th style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: theme.tableHeaderText, fontSize: 10 }}>Balance</th>
+                      <tr style={{
+                        borderBottom: `2px solid ${colors.border}`,
+                      }}>
+                        {['Item', 'Qty', 'Price', 'Discount', 'Tax', 'Total'].map(h => (
+                          <th key={h} style={{
+                            padding: '8px',
+                            textAlign: h === 'Item' ? 'left' : 'center',
+                            color: colors.textSecondary,
+                            fontWeight: 700,
+                            fontSize: '12px',
+                          }}>
+                            {h}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {customerLedger.map((entry, idx) => (
-                        <tr key={idx} style={{ borderTop: `1px solid ${theme.borderLight}` }}>
-                          <td style={{ padding: '6px 10px', color: theme.text }}>{new Date(entry.created_at).toLocaleDateString()}</td>
-                          <td style={{ padding: '6px 10px' }}>
-                            <span style={{ padding: '2px 6px', borderRadius: 4, fontSize: 10, fontWeight: 700, background: entry.amount >= 0 ? theme.completed : theme.rejected, color: entry.amount >= 0 ? theme.completedText : theme.rejectedText }}>
-                              {entry.type}
-                            </span>
+                      {paymentOrder.order_items?.map((item, idx) => (
+                        <tr key={idx} style={{ borderBottom: `1px solid ${colors.borderLight}` }}>
+                          <td style={{ padding: '8px', color: colors.textPrimary }}>{item.name}</td>
+                          <td style={{ padding: '8px', textAlign: 'center', color: colors.textSecondary }}>{item.quantity}</td>
+                          <td style={{ padding: '8px', textAlign: 'center', color: colors.textSecondary }}>{formatPrice(extractLinePrice(item))}</td>
+                          <td style={{ padding: '8px', textAlign: 'center', color: colors.textMuted }}>-</td>
+                          <td style={{ padding: '8px', textAlign: 'center', color: colors.textMuted }}>-</td>
+                          <td style={{ padding: '8px', textAlign: 'center', color: colors.textPrimary, fontWeight: 700 }}>
+                            {formatPrice(safeNumber(item.quantity) * extractLinePrice(item))}
                           </td>
-                          <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: entry.amount >= 0 ? theme.success : theme.danger }}>Rs. {Math.abs(entry.amount).toFixed(2)}</td>
-                          <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: theme.text }}>Rs. {entry.balance_after?.toFixed(2)}</td>
                         </tr>
                       ))}
+                      <tr>
+                        <td colSpan="5" style={{ padding: '10px 8px', textAlign: 'right', color: colors.textMuted, fontWeight: 600 }}>
+                          Sub Total
+                        </td>
+                        <td style={{ padding: '10px 8px', textAlign: 'center', color: colors.textPrimary, fontWeight: 700 }}>
+                          {formatPrice(paymentOrder.subtotal)}
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
               </div>
-            )}
-          </>
-        )}
-      </Modal>
-    </>
-  )
-}
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Shared list view for Pending / Cancelled tabs
-   ═══════════════════════════════════════════════════════════════════════════ */
-function OrdersListView({ theme, title, icon, orders, loading, search, onSearch, StatusBadge, emptyTitle, emptyMessage, renderActions, faded, extraColumn }) {
-  return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700, color: theme.text, margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Ic n={icon} size={18} /> {title}
-        </h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <input type="text" placeholder="Search invoice, customer..." value={search} onChange={e => onSearch(e.target.value)}
-            style={{ padding: '8px 12px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, background: theme.inputBg, color: theme.text, fontSize: 13, minWidth: 220 }} />
-          <div style={{ padding: '6px 14px', background: theme.cardBg, borderRadius: 20, color: theme.textMuted, fontSize: 13, border: `1px solid ${theme.border}`, fontWeight: 600 }}>
-            {orders.length} order{orders.length === 1 ? '' : 's'}
-          </div>
-        </div>
-      </div>
-
-      {loading ? (
-        <div style={{ padding: 60, textAlign: 'center', color: theme.textMuted }}>Loading orders...</div>
-      ) : orders.length === 0 ? (
-        <div style={{ background: theme.cardBg, borderRadius: 12, border: `1px solid ${theme.border}` }}>
-          <EmptyState icon={icon} title={emptyTitle} message={emptyMessage} />
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {orders.map(order => (
-            <div key={order.id} style={{
-              background: theme.cardBg, border: `1px solid ${theme.border}`, borderRadius: 10, padding: 18,
-              boxShadow: theme.shadow, opacity: faded ? 0.9 : 1,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, marginBottom: 4 }}>
-                    Order #{order.invoice_no || order.id?.slice(0, 8)}
-                  </div>
-                  <div style={{ fontSize: 13, color: theme.textMuted }}>
-                    {new Date(order.created_at).toLocaleString()} · {order.customer_name || 'Walk-In'}
+              {/* Right: Payment Options */}
+              <div className="stocko-pos-payment-options" style={{
+                width: '380px',
+                padding: '24px',
+                background: colors.bgPage,
+              }}>
+                {/* Payment Method Selection */}
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    color: colors.textMuted,
+                    display: 'block',
+                    marginBottom: '10px',
+                    textTransform: 'uppercase',
+                  }}>
+                    Payment Method
+                  </label>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '10px',
+                  }}>
+                    {PAYMENT_OPTIONS.map((method) => (
+                      <button
+                        key={method.id}
+                        onClick={() => setPaymentMethod(method.id)}
+                        style={{
+                          padding: '14px',
+                          background: paymentMethod === method.id ? colors.primary : colors.bgCard,
+                          color: paymentMethod === method.id ? '#fff' : colors.textSecondary,
+                          border: `2px solid ${paymentMethod === method.id ? colors.primary : colors.border}`,
+                          borderRadius: '8px',
+                          fontSize: '13px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          transition: 'all 0.2s',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <span style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          background: paymentMethod === method.id ? 'rgba(255,255,255,0.2)' : colors.bgPage,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '14px',
+                          fontWeight: 800,
+                        }}>
+                          <Ic n={method.icon} size={16} />
+                        </span>
+                        {method.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <StatusBadge status={order.status} />
+
+                {/* Cash Input (only for cash) */}
+                {paymentMethod === PAYMENT_METHODS.CASH && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      color: colors.textMuted,
+                      display: 'block',
+                      marginBottom: '6px',
+                    }}>
+                      Cash Given By Customer
+                    </label>
+                    <input
+                      type="number"
+                      min={paymentDue}
+                      value={cashReceived}
+                      onChange={(e) => setCashReceived(Math.max(0, safeNumber(e.target.value)))}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        background: colors.bgCard,
+                        border: `2px solid ${colors.borderActive}`,
+                        borderRadius: '6px',
+                        fontSize: '18px',
+                        fontWeight: 700,
+                        color: colors.textPrimary,
+                        outline: 'none',
+                        textAlign: 'right',
+                      }}
+                    />
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(4, 1fr)',
+                      gap: '6px',
+                      marginTop: '8px',
+                    }}>
+                      {[
+                        paymentDue,
+                        Math.ceil(paymentDue / 100) * 100,
+                        Math.ceil(paymentDue / 500) * 500,
+                        Math.ceil(paymentDue / 1000) * 1000,
+                      ].filter((value, index, list) => value > 0 && list.indexOf(value) === index).map(value => (
+                        <button
+                          key={value}
+                          onClick={() => setCashReceived(value)}
+                          style={{
+                            padding: '7px 4px',
+                            borderRadius: '7px',
+                            border: `1px solid ${colors.border}`,
+                            background: colors.bgCard,
+                            color: colors.textSecondary,
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {safeNumber(value).toFixed(0)}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{
+                      marginTop: '8px',
+                      padding: '10px',
+                      background: colors.bgCard,
+                      borderRadius: '6px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: '14px',
+                    }}>
+                      <span style={{ color: colors.textMuted }}>Change Return:</span>
+                      <span style={{ 
+                        color: cashReceived >= paymentDue ? colors.success : colors.danger,
+                        fontWeight: 700,
+                      }}>
+                        {formatPrice(Math.max(0, safeNumber(cashReceived) - paymentDue))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {paymentMethod === PAYMENT_METHODS.CREDIT && !paymentOrder.customer_id && (
+                  <div style={{
+                    marginBottom: '14px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    background: colors.warningLight,
+                    color: dark ? '#fcd34d' : '#92400e',
+                    fontSize: '12px',
+                    lineHeight: 1.5,
+                  }}>
+                    Select a named customer before recording a credit sale.
+                  </div>
+                )}
+
+                <label style={{
+                  display: 'block',
+                  marginBottom: '16px',
+                  color: colors.textMuted,
+                  fontSize: '12px',
+                  fontWeight: 700,
+                }}>
+                  Payment note
+                  <input
+                    value={paymentRemarks}
+                    onChange={event => setPaymentRemarks(event.target.value)}
+                    placeholder="Optional transaction reference"
+                    maxLength={180}
+                    style={{
+                      width: '100%',
+                      marginTop: '6px',
+                      padding: '10px 11px',
+                      borderRadius: '8px',
+                      border: `1px solid ${colors.border}`,
+                      background: colors.bgCard,
+                      color: colors.textPrimary,
+                      outline: 'none',
+                    }}
+                  />
+                </label>
+
+                {/* Totals */}
+                <div style={{
+                  borderTop: `2px solid ${colors.border}`,
+                  paddingTop: '16px',
+                  marginBottom: '20px',
+                }}>
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}>
+                    <span style={{ fontSize: '14px', color: colors.textMuted, fontWeight: 600 }}>Amount due</span>
+                    <span style={{ 
+                      fontSize: '28px', 
+                      fontWeight: 900, 
+                      color: colors.redText 
+                    }}>
+                      {formatPrice(paymentDue)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{
+                  display: 'flex',
+                  gap: '10px',
+                }}>
+                  <button
+                    onClick={() => processPayment(false)}
+                    disabled={
+                      paymentProcessing ||
+                      (paymentMethod === PAYMENT_METHODS.CASH && cashReceived < paymentDue) ||
+                      (paymentMethod === PAYMENT_METHODS.CREDIT && !paymentOrder.customer_id)
+                    }
+                    style={{
+                      flex: 1,
+                      padding: '12px',
+                      background: colors.primary,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      cursor: paymentProcessing ? 'not-allowed' : 'pointer',
+                      opacity: paymentProcessing ? 0.6 : 1,
+                      boxShadow: '0 2px 8px rgba(33, 150, 243, 0.3)',
+                    }}
+                  >
+                    <Ic n="CheckCircle" size={15} />
+                    {paymentProcessing ? 'Processing...' : 'Pay Only'}
+                  </button>
+                  <button
+                    onClick={() => processPayment(true)}
+                    disabled={
+                      paymentProcessing ||
+                      (paymentMethod === PAYMENT_METHODS.CASH && cashReceived < paymentDue) ||
+                      (paymentMethod === PAYMENT_METHODS.CREDIT && !paymentOrder.customer_id)
+                    }
+                    style={{
+                      flex: 1,
+                      padding: '12px',
+                      background: colors.primary,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      fontWeight: 700,
+                      cursor: paymentProcessing ? 'not-allowed' : 'pointer',
+                      opacity: paymentProcessing ? 0.6 : 1,
+                      boxShadow: '0 2px 8px rgba(33, 150, 243, 0.3)',
+                    }}
+                  >
+                    <Ic n="Printer" size={15} />
+                    {paymentProcessing ? 'Processing...' : 'Pay & Print'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Customer Modal */}
+      {showCustomerModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }} onClick={() => setShowCustomerModal(false)}>
+          <div className="stocko-pos-modal" style={{
+            background: colors.bgModal,
+            borderRadius: '10px',
+            padding: '28px',
+            width: '90%',
+            maxWidth: '440px',
+            boxShadow: colors.shadowLg,
+            border: `1px solid ${colors.border}`,
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '24px',
+            }}>
+              <h3 style={{ 
+                fontSize: '20px', 
+                fontWeight: 700, 
+                margin: 0, 
+                color: colors.textPrimary 
+              }}>
+                New Customer
+              </h3>
+              <button
+                onClick={() => setShowCustomerModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: colors.textMuted,
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Ic n="X" size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+              <div>
+                <label style={{
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  color: colors.textMuted,
+                  display: 'block',
+                  marginBottom: '6px',
+                  textTransform: 'uppercase',
+                }}>
+                  Name *
+                </label>
+                <input
+                  type="text"
+                  placeholder="Enter customer name"
+                  value={newCustomer.name}
+                  onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') createCustomer()
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    background: colors.bgInput,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '6px',
+                    fontSize: '15px',
+                    color: colors.textPrimary,
+                    outline: 'none',
+                    transition: 'border-color 0.2s',
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = colors.borderActive}
+                  onBlur={(e) => e.target.style.borderColor = colors.border}
+                />
+              </div>
+              <div>
+                <label style={{
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  color: colors.textMuted,
+                  display: 'block',
+                  marginBottom: '6px',
+                  textTransform: 'uppercase',
+                }}>
+                  Phone
+                </label>
+                <input
+                  type="tel"
+                  placeholder="Enter phone number"
+                  value={newCustomer.phone}
+                  onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    background: colors.bgInput,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '6px',
+                    fontSize: '15px',
+                    color: colors.textPrimary,
+                    outline: 'none',
+                    transition: 'border-color 0.2s',
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = colors.borderActive}
+                  onBlur={(e) => e.target.style.borderColor = colors.border}
+                />
+              </div>
+              <div>
+                <label style={{
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  color: colors.textMuted,
+                  display: 'block',
+                  marginBottom: '6px',
+                  textTransform: 'uppercase',
+                }}>
+                  Email
+                </label>
+                <input
+                  type="email"
+                  placeholder="Enter email address"
+                  value={newCustomer.email}
+                  onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    background: colors.bgInput,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '6px',
+                    fontSize: '15px',
+                    color: colors.textPrimary,
+                    outline: 'none',
+                    transition: 'border-color 0.2s',
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = colors.borderActive}
+                  onBlur={(e) => e.target.style.borderColor = colors.border}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                onClick={() => setShowCustomerModal(false)}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: colors.bgPage,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  color: colors.textSecondary,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createCustomer}
+                disabled={!newCustomer.name.trim()}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: colors.success,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: newCustomer.name.trim() ? 'pointer' : 'not-allowed',
+                  opacity: newCustomer.name.trim() ? 1 : 0.55,
+                  boxShadow: '0 2px 6px rgba(76, 175, 80, 0.3)',
+                }}
+              >
+                Create Customer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancellation Reason Modal */}
+      {showCancelModal && cancelTarget && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: theme?.overlayBg || 'rgba(15, 23, 42, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '16px',
+          }}
+          onClick={() => {
+            setShowCancelModal(false)
+            setCancelTarget(null)
+            setCancelReason('')
+          }}
+        >
+          <div
+            className="stocko-pos-modal"
+            style={{
+              width: '100%',
+              maxWidth: '500px',
+              background: colors.bgModal,
+              border: `1px solid ${colors.border}`,
+              borderRadius: '14px',
+              boxShadow: colors.shadowLg,
+              overflow: 'hidden',
+            }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div style={{
+              padding: '18px 20px',
+              borderBottom: `1px solid ${colors.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+            }}>
+              <div>
+                <h3 style={{ margin: '0 0 3px', color: colors.textPrimary, fontSize: '17px' }}>
+                  Cancel order #{orderReference(cancelTarget)}
+                </h3>
+                <p style={{ margin: 0, color: colors.textMuted, fontSize: '12px' }}>
+                  Inventory will be restored and the action will be recorded.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCancelModal(false)
+                  setCancelTarget(null)
+                  setCancelReason('')
+                }}
+                aria-label="Close cancellation dialog"
+                style={{
+                  width: '32px',
+                  height: '32px',
+                  border: 'none',
+                  borderRadius: '8px',
+                  background: colors.bgHover,
+                  color: colors.textMuted,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Ic n="X" size={17} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '10px',
+                padding: '12px',
+                marginBottom: '16px',
+                borderRadius: '10px',
+                background: colors.bgPage,
+                border: `1px solid ${colors.border}`,
+              }}>
+                <div>
+                  <span style={{ display: 'block', color: colors.textMuted, fontSize: '11px' }}>Customer</span>
+                  <strong style={{ color: colors.textPrimary, fontSize: '13px' }}>
+                    {cancelTarget.customer_name || 'Walk-In'}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ display: 'block', color: colors.textMuted, fontSize: '11px' }}>Order total</span>
+                  <strong style={{ color: colors.primary, fontSize: '13px' }}>
+                    {formatPrice(cancelTarget.total)}
+                  </strong>
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 24, marginBottom: 14, fontSize: 13, flexWrap: 'wrap' }}>
-                <div><span style={{ color: theme.textMuted }}>Items: </span><span style={{ color: theme.text, fontWeight: 700 }}>{order.order_items?.length || 0}</span></div>
-                <div><span style={{ color: theme.textMuted }}>Total: </span><span style={{ color: theme.primary, fontWeight: 800 }}>Rs. {(order.total || 0).toFixed(2)}</span></div>
-                {order.due_amount > 0 && <div><span style={{ color: theme.textMuted }}>Due: </span><span style={{ color: theme.danger, fontWeight: 700 }}>Rs. {order.due_amount.toFixed(2)}</span></div>}
-                <div><span style={{ color: theme.textMuted }}>By: </span><span style={{ color: theme.text }}>{order.created_by_name || 'Unknown'}</span></div>
-                {extraColumn && <div><span style={{ color: theme.textMuted }}>{extraColumn.label}: </span><span style={{ color: theme.text }}>{extraColumn.render(order)}</span></div>}
+              <label style={{
+                display: 'block',
+                color: colors.textSecondary,
+                fontSize: '12px',
+                fontWeight: 700,
+              }}>
+                Cancellation reason *
+                <textarea
+                  autoFocus
+                  value={cancelReason}
+                  onChange={event => setCancelReason(event.target.value)}
+                  placeholder="Explain why this order is being cancelled"
+                  maxLength={300}
+                  rows={4}
+                  style={{
+                    width: '100%',
+                    marginTop: '7px',
+                    padding: '11px 12px',
+                    resize: 'vertical',
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '9px',
+                    background: colors.bgInput,
+                    color: colors.textPrimary,
+                    outline: 'none',
+                    lineHeight: 1.5,
+                  }}
+                />
+              </label>
+              <div style={{ textAlign: 'right', color: colors.textMuted, fontSize: '10px' }}>
+                {cancelReason.length}/300
+              </div>
+            </div>
+
+            <div style={{
+              padding: '14px 20px',
+              borderTop: `1px solid ${colors.border}`,
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '9px',
+              background: colors.bgPage,
+            }}>
+              <button
+                onClick={() => {
+                  setShowCancelModal(false)
+                  setCancelTarget(null)
+                  setCancelReason('')
+                }}
+                style={{
+                  padding: '9px 14px',
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: '8px',
+                  background: colors.bgCard,
+                  color: colors.textSecondary,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Keep order
+              </button>
+              <button
+                onClick={requestCancellationAuthorization}
+                disabled={!cancelReason.trim()}
+                style={{
+                  padding: '9px 14px',
+                  border: 'none',
+                  borderRadius: '8px',
+                  background: colors.danger,
+                  color: '#fff',
+                  fontWeight: 700,
+                  cursor: cancelReason.trim() ? 'pointer' : 'not-allowed',
+                  opacity: cancelReason.trim() ? 1 : 0.55,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Ic n="Lock" size={14} />
+                Authorize cancellation
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Item Auth Modal (Manager Password Required) */}
+      {showAuthModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }} onClick={() => { setShowAuthModal(false); setAuthAction(null); setAuthPassword('') }}>
+          <div className="stocko-pos-modal" style={{
+            background: colors.bgModal,
+            borderRadius: '10px',
+            padding: '28px',
+            width: '90%',
+            maxWidth: '480px',
+            boxShadow: colors.shadowLg,
+            border: `1px solid ${colors.border}`,
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '24px',
+            }}>
+              <h3 style={{ 
+                fontSize: '20px', 
+                fontWeight: 700, 
+                margin: 0, 
+                color: colors.textPrimary 
+              }}>
+                Manager authorization
+              </h3>
+              <button
+                onClick={() => { setShowAuthModal(false); setAuthAction(null); setAuthPassword('') }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: colors.textMuted,
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0',
+                }}
+              >
+                <Ic n="X" size={18} />
+              </button>
+            </div>
+
+            <div style={{
+              marginBottom: '24px',
+              padding: '16px',
+              background: colors.dangerLight,
+              borderRadius: '8px',
+              border: `1px solid rgba(244, 67, 54, 0.2)`,
+            }}>
+              <p style={{ margin: 0, color: colors.danger, fontSize: '14px', fontWeight: 600 }}>
+                Confirm this restricted {authAction?.type || 'management'} action using
+                the currently signed-in manager or administrator account.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
+              <div>
+                <label style={{
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  color: colors.textMuted,
+                  display: 'block',
+                  marginBottom: '6px',
+                  textTransform: 'uppercase',
+                }}>
+                  User
+                </label>
+                <div
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    background: colors.bgInput,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: colors.textPrimary,
+                  }}
+                >
+                  {user?.name || user?.email || 'Current user'} · {user?.role || 'Manager'}
+                </div>
+              </div>
+              <div>
+                <label style={{
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  color: colors.textMuted,
+                  display: 'block',
+                  marginBottom: '6px',
+                  textTransform: 'uppercase',
+                }}>
+                  Password
+                </label>
+                <input
+                  type="password"
+                  placeholder="Enter Password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && checkAuth()}
+                  autoFocus
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    background: colors.bgInput,
+                    border: `1px solid ${colors.border}`,
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    color: colors.textPrimary,
+                    outline: 'none',
+                    transition: 'border-color 0.2s',
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = colors.borderActive}
+                  onBlur={(e) => e.target.style.borderColor = colors.border}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setShowAuthModal(false); setAuthAction(null); setAuthPassword('') }}
+                style={{
+                  padding: '12px 20px',
+                  background: colors.bgPage,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  color: colors.textSecondary,
+                }}
+              >
+                Close
+              </button>
+              <button
+                onClick={checkAuth}
+                disabled={authProcessing || !authPassword}
+                style={{
+                  padding: '12px 20px',
+                  background: colors.primary,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  cursor: authProcessing || !authPassword ? 'not-allowed' : 'pointer',
+                  opacity: authProcessing || !authPassword ? 0.6 : 1,
+                  boxShadow: '0 2px 8px rgba(33, 150, 243, 0.3)',
+                }}
+              >
+                {authProcessing ? 'Verifying…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Order Detail Modal */}
+      {showOrderDetailModal && detailOrder && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: theme?.overlayBg || 'rgba(15, 23, 42, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '16px',
+          }}
+          onClick={() => {
+            setShowOrderDetailModal(false)
+            setDetailOrder(null)
+          }}
+        >
+          <div
+            className="stocko-pos-modal stocko-pos-scroll"
+            style={{
+              width: '100%',
+              maxWidth: '760px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              background: colors.bgModal,
+              border: `1px solid ${colors.border}`,
+              borderRadius: '14px',
+              boxShadow: colors.shadowLg,
+            }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div style={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 2,
+              padding: '18px 20px',
+              background: colors.bgModal,
+              borderBottom: `1px solid ${colors.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+            }}>
+              <div>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '9px',
+                  marginBottom: '3px',
+                }}>
+                  <h3 style={{ margin: 0, color: colors.textPrimary, fontSize: '18px' }}>
+                    Order #{orderReference(detailOrder)}
+                  </h3>
+                  <span style={{
+                    ...statusStyle(detailOrder.status),
+                    padding: '3px 8px',
+                    borderRadius: '999px',
+                    fontSize: '10px',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                  }}>
+                    {(detailOrder.status || 'pending').replaceAll('_', ' ')}
+                  </span>
+                </div>
+                <p style={{ margin: 0, color: colors.textMuted, fontSize: '12px' }}>
+                  {formatDateTime(detailOrder.created_at)}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowOrderDetailModal(false)
+                  setDetailOrder(null)
+                }}
+                aria-label="Close order details"
+                style={{
+                  width: '34px',
+                  height: '34px',
+                  border: 'none',
+                  borderRadius: '8px',
+                  background: colors.bgHover,
+                  color: colors.textMuted,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Ic n="X" size={17} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: '10px',
+                marginBottom: '18px',
+              }}>
+                {[
+                  ['Customer', detailOrder.customer_name || 'Walk-In'],
+                  ['Order type', (detailOrder.type || detailOrder.order_type || 'sale').replaceAll('_', ' ')],
+                  ['Payment', (getPaymentMethod(detailOrder) || 'Not paid').replaceAll('_', ' ')],
+                  ['Cashier', detailOrder.created_by_name || 'Unknown'],
+                  ['Reference', detailOrder.reference || '—'],
+                  ['Items', String(detailOrder.order_items?.length || 0)],
+                ].map(([label, value]) => (
+                  <div key={label} style={{
+                    padding: '10px 12px',
+                    borderRadius: '9px',
+                    background: colors.bgPage,
+                    border: `1px solid ${colors.border}`,
+                  }}>
+                    <span style={{
+                      display: 'block',
+                      marginBottom: '3px',
+                      color: colors.textMuted,
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                    }}>
+                      {label}
+                    </span>
+                    <strong style={{ color: colors.textPrimary, fontSize: '13px', textTransform: 'capitalize' }}>
+                      {value}
+                    </strong>
+                  </div>
+                ))}
               </div>
 
-              {order.cancellation_reason && (
-                <div style={{ fontSize: 12, color: theme.textMuted, marginBottom: 12, fontStyle: 'italic' }}>
-                  Reason: {order.cancellation_reason}
+              {detailOrder.notes && (
+                <div style={{
+                  padding: '11px 12px',
+                  marginBottom: '16px',
+                  borderRadius: '9px',
+                  background: colors.warningLight,
+                  color: dark ? '#fde68a' : '#92400e',
+                  fontSize: '12px',
+                  lineHeight: 1.5,
+                }}>
+                  <strong>Order note:</strong> {detailOrder.notes}
                 </div>
               )}
 
-              <div style={{ paddingTop: 12, borderTop: `1px solid ${theme.borderLight}` }}>
-                {renderActions(order)}
+              <div className="stocko-pos-scroll" style={{
+                overflowX: 'auto',
+                border: `1px solid ${colors.border}`,
+                borderRadius: '10px',
+              }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ background: colors.tableHeader }}>
+                      {['Item', 'Qty', 'Price', 'Subtotal'].map(header => (
+                        <th key={header} style={{
+                          padding: '10px 12px',
+                          textAlign: header === 'Item' ? 'left' : 'right',
+                          color: colors.textSecondary,
+                          borderBottom: `1px solid ${colors.border}`,
+                        }}>
+                          {header}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(detailOrder.order_items || []).map((item, index) => (
+                      <tr key={item.id || `${item.inventory_id}-${index}`}>
+                        <td style={{
+                          padding: '10px 12px',
+                          color: colors.textPrimary,
+                          borderBottom: `1px solid ${colors.borderLight}`,
+                        }}>
+                          {item.name || 'Item'}
+                        </td>
+                        <td style={{
+                          padding: '10px 12px',
+                          textAlign: 'right',
+                          color: colors.textSecondary,
+                          borderBottom: `1px solid ${colors.borderLight}`,
+                        }}>
+                          {safeNumber(item.quantity)}
+                        </td>
+                        <td style={{
+                          padding: '10px 12px',
+                          textAlign: 'right',
+                          color: colors.textSecondary,
+                          borderBottom: `1px solid ${colors.borderLight}`,
+                        }}>
+                          {formatPrice(extractLinePrice(item))}
+                        </td>
+                        <td style={{
+                          padding: '10px 12px',
+                          textAlign: 'right',
+                          color: colors.textPrimary,
+                          fontWeight: 700,
+                          borderBottom: `1px solid ${colors.borderLight}`,
+                        }}>
+                          {formatPrice(safeNumber(item.quantity) * extractLinePrice(item))}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{
+                width: 'min(100%, 320px)',
+                marginLeft: 'auto',
+                marginTop: '16px',
+                display: 'grid',
+                gap: '7px',
+              }}>
+                {[
+                  ['Subtotal', safeNumber(detailOrder.subtotal), false],
+                  ['Discount', -safeNumber(detailOrder.discount), false],
+                  ['Tax', safeNumber(detailOrder.tax), false],
+                  ['Total', safeNumber(detailOrder.total), true],
+                ].map(([label, value, important]) => (
+                  <div key={label} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    paddingTop: important ? '10px' : 0,
+                    marginTop: important ? '3px' : 0,
+                    borderTop: important ? `2px solid ${colors.border}` : 'none',
+                    color: important ? colors.textPrimary : colors.textMuted,
+                    fontSize: important ? '15px' : '12px',
+                    fontWeight: important ? 800 : 600,
+                  }}>
+                    <span>{label}</span>
+                    <span style={{ color: important ? colors.primary : 'inherit' }}>
+                      {value < 0 ? `-${formatPrice(Math.abs(value))}` : formatPrice(value)}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
-          ))}
+
+            <div style={{
+              padding: '14px 20px',
+              borderTop: `1px solid ${colors.border}`,
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '9px',
+              background: colors.bgPage,
+            }}>
+              <button
+                onClick={() => handlePrintOrder(detailOrder)}
+                style={{
+                  padding: '9px 13px',
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: '8px',
+                  background: colors.bgCard,
+                  color: colors.textSecondary,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Ic n="Printer" size={15} />
+                Print receipt
+              </button>
+              {[ORDER_STATUS.PENDING, ORDER_STATUS.PARTIALLY_PAID].includes(detailOrder.status) && (
+                <button
+                  onClick={() => {
+                    setShowOrderDetailModal(false)
+                    openPaymentModal(detailOrder)
+                  }}
+                  style={{
+                    padding: '9px 13px',
+                    border: 'none',
+                    borderRadius: '8px',
+                    background: colors.success,
+                    color: '#fff',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Ic n="DollarSign" size={15} />
+                  Take payment
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Customer History Modal */}
+      {showHistoryModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+        }} onClick={() => setShowHistoryModal(false)}>
+          <div className="stocko-pos-modal stocko-pos-scroll" style={{
+            background: colors.bgModal,
+            borderRadius: '10px',
+            padding: '24px',
+            width: '90%',
+            maxWidth: '700px',
+            maxHeight: '80vh',
+            overflowY: 'auto',
+            boxShadow: colors.shadowLg,
+            border: `1px solid ${colors.border}`,
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '20px',
+            }}>
+              <h3 style={{ 
+                fontSize: '20px', 
+                fontWeight: 700, 
+                margin: 0, 
+                color: colors.textPrimary 
+              }}>
+                Customer History: {selectedCustomer?.name}
+              </h3>
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: colors.textMuted,
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  padding: '0',
+                }}
+              >
+                <Ic n="X" size={18} />
+              </button>
+            </div>
+
+            {customerHistory.length === 0 ? (
+              <div style={{
+                textAlign: 'center',
+                padding: '40px',
+                color: colors.textMuted,
+              }}>
+                <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>
+                  No order history
+                </div>
+                <div>This customer has no previous orders</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {customerHistory.map((order) => (
+                  <div
+                    key={order.id}
+                    style={{
+                      background: colors.bgPage,
+                      border: `1px solid ${colors.border}`,
+                      borderRadius: '8px',
+                      padding: '14px',
+                    }}
+                  >
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      marginBottom: '6px',
+                    }}>
+                      <span style={{ color: colors.textPrimary, fontWeight: 700 }}>
+                        #{orderReference(order)}
+                      </span>
+                      <span style={{
+                        padding: '3px 10px',
+                        borderRadius: '12px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        ...statusStyle(order.status),
+                        border: `1px solid ${colors.border}`,
+                      }}>
+                        {(order.status || 'pending').replaceAll('_', ' ').toUpperCase()}
+                      </span>
+                    </div>
+                    <div style={{
+                      fontSize: '13px',
+                      color: colors.textMuted,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                    }}>
+                      <span>{formatDateTime(order.created_at)}</span>
+                      <span style={{ color: colors.primary, fontWeight: 700 }}>
+                        {formatPrice(order.total)}
+                      </span>
+                    </div>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                      gap: '7px',
+                      marginTop: '10px',
+                    }}>
+                      <button
+                        onClick={() => {
+                          setShowHistoryModal(false)
+                          viewOrderDetail(order)
+                        }}
+                        style={{
+                          padding: '6px 9px',
+                          borderRadius: '7px',
+                          border: `1px solid ${colors.border}`,
+                          background: colors.bgCard,
+                          color: colors.textSecondary,
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                        }}
+                      >
+                        <Ic n="Eye" size={12} />
+                        Details
+                      </button>
+                      <button
+                        onClick={() => handlePrintOrder(order)}
+                        style={{
+                          padding: '6px 9px',
+                          borderRadius: '7px',
+                          border: `1px solid ${colors.border}`,
+                          background: colors.bgCard,
+                          color: colors.textSecondary,
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                        }}
+                      >
+                        <Ic n="Printer" size={12} />
+                        Print
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
