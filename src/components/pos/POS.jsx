@@ -1,5 +1,5 @@
 // STOCKO POS — COMPACT BRANCH DISPATCH V2
-// If this marker is missing in Cursor, the old POS file is still installed.
+// Includes the restored New Customer action beside the destination selector.
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useApp } from '../../context/AppContext'
 import { supabase } from '../../lib/supabase'
@@ -2428,6 +2428,34 @@ export default function POS() {
                       pointerEvents: 'none',
                     }}>▾</span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewCustomer({ name: '', phone: '', email: '' })
+                      setShowCustomerModal(true)
+                    }}
+                    title="Add a new customer"
+                    style={{
+                      height: '34px',
+                      padding: '0 11px',
+                      flexShrink: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      border: `1px solid ${colors.primary}`,
+                      borderRadius: '8px',
+                      background: colors.primaryLight,
+                      color: colors.primary,
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Ic n="UserPlus" size={14} />
+                    New customer
+                  </button>
                 </div>
 
                 <div style={{
