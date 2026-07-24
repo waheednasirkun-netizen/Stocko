@@ -150,111 +150,47 @@ const getPaymentMethod = (order) => (
   order?.order_payments?.[0]?.method ||
   null
 )
+const printReceipt = async (order, items, user) => {
+  try {
+    const response = await fetch("http://127.0.0.1:3001/print", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        printer: "Counter", // Change to your printer name
+        order: {
+          invoice: orderReference(order),
+          customer: order.customer_name || "Walk-In",
+          cashier: order.created_by_name || user?.name || "",
+          payment: getPaymentMethod(order),
+          subtotal: safeNumber(order.subtotal),
+          discount: safeNumber(order.discount),
+          tax: safeNumber(order.tax),
+          total: safeNumber(order.total),
+        },
+    receipt: (items || []).map(item => ({
+        name: item.name,
+          qty: safeNumber(item.quantity),
+          price: extractLinePrice(item),
+        })),
+      }),
+    });
 
-const printReceipt = (order, items, user) => {
-  const printWindow = window.open('', '_blank', 'width=320,height=600')
-  if (!printWindow) {
-    alert('Popup blocked. Please allow popups to print receipts.')
-    return
-  }
+    const result = await response.json();
 
-  const date = new Date().toLocaleString('en-PK')
-  const invoice = escapeHtml(orderReference(order))
-  const branchName = escapeHtml(user?.branch_name || order?.branch_name || 'Branch')
-  const customerName = escapeHtml(order.customer_name || 'Walk-In')
-  const cashierName = escapeHtml(order.created_by_name || user?.name || 'Cashier')
-  const paymentMethod = escapeHtml((getPaymentMethod(order) || 'Pending').replaceAll('_', ' '))
-  const safeItems = Array.isArray(items) ? items : []
-
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Receipt #${invoice}</title>
-  <style>
-    @page { size: 80mm auto; margin: 0; }
-    body {
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      width: 76mm;
-      margin: 0 auto;
-      padding: 8px;
-      line-height: 1.4;
+    if (!result.success) {
+      showToast("error", "Print Failed", result.error);
+      return;
     }
-    .center { text-align: center; }
-    .bold { font-weight: bold; }
-    .line { border-top: 1px dashed #000; margin: 8px 0; }
-    .right { text-align: right; }
-    .total { font-size: 14px; font-weight: bold; }
-    .footer { margin-top: 16px; font-size: 10px; text-align: center; }
-  </style>
-</head>
-<body>
-  <div class="center bold" style="font-size:14px;">STOCKO POS</div>
-  <div class="center">${branchName}</div>
-  <div class="center" style="font-size:10px;">${date}</div>
-  <div class="line"></div>
-  <div>Invoice: #${invoice}</div>
-  <div>Customer: ${customerName}</div>
-  <div>Cashier: ${cashierName}</div>
-  <div>Type: ${escapeHtml((order.type || order.order_type || 'sale').replaceAll('_', ' '))}</div>
-  <div>Payment: ${paymentMethod}</div>
-  <div>Status: ${escapeHtml((order.status || 'pending').toUpperCase())}</div>
-  <div class="line"></div>
-  <table style="width:100%; border-collapse:collapse;">
-    <tr style="font-weight:bold;">
-      <td style="text-align:left;">Item</td>
-      <td style="text-align:center;">Qty</td>
-      <td style="text-align:right;">Price</td>
-      <td style="text-align:right;">Total</td>
-    </tr>
-  </table>
-  ${safeItems.map(item => {
-    const price = extractLinePrice(item)
-    return `
-    <div style="display:flex; justify-content:space-between; font-size:11px; margin:4px 0;">
-      <span style="flex:1;">${escapeHtml(item.name || 'Item')}</span>
-      <span style="width:40px; text-align:center;">${safeNumber(item.quantity)}</span>
-      <span style="width:50px; text-align:right;">Rs. ${price.toFixed(2)}</span>
-      <span style="width:50px; text-align:right;">Rs. ${(safeNumber(item.quantity) * price).toFixed(2)}</span>
-    </div>
-  `}).join('')}
-  <div class="line"></div>
-  <div style="display:flex; justify-content:space-between; margin:4px 0;">
-    <span>Subtotal:</span>
-    <span class="bold">Rs. ${safeNumber(order.subtotal).toFixed(2)}</span>
-  </div>
-  ${safeNumber(order.discount) > 0 ? `
-    <div style="display:flex; justify-content:space-between; margin:4px 0; color:green;">
-      <span>Discount:</span>
-      <span class="bold">-Rs. ${safeNumber(order.discount).toFixed(2)}</span>
-    </div>
-  ` : ''}
-  ${safeNumber(order.tax) > 0 ? `
-    <div style="display:flex; justify-content:space-between; margin:4px 0;">
-      <span>Tax:</span>
-      <span class="bold">Rs. ${safeNumber(order.tax).toFixed(2)}</span>
-    </div>
-  ` : ''}
-  <div class="line"></div>
-  <div style="display:flex; justify-content:space-between; margin:4px 0;">
-    <span class="total">TOTAL</span>
-    <span class="total">Rs. ${safeNumber(order.total).toFixed(2)}</span>
-  </div>
-  <div class="line"></div>
-  <div class="footer">Thank you for your business!</div>
-  <div class="footer">Powered by Stocko</div>
-  <div style="margin-top:20px; text-align:center; display:no-print;">
-    <button onclick="window.print()" style="padding:10px 20px; font-size:12px;">Print</button>
-  </div>
-</body>
-</html>`
 
-  printWindow.document.write(html)
-  printWindow.document.close()
-  setTimeout(() => { printWindow.focus(); printWindow.print() }, 300)
-}
+    showToast("success", "Receipt Printed");
+
+  } catch (err) {
+    console.error(err);
+    showToast("error", "Stocko Print Agent is not running");
+  }
+};
 
 /* ══════════════════════════════════════════════════════════════════════════
    LIGHT THEME COLOR PALETTE

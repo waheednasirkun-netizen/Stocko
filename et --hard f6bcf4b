@@ -186,8 +186,8 @@ Date:   Mon Jul 20 21:40:26 2026 +0500
 [32m+[m[32mconst BLOCKED_ROLES = ['chief', 'viewer'][m
  [m
  /* ── Print Receipt ── */[m
- const printReceipt = (order, items, user) => {[m
-[36m@@ -221,11 +246,6 @@[m [mconst printReceipt = (order, items, user) => {[m
+ const printReceipt = async (order, items, user) =>  {[m
+[36m@@ -221,11 +246,6 @@[m [const printReceipt = async (order, items, user) =>  {[m
      .bold { font-weight: bold; }[m
      .line { border-top: 1px dashed #000; margin: 8px 0; }[m
      .right { text-align: right; }[m
