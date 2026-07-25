@@ -158,45 +158,56 @@ const getPaymentMethod = (order) => (
   order?.order_payments?.[0]?.method ||
   null
 )
-const printReceipt = async (order, items, user, showToast) => {
-try {
-  const response = await fetch("http://127.0.0.1:3001/print", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      printer: "Counter",
-      order: {
-        invoice: orderReference(order),
-        customer: order.customer_name || "Walk-In",
-        cashier: order.created_by_name || user?.name || "",
-        payment: getPaymentMethod(order),
-        subtotal: safeNumber(order.subtotal),
-        discount: safeNumber(order.discount),
-        tax: safeNumber(order.tax),
-        total: safeNumber(order.total),
+const printReceipt = async (order, items, user) => {
+  try {
+    const response = await fetch("http://127.0.0.1:3001/print", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
       },
-      receipt: (items || []).map(item => ({
-        name: item.name,
-        qty: safeNumber(item.quantity),
-        price: extractLinePrice(item),
-      })),
-    }),
-  });
+      body: JSON.stringify({
+        printer: "Counter",
+        order: {
+          shopName: user?.branch_name || "STOCKO",
+          status: ['paid', 'credit', 'completed'].includes(order.status)
+            ? 'Paid'
+            : 'Unpaid',
+          token: orderReference(order),
+          orderId: orderReference(order),
+          invoice: orderReference(order),
+          orderType: (order.type || order.order_type || 'sale').replaceAll('_', ' '),
+          date: formatReceiptDate(order.created_at),
+          time: formatReceiptTime(order.created_at),
+          user: order.created_by_name || user?.name || "",
+          orderTaker: order.created_by_name || user?.name || "",
+        },
+        receipt: {
+          items: (items || []).map(item => ({
+            name: item.name,
+            qty: safeNumber(item.quantity),
+            rate: extractLinePrice(item),
+            total: safeNumber(item.quantity) * extractLinePrice(item),
+          })),
+          subTotal: safeNumber(order.subtotal),
+          grandTotal: safeNumber(order.total),
+          customerPhone: order.customer_phone || "",
+          deliveryAddress: order.customer_name || "",
+        },
+      }),
+    });
 
-  const result = await response.json();
+    const result = await response.json();
 
-  if (!result.success) {
-    console.error("Print Failed:", result.error);
-    return;
+    if (!result.success) {
+      console.error("Print Failed:", result.error);
+      return;
+    }
+
+    console.log("Receipt Printed");
+
+  } catch (err) {
+    console.error("Stocko Print Agent error:", err);
   }
-
-  console.log("Receipt Printed");
-
-} catch (err) {
-  console.error("Stocko Print Agent error:", err);
-}
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1102,6 +1113,7 @@ export default function POS() {
   }
 
   // ── Open Payment Modal ──
+  
   const openPaymentModal = (order, shouldPrint = false) => {
     const due = getOrderAmountDue(order)
     setPaymentOrder(order)
