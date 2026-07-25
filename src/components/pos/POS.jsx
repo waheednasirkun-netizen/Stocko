@@ -152,44 +152,43 @@ const getPaymentMethod = (order) => (
 )
 const printReceipt = async (order, items, user, showToast) => {
 try {
-    const response = await fetch("http://127.0.0.1:3001/print", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  const response = await fetch("http://127.0.0.1:3001/print", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      printer: "Counter",
+      order: {
+        invoice: orderReference(order),
+        customer: order.customer_name || "Walk-In",
+        cashier: order.created_by_name || user?.name || "",
+        payment: getPaymentMethod(order),
+        subtotal: safeNumber(order.subtotal),
+        discount: safeNumber(order.discount),
+        tax: safeNumber(order.tax),
+        total: safeNumber(order.total),
       },
-      body: JSON.stringify({
-        printer: "Counter", // Change to your printer name
-        order: {
-          invoice: orderReference(order),
-          customer: order.customer_name || "Walk-In",
-          cashier: order.created_by_name || user?.name || "",
-          payment: getPaymentMethod(order),
-          subtotal: safeNumber(order.subtotal),
-          discount: safeNumber(order.discount),
-          tax: safeNumber(order.tax),
-          total: safeNumber(order.total),
-        },
-    receipt: (items || []).map(item => ({
+      receipt: (items || []).map(item => ({
         name: item.name,
-          qty: safeNumber(item.quantity),
-          price: extractLinePrice(item),
-        })),
-      }),
-    });
+        qty: safeNumber(item.quantity),
+        price: extractLinePrice(item),
+      })),
+    }),
+  });
 
-    const result = await response.json();
+  const result = await response.json();
 
-    if (!result.success) {
-      showToast("error", "Print Failed", result.error);
-      return;
-    }
-
-    showToast("success", "Receipt Printed");
-
-  } catch (err) {
-    console.error(err);
-    showToast("error", "Stocko Print Agent is not running");
+  if (!result.success) {
+    console.error("Print Failed:", result.error);
+    return;
   }
+
+  console.log("Receipt Printed");
+
+} catch (err) {
+  console.error("Stocko Print Agent error:", err);
+}
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
