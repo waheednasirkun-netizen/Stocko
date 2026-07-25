@@ -18,6 +18,12 @@ const navItems = [
   { key: 'settings',             label: 'Settings',            icon: 'Settings',         perm: 'canAccessSettings' },
 ]
 
+const BRANCH_LOCKED_PAGES = ['pos', 'customer-ledger']
+const ALLOWED_BRANCHES = [
+  '6c647f96-4160-45c7-85c9-445be42887b1',
+  '8b2e0fdb-5337-4aa1-81f2-63d23af7dbbc',
+]
+
 export default function Sidebar() {
   const {
     user, tab, setTab, sidebarOpen, setSidebar, dark, theme,
@@ -58,9 +64,19 @@ export default function Sidebar() {
     canAccessSettings,
   }
 
+  const userBranch = user?.branch_id ?? user?.branchId ?? null
+
   const visible = navItems.filter(item => {
     const check = permChecks[item.perm]
-    return check ? check() : true
+    const hasPermission = check ? check() : true
+
+    if (!hasPermission) return false
+
+    if (BRANCH_LOCKED_PAGES.includes(item.key)) {
+      return ALLOWED_BRANCHES.includes(userBranch)
+    }
+
+    return true
   })
 
   const roleColor = ROLE_COLORS[userRole] || theme.textMuted
