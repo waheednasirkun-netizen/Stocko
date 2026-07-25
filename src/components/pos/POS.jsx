@@ -158,46 +158,8 @@ const getPaymentMethod = (order) => (
   order?.order_payments?.[0]?.method ||
   null
 )
-const printReceipt = async (order, items, user) => {
-  try {
-    const response = await fetch("http://127.0.0.1:3001/print", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        printer: "Counter",
-        order: {
-          shopName: user?.branch_name || "STOCKO",
-          status: ['paid', 'credit', 'completed'].includes(order.status)
-            ? 'Paid'
-            : 'Unpaid',
-          token: orderReference(order),
-          orderId: orderReference(order),
-          invoice: orderReference(order),
-          orderType: (order.type || order.order_type || 'sale').replaceAll('_', ' '),
-          date: formatReceiptDate(order.created_at),
-          time: formatReceiptTime(order.created_at),
-          user: order.created_by_name || user?.name || "",
-          orderTaker: order.created_by_name || user?.name || "",
-        },
-        receipt: {
-          items: (items || []).map(item => ({
-            name: item.name,
-            qty: safeNumber(item.quantity),
-            rate: extractLinePrice(item),
-            total: safeNumber(item.quantity) * extractLinePrice(item),
-          })),
-          subTotal: safeNumber(order.subtotal),
-          grandTotal: safeNumber(order.total),
-          customerPhone: order.customer_phone || "",
-          deliveryAddress: order.customer_name || "",
-        },
-      }),
-    });
 
-<<<<<<< HEAD
-const printReceipt = (order, items, user) => {
+const printReceiptInBrowser = (order, items, user) => {
   const printWindow = window.open('', '_blank', 'width=320,height=600')
   if (!printWindow) {
     alert('Popup blocked. Please allow popups to print receipts.')
@@ -227,21 +189,148 @@ const printReceipt = (order, items, user) => {
       margin: 0 auto;
       padding: 8px;
       line-height: 1.4;
-=======
-    const result = await response.json();
+    }
+    .center { text-align: center; }
+    .bold { font-weight: bold; }
+    .line { border-top: 1px dashed #000; margin: 8px 0; }
+    .right { text-align: right; }
+    .total { font-size: 14px; font-weight: bold; }
+    .footer { margin-top: 16px; font-size: 10px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="center bold" style="font-size:14px;">STOCKO POS</div>
+  <div class="center">${branchName}</div>
+  <div class="center" style="font-size:10px;">${date}</div>
+  <div class="line"></div>
+  <div>Invoice: #${invoice}</div>
+  <div>Customer: ${customerName}</div>
+  <div>Cashier: ${cashierName}</div>
+  <div>Type: ${escapeHtml((order.type || order.order_type || 'sale').replaceAll('_', ' '))}</div>
+  <div>Payment: ${paymentMethod}</div>
+  <div>Status: ${escapeHtml((order.status || 'pending').toUpperCase())}</div>
+  <div class="line"></div>
+  <table style="width:100%; border-collapse:collapse;">
+    <tr style="font-weight:bold;">
+      <td style="text-align:left;">Item</td>
+      <td style="text-align:center;">Qty</td>
+      <td style="text-align:right;">Price</td>
+      <td style="text-align:right;">Total</td>
+    </tr>
+  </table>
+  ${safeItems.map(item => {
+    const price = extractLinePrice(item)
+    return `
+    <div style="display:flex; justify-content:space-between; font-size:11px; margin:4px 0;">
+      <span style="flex:1;">${escapeHtml(item.name || 'Item')}</span>
+      <span style="width:40px; text-align:center;">${safeNumber(item.quantity)}</span>
+      <span style="width:50px; text-align:right;">Rs. ${price.toFixed(2)}</span>
+      <span style="width:50px; text-align:right;">Rs. ${(safeNumber(item.quantity) * price).toFixed(2)}</span>
+    </div>
+  `}).join('')}
+  <div class="line"></div>
+  <div style="display:flex; justify-content:space-between; margin:4px 0;">
+    <span>Subtotal:</span>
+    <span class="bold">Rs. ${safeNumber(order.subtotal).toFixed(2)}</span>
+  </div>
+  ${safeNumber(order.discount) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0; color:green;">
+      <span>Discount:</span>
+      <span class="bold">-Rs. ${safeNumber(order.discount).toFixed(2)}</span>
+    </div>
+  ` : ''}
+  ${safeNumber(order.tax) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0;">
+      <span>Tax:</span>
+      <span class="bold">Rs. ${safeNumber(order.tax).toFixed(2)}</span>
+    </div>
+  ` : ''}
+  ${getServiceCharge(order) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0;">
+      <span>Service charge:</span>
+      <span class="bold">Rs. ${getServiceCharge(order).toFixed(2)}</span>
+    </div>
+  ` : ''}
+  <div class="line"></div>
+  <div style="display:flex; justify-content:space-between; margin:4px 0;">
+    <span class="total">TOTAL</span>
+    <span class="total">Rs. ${safeNumber(order.total).toFixed(2)}</span>
+  </div>
+  <div class="line"></div>
+  <div class="footer">Thank you for your business!</div>
+  <div class="footer">Powered by Stocko</div>
+  <div style="margin-top:20px; text-align:center; display:no-print;">
+    <button onclick="window.print()" style="padding:10px 20px; font-size:12px;">Print</button>
+  </div>
+</body>
+</html>`
 
-    if (!result.success) {
-      console.error("Print Failed:", result.error);
-      return;
->>>>>>> 7db92456f9c31c941e9246dcc12576209f39412c
+  printWindow.document.write(html)
+  printWindow.document.close()
+  setTimeout(() => { printWindow.focus(); printWindow.print() }, 300)
+}
+
+// Prefer the restaurant's local thermal-print agent. If it is unavailable,
+// retain the redesigned POS browser receipt as a safe fallback.
+const printReceipt = async (order, items, user) => {
+  const createdAt = order?.created_at ? new Date(order.created_at) : new Date()
+  const safeItems = Array.isArray(items) ? items : []
+
+  try {
+    const response = await fetch('http://127.0.0.1:3001/print', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        printer: 'Counter',
+        order: {
+          shopName: user?.branch_name || order?.branch_name || 'STOCKO',
+          status: [ORDER_STATUS.PAID, ORDER_STATUS.CREDIT, ORDER_STATUS.COMPLETED].includes(order?.status)
+            ? 'Paid'
+            : 'Unpaid',
+          token: orderReference(order),
+          orderId: orderReference(order),
+          invoice: orderReference(order),
+          orderType: (order?.type || order?.order_type || 'sale').replaceAll('_', ' '),
+          date: createdAt.toLocaleDateString('en-PK'),
+          time: createdAt.toLocaleTimeString('en-PK'),
+          user: order?.created_by_name || user?.name || '',
+          orderTaker: order?.created_by_name || user?.name || '',
+        },
+        receipt: {
+          items: safeItems.map(item => ({
+            name: item.name || 'Item',
+            qty: safeNumber(item.quantity),
+            rate: extractLinePrice(item),
+            total: safeNumber(item.quantity) * extractLinePrice(item),
+          })),
+          subTotal: safeNumber(order?.subtotal),
+          discount: safeNumber(order?.discount),
+          tax: safeNumber(order?.tax),
+          serviceCharge: getServiceCharge(order),
+          grandTotal: safeNumber(order?.total),
+          customerPhone: order?.customer_phone || '',
+          deliveryAddress: order?.customer_name || '',
+        },
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Print agent returned HTTP ${response.status}`)
     }
 
-    console.log("Receipt Printed");
+    const result = await response.json()
+    if (!result?.success) {
+      throw new Error(result?.error || 'Print agent rejected the receipt')
+    }
 
-  } catch (err) {
-    console.error("Stocko Print Agent error:", err);
+    console.info('[POS] Receipt printed through local print agent')
+  } catch (error) {
+    console.warn('[POS] Local print agent unavailable; using browser print', error)
+    printReceiptInBrowser(order, safeItems, user)
   }
-};
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
    LIGHT THEME COLOR PALETTE
@@ -1176,7 +1265,6 @@ export default function POS() {
   }
 
   // ── Open Payment Modal ──
-  
   const openPaymentModal = (order, shouldPrint = false) => {
     const due = getOrderAmountDue(order)
     setPaymentOrder(order)
