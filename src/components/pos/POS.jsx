@@ -1,5 +1,5 @@
-// STOCKO POS — COMPACT BRANCH DISPATCH V2
-// Includes the restored New Customer action beside the destination selector.
+// STOCKO POS — RESOLVED MERGE
+// Keeps the compact redesign and merges service-charge, payment and remote functionality.
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useApp } from '../../context/AppContext'
 import { supabase } from '../../lib/supabase'
@@ -99,6 +99,11 @@ const extractSalePrice = (product) => {
 const extractLinePrice = (item) => Math.max(
   0,
   safeNumber(item?.price ?? item?.sale_price ?? item?.selling_price)
+)
+
+const getServiceCharge = (order) => Math.max(
+  0,
+  safeNumber(order?.service_charge ?? order?.service_fee)
 )
 
 const formatPrice = (value) => {
@@ -271,6 +276,12 @@ const printReceipt = (order, items, user) => {
       <span class="bold">Rs. ${safeNumber(order.tax).toFixed(2)}</span>
     </div>
   ` : ''}
+  ${getServiceCharge(order) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0;">
+      <span>Service charge:</span>
+      <span class="bold">Rs. ${getServiceCharge(order).toFixed(2)}</span>
+    </div>
+  ` : ''}
   <div class="line"></div>
   <div style="display:flex; justify-content:space-between; margin:4px 0;">
     <span class="total">TOTAL</span>
@@ -427,6 +438,7 @@ export default function POS() {
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [discount, setDiscount] = useState(0)
   const [taxRate, setTaxRate] = useState(0)
+  const [serviceCharge, setServiceCharge] = useState(0)
   const [productSearch, setProductSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [loading, setLoading] = useState(true)
@@ -669,6 +681,18 @@ export default function POS() {
     return result
   }, [inventory, category, productSearch])
 
+  const productGridItems = useMemo(() => filteredInventory.map(product => {
+    const stock = getStock(product)
+    return {
+      product,
+      salePrice: extractSalePrice(product),
+      stock,
+      inStock: stock > 0,
+      inCart: cart.find(item => item.id === product.id) || null,
+      lowStock: stock > 0 && stock <= Math.max(5, safeNumber(product.threshold)),
+    }
+  }), [cart, filteredInventory])
+
   const cartSubtotal = useMemo(() =>
     cart.reduce((sum, item) => sum + (safeNumber(item.quantity) * extractLinePrice(item)), 0),
     [cart]
@@ -684,9 +708,14 @@ export default function POS() {
     [cartSubtotal, normalizedDiscount, taxRate]
   )
 
+  const normalizedServiceCharge = useMemo(
+    () => Math.max(0, safeNumber(serviceCharge)),
+    [serviceCharge]
+  )
+
   const cartTotal = useMemo(() =>
-    Math.max(0, cartSubtotal - normalizedDiscount + cartTax),
-    [cartSubtotal, normalizedDiscount, cartTax]
+    Math.max(0, cartSubtotal - normalizedDiscount + cartTax + normalizedServiceCharge),
+    [cartSubtotal, normalizedDiscount, cartTax, normalizedServiceCharge]
   )
 
   const paymentDue = useMemo(() => {
@@ -831,6 +860,7 @@ export default function POS() {
     setSelectedCustomer(null)
     setDiscount(0)
     setTaxRate(0)
+    setServiceCharge(0)
     setOrderType('branch_dispatch')
     setOrderNotes('')
     setOrderReferenceText('')
@@ -970,6 +1000,7 @@ export default function POS() {
       type: orderType,
       notes: orderNotes.trim() || null,
       reference: orderReferenceText.trim() || null,
+      service_charge: normalizedServiceCharge,
     }
 
     let updateResponse = await supabase
@@ -1102,6 +1133,7 @@ export default function POS() {
         type: orderType,
         notes: orderNotes.trim() || null,
         reference: orderReferenceText.trim() || null,
+        service_charge: normalizedServiceCharge,
       }
 
       const { data: order, error: orderError } = await insertOrderWithFallback(
@@ -1471,6 +1503,7 @@ export default function POS() {
     setDiscount(safeNumber(order.discount))
     const taxableBase = Math.max(0, safeNumber(order.subtotal) - safeNumber(order.discount))
     setTaxRate(taxableBase > 0 ? (safeNumber(order.tax) / taxableBase) * 100 : 0)
+    setServiceCharge(getServiceCharge(order))
     setOrderType(order.type || order.order_type || 'branch_dispatch')
     setOrderNotes(order.notes || '')
     setOrderReferenceText(order.reference || '')
@@ -1599,7 +1632,7 @@ export default function POS() {
     }
 
     const rows = [
-      ['Invoice', 'Created', 'Customer', 'Type', 'Payment', 'Subtotal', 'Discount', 'Tax', 'Total', 'Status'],
+      ['Invoice', 'Created', 'Customer', 'Type', 'Payment', 'Subtotal', 'Discount', 'Tax', 'Service Charge', 'Total', 'Status'],
       ...reportData.map(order => [
         orderReference(order),
         formatDateTime(order.created_at),
@@ -1609,6 +1642,7 @@ export default function POS() {
         safeNumber(order.subtotal).toFixed(2),
         safeNumber(order.discount).toFixed(2),
         safeNumber(order.tax).toFixed(2),
+        getServiceCharge(order).toFixed(2),
         safeNumber(order.total).toFixed(2),
         order.status || 'pending',
       ]),
@@ -2217,14 +2251,14 @@ export default function POS() {
                     <div style={{ fontSize: '14px', marginBottom: '8px' }}>No products found</div>
                   </div>
                 ) : (
-                  filteredInventory.map(product => {
-                    const salePrice = extractSalePrice(product)
-                    const stock = getStock(product)
-                    const inStock = stock > 0
-                    const inCart = cart.find(c => c.id === product.id)
-                    const lowStock = stock > 0 && stock <= Math.max(5, safeNumber(product.threshold))
-
-                    return (
+                  productGridItems.map(({
+                    product,
+                    salePrice,
+                    stock,
+                    inStock,
+                    inCart,
+                    lowStock,
+                  }) => (
                       <div
                         key={product.id}
                         className="stocko-pos-product-card"
@@ -2317,8 +2351,7 @@ export default function POS() {
                           </div>
                         </div>
                       </div>
-                    )
-                  })
+                  ))
                 )}
               </div>
             </div>
@@ -2719,7 +2752,7 @@ export default function POS() {
                 )}
               </div>
 
-              {/* Discount & Tax */}
+              {/* Discount, Tax & Service Charge */}
               {cart.length > 0 && (
                 <div style={{
                   padding: '10px 14px',
@@ -2797,6 +2830,43 @@ export default function POS() {
                       onBlur={(e) => e.target.style.borderColor = colors.border}
                     />
                   </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: colors.textMuted,
+                      display: 'block',
+                      marginBottom: '4px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Service (Rs)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={serviceCharge}
+                      onChange={(event) => setServiceCharge(
+                        Math.max(0, safeNumber(event.target.value))
+                      )}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        background: colors.bgInput,
+                        color: colors.textPrimary,
+                        outline: 'none',
+                      }}
+                      onFocus={(event) => {
+                        event.target.style.borderColor = colors.borderActive
+                      }}
+                      onBlur={(event) => {
+                        event.target.style.borderColor = colors.border
+                      }}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -2836,6 +2906,19 @@ export default function POS() {
                     }}>
                       <span style={{ color: colors.textMuted }}>Tax:</span>
                       <span style={{ fontWeight: 600, color: colors.textSecondary }}>{formatPrice(cartTax)}</span>
+                    </div>
+                  )}
+                  {normalizedServiceCharge > 0 && (
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      marginBottom: '8px',
+                      fontSize: '14px'
+                    }}>
+                      <span style={{ color: colors.textMuted }}>Service charge:</span>
+                      <span style={{ fontWeight: 600, color: colors.textSecondary }}>
+                        {formatPrice(normalizedServiceCharge)}
+                      </span>
                     </div>
                   )}
                   <div style={{
@@ -3748,7 +3831,7 @@ export default function POS() {
                       background: colors.tableHeader,
                       borderBottom: `2px solid ${colors.tableBorder}`,
                     }}>
-                      {['Sr.', 'Type', 'ID', 'Invoice#', 'Order Time', 'Customer', 'Payment', 'Bill', 'Disc', 'Tax', 'Grand Total', 'Status', 'Action'].map((header) => (
+                      {['Sr.', 'Type', 'ID', 'Invoice#', 'Order Time', 'Customer', 'Payment', 'Bill', 'Disc', 'Tax', 'Service', 'Grand Total', 'Status', 'Action'].map((header) => (
                         <th key={header} style={{
                           padding: '12px 10px',
                           textAlign: 'left',
@@ -3767,7 +3850,7 @@ export default function POS() {
                   <tbody>
                     {reportData.length === 0 ? (
                       <tr>
-                        <td colSpan="13" style={{
+                        <td colSpan="14" style={{
                           padding: '50px',
                           textAlign: 'center',
                           color: colors.textMuted,
@@ -3833,6 +3916,9 @@ export default function POS() {
                           </td>
                           <td style={{ padding: '12px 10px', color: colors.textSecondary }}>
                             {safeNumber(order.tax) > 0 ? formatPrice(order.tax) : '—'}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary }}>
+                            {getServiceCharge(order) > 0 ? formatPrice(getServiceCharge(order)) : '—'}
                           </td>
                           <td style={{ padding: '12px 10px', color: colors.primary, fontWeight: 800 }}>
                             {formatPrice(order.total)}
@@ -4031,6 +4117,16 @@ export default function POS() {
                           {formatPrice(paymentOrder.subtotal)}
                         </td>
                       </tr>
+                      {getServiceCharge(paymentOrder) > 0 && (
+                        <tr>
+                          <td colSpan="5" style={{ padding: '6px 8px', textAlign: 'right', color: colors.textMuted, fontWeight: 600 }}>
+                            Service Charge
+                          </td>
+                          <td style={{ padding: '6px 8px', textAlign: 'center', color: colors.textPrimary, fontWeight: 700 }}>
+                            {formatPrice(getServiceCharge(paymentOrder))}
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -5068,6 +5164,7 @@ export default function POS() {
                   ['Subtotal', safeNumber(detailOrder.subtotal), false],
                   ['Discount', -safeNumber(detailOrder.discount), false],
                   ['Tax', safeNumber(detailOrder.tax), false],
+                  ['Service charge', getServiceCharge(detailOrder), false],
                   ['Total', safeNumber(detailOrder.total), true],
                 ].map(([label, value, important]) => (
                   <div key={label} style={{
