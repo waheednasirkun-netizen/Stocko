@@ -1,5 +1,5 @@
-// STOCKO POS — COMPACT BRANCH DISPATCH V2
-// Includes the restored New Customer action beside the destination selector.
+// STOCKO POS — RESOLVED MERGE
+// Keeps the compact redesign and merges service-charge, payment and remote functionality.
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useApp } from '../../context/AppContext'
 import { supabase } from '../../lib/supabase'
@@ -72,6 +72,9 @@ const ROLE_GROUPS = {
 
 const normalizeRole = (role) => String(role || '').trim().toLowerCase()
 const safeNumber = (value, fallback = 0) => {
+  if (value === null || value === undefined || value === '') {
+    return fallback
+  }
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
 }
@@ -96,6 +99,11 @@ const extractSalePrice = (product) => {
 const extractLinePrice = (item) => Math.max(
   0,
   safeNumber(item?.price ?? item?.sale_price ?? item?.selling_price)
+)
+
+const getServiceCharge = (order) => Math.max(
+  0,
+  safeNumber(order?.service_charge ?? order?.service_fee)
 )
 
 const formatPrice = (value) => {
@@ -150,79 +158,45 @@ const getPaymentMethod = (order) => (
   order?.order_payments?.[0]?.method ||
   null
 )
-// ─── Replace the existing `printReceipt` function in POS.jsx with this one ───
-// (It sits near the top of the file, right after `getPaymentMethod`.)
-//
-// Why: the old version sent field names like `order.cashier` and `order.customer`,
-// but the Stocko Print Agent's receipt template reads `order.user`, `order.token`,
-// `order.date`, `order.shopName`, etc. Different names on each side meant those
-// fields printed blank even though the print agent itself was working correctly.
-// This version sends the names the template actually expects.
-
-const formatReceiptDate = (value) => {
-  const date = value ? new Date(value) : new Date()
-  if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleDateString('en-GB') // e.g. 25/07/2026
-}
-
-const formatReceiptTime = (value) => {
-  const date = value ? new Date(value) : new Date()
-  if (Number.isNaN(date.getTime())) return ''
-  return date
-    .toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
-    .toLowerCase()
-}
-
-const printReceipt = async (order, items, user) => {
-  try {
-    const response = await fetch("http://127.0.0.1:3001/print", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+const printReceipt = async (order, items, user, showToast) => {
+try {
+  const response = await fetch("http://127.0.0.1:3001/print", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      printer: "Counter",
+      order: {
+        invoice: orderReference(order),
+        customer: order.customer_name || "Walk-In",
+        cashier: order.created_by_name || user?.name || "",
+        payment: getPaymentMethod(order),
+        subtotal: safeNumber(order.subtotal),
+        discount: safeNumber(order.discount),
+        tax: safeNumber(order.tax),
+        total: safeNumber(order.total),
       },
-      body: JSON.stringify({
-        printer: "Counter",
-        order: {
-          shopName: user?.branch_name || "STOCKO",
-          status: ['paid', 'credit', 'completed'].includes(order.status)
-            ? 'Paid'
-            : 'Unpaid',
-          token: orderReference(order),
-          orderId: orderReference(order),
-          invoice: orderReference(order),
-          orderType: (order.type || order.order_type || 'sale').replaceAll('_', ' '),
-          date: formatReceiptDate(order.created_at),
-          time: formatReceiptTime(order.created_at),
-          user: order.created_by_name || user?.name || "",
-          orderTaker: order.created_by_name || user?.name || "",
-        },
-        receipt: {
-          items: (items || []).map(item => ({
-            name: item.name,
-            qty: safeNumber(item.quantity),
-            rate: extractLinePrice(item),
-            total: safeNumber(item.quantity) * extractLinePrice(item),
-          })),
-          subTotal: safeNumber(order.subtotal),
-          grandTotal: safeNumber(order.total),
-          customerPhone: order.customer_phone || "",
-          deliveryAddress: order.customer_name || "",
-        },
-      }),
-    });
+      receipt: (items || []).map(item => ({
+        name: item.name,
+        qty: safeNumber(item.quantity),
+        price: extractLinePrice(item),
+      })),
+    }),
+  });
 
-    const result = await response.json();
+  const result = await response.json();
 
-    if (!result.success) {
-      console.error("Print Failed:", result.error);
-      return;
-    }
-
-    console.log("Receipt Printed");
-
-  } catch (err) {
-    console.error("Stocko Print Agent error:", err);
+  if (!result.success) {
+    console.error("Print Failed:", result.error);
+    return;
   }
+
+  console.log("Receipt Printed");
+
+} catch (err) {
+  console.error("Stocko Print Agent error:", err);
+}
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -362,6 +336,7 @@ export default function POS() {
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [discount, setDiscount] = useState(0)
   const [taxRate, setTaxRate] = useState(0)
+  const [serviceCharge, setServiceCharge] = useState(0)
   const [productSearch, setProductSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [loading, setLoading] = useState(true)
@@ -604,6 +579,18 @@ export default function POS() {
     return result
   }, [inventory, category, productSearch])
 
+  const productGridItems = useMemo(() => filteredInventory.map(product => {
+    const stock = getStock(product)
+    return {
+      product,
+      salePrice: extractSalePrice(product),
+      stock,
+      inStock: stock > 0,
+      inCart: cart.find(item => item.id === product.id) || null,
+      lowStock: stock > 0 && stock <= Math.max(5, safeNumber(product.threshold)),
+    }
+  }), [cart, filteredInventory])
+
   const cartSubtotal = useMemo(() =>
     cart.reduce((sum, item) => sum + (safeNumber(item.quantity) * extractLinePrice(item)), 0),
     [cart]
@@ -619,21 +606,24 @@ export default function POS() {
     [cartSubtotal, normalizedDiscount, taxRate]
   )
 
+  const normalizedServiceCharge = useMemo(
+    () => Math.max(0, safeNumber(serviceCharge)),
+    [serviceCharge]
+  )
+
   const cartTotal = useMemo(() =>
-    Math.max(0, cartSubtotal - normalizedDiscount + cartTax),
-    [cartSubtotal, normalizedDiscount, cartTax]
+    Math.max(0, cartSubtotal - normalizedDiscount + cartTax + normalizedServiceCharge),
+    [cartSubtotal, normalizedDiscount, cartTax, normalizedServiceCharge]
   )
 
   const paymentDue = useMemo(() => {
-    if (!paymentOrder) return 0
-    return Math.max(
-      0,
-      safeNumber(
-        paymentOrder.due_amount,
-        safeNumber(paymentOrder.total) - safeNumber(paymentOrder.paid_amount)
-      )
-    )
+    return getOrderAmountDue(paymentOrder)
   }, [paymentOrder])
+
+  const cashChange = useMemo(() => {
+    if (paymentMethod !== PAYMENT_METHODS.CASH) return 0
+    return Math.max(0, safeNumber(cashReceived) - paymentDue)
+  }, [cashReceived, paymentDue, paymentMethod])
 
   const todaySales = useMemo(
     () => orders.filter(order => {
@@ -768,6 +758,7 @@ export default function POS() {
     setSelectedCustomer(null)
     setDiscount(0)
     setTaxRate(0)
+    setServiceCharge(0)
     setOrderType('branch_dispatch')
     setOrderNotes('')
     setOrderReferenceText('')
@@ -907,6 +898,7 @@ export default function POS() {
       type: orderType,
       notes: orderNotes.trim() || null,
       reference: orderReferenceText.trim() || null,
+      service_charge: normalizedServiceCharge,
     }
 
     let updateResponse = await supabase
@@ -989,7 +981,6 @@ export default function POS() {
       ...user,
       branch_name: currentBranch?.name || user?.branch_name,
     })
-    showToast
   }
 
   // ── Place Order ──
@@ -1037,9 +1028,11 @@ export default function POS() {
       }
 
       const optionalOrderData = {
-  notes: orderNotes.trim() || null,
-  reference: orderReferenceText.trim() || null,
-}
+        type: orderType,
+        notes: orderNotes.trim() || null,
+        reference: orderReferenceText.trim() || null,
+        service_charge: normalizedServiceCharge,
+      }
 
       const { data: order, error: orderError } = await insertOrderWithFallback(
         coreOrderData,
@@ -1110,8 +1103,7 @@ export default function POS() {
 
   // ── Open Payment Modal ──
   const openPaymentModal = (order, shouldPrint = false) => {
-    const paidSoFar = safeNumber(order.paid_amount)
-    const due = Math.max(0, safeNumber(order.due_amount, safeNumber(order.total) - paidSoFar))
+    const due = getOrderAmountDue(order)
     setPaymentOrder(order)
     setCashReceived(due)
     setPaymentMethod(PAYMENT_METHODS.CASH)
@@ -1156,11 +1148,8 @@ export default function POS() {
     if (!paymentOrder || paymentProcessing) return
 
     const total = safeNumber(paymentOrder.total)
-    const alreadyPaid = safeNumber(paymentOrder.paid_amount)
-    const dueBefore = Math.max(
-      0,
-      safeNumber(paymentOrder.due_amount, total - alreadyPaid)
-    )
+    const alreadyPaid = getRecordedPaidAmount(paymentOrder)
+    const dueBefore = getOrderAmountDue(paymentOrder)
 
     if (dueBefore <= 0) {
       showToast('info', 'Already paid', 'This order has no outstanding balance')
@@ -1412,6 +1401,7 @@ export default function POS() {
     setDiscount(safeNumber(order.discount))
     const taxableBase = Math.max(0, safeNumber(order.subtotal) - safeNumber(order.discount))
     setTaxRate(taxableBase > 0 ? (safeNumber(order.tax) / taxableBase) * 100 : 0)
+    setServiceCharge(getServiceCharge(order))
     setOrderType(order.type || order.order_type || 'branch_dispatch')
     setOrderNotes(order.notes || '')
     setOrderReferenceText(order.reference || '')
@@ -1540,7 +1530,7 @@ export default function POS() {
     }
 
     const rows = [
-      ['Invoice', 'Created', 'Customer', 'Type', 'Payment', 'Subtotal', 'Discount', 'Tax', 'Total', 'Status'],
+      ['Invoice', 'Created', 'Customer', 'Type', 'Payment', 'Subtotal', 'Discount', 'Tax', 'Service Charge', 'Total', 'Status'],
       ...reportData.map(order => [
         orderReference(order),
         formatDateTime(order.created_at),
@@ -1550,6 +1540,7 @@ export default function POS() {
         safeNumber(order.subtotal).toFixed(2),
         safeNumber(order.discount).toFixed(2),
         safeNumber(order.tax).toFixed(2),
+        getServiceCharge(order).toFixed(2),
         safeNumber(order.total).toFixed(2),
         order.status || 'pending',
       ]),
@@ -2158,14 +2149,14 @@ export default function POS() {
                     <div style={{ fontSize: '14px', marginBottom: '8px' }}>No products found</div>
                   </div>
                 ) : (
-                  filteredInventory.map(product => {
-                    const salePrice = extractSalePrice(product)
-                    const stock = getStock(product)
-                    const inStock = stock > 0
-                    const inCart = cart.find(c => c.id === product.id)
-                    const lowStock = stock > 0 && stock <= Math.max(5, safeNumber(product.threshold))
-
-                    return (
+                  productGridItems.map(({
+                    product,
+                    salePrice,
+                    stock,
+                    inStock,
+                    inCart,
+                    lowStock,
+                  }) => (
                       <div
                         key={product.id}
                         className="stocko-pos-product-card"
@@ -2258,8 +2249,7 @@ export default function POS() {
                           </div>
                         </div>
                       </div>
-                    )
-                  })
+                  ))
                 )}
               </div>
             </div>
@@ -2660,7 +2650,7 @@ export default function POS() {
                 )}
               </div>
 
-              {/* Discount & Tax */}
+              {/* Discount, Tax & Service Charge */}
               {cart.length > 0 && (
                 <div style={{
                   padding: '10px 14px',
@@ -2738,6 +2728,43 @@ export default function POS() {
                       onBlur={(e) => e.target.style.borderColor = colors.border}
                     />
                   </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: colors.textMuted,
+                      display: 'block',
+                      marginBottom: '4px',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px',
+                    }}>
+                      Service (Rs)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={serviceCharge}
+                      onChange={(event) => setServiceCharge(
+                        Math.max(0, safeNumber(event.target.value))
+                      )}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        background: colors.bgInput,
+                        color: colors.textPrimary,
+                        outline: 'none',
+                      }}
+                      onFocus={(event) => {
+                        event.target.style.borderColor = colors.borderActive
+                      }}
+                      onBlur={(event) => {
+                        event.target.style.borderColor = colors.border
+                      }}
+                    />
+                  </div>
                 </div>
               )}
 
@@ -2777,6 +2804,19 @@ export default function POS() {
                     }}>
                       <span style={{ color: colors.textMuted }}>Tax:</span>
                       <span style={{ fontWeight: 600, color: colors.textSecondary }}>{formatPrice(cartTax)}</span>
+                    </div>
+                  )}
+                  {normalizedServiceCharge > 0 && (
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      marginBottom: '8px',
+                      fontSize: '14px'
+                    }}>
+                      <span style={{ color: colors.textMuted }}>Service charge:</span>
+                      <span style={{ fontWeight: 600, color: colors.textSecondary }}>
+                        {formatPrice(normalizedServiceCharge)}
+                      </span>
                     </div>
                   )}
                   <div style={{
@@ -3689,7 +3729,7 @@ export default function POS() {
                       background: colors.tableHeader,
                       borderBottom: `2px solid ${colors.tableBorder}`,
                     }}>
-                      {['Sr.', 'Type', 'ID', 'Invoice#', 'Order Time', 'Customer', 'Payment', 'Bill', 'Disc', 'Tax', 'Grand Total', 'Status', 'Action'].map((header) => (
+                      {['Sr.', 'Type', 'ID', 'Invoice#', 'Order Time', 'Customer', 'Payment', 'Bill', 'Disc', 'Tax', 'Service', 'Grand Total', 'Status', 'Action'].map((header) => (
                         <th key={header} style={{
                           padding: '12px 10px',
                           textAlign: 'left',
@@ -3708,7 +3748,7 @@ export default function POS() {
                   <tbody>
                     {reportData.length === 0 ? (
                       <tr>
-                        <td colSpan="13" style={{
+                        <td colSpan="14" style={{
                           padding: '50px',
                           textAlign: 'center',
                           color: colors.textMuted,
@@ -3774,6 +3814,9 @@ export default function POS() {
                           </td>
                           <td style={{ padding: '12px 10px', color: colors.textSecondary }}>
                             {safeNumber(order.tax) > 0 ? formatPrice(order.tax) : '—'}
+                          </td>
+                          <td style={{ padding: '12px 10px', color: colors.textSecondary }}>
+                            {getServiceCharge(order) > 0 ? formatPrice(getServiceCharge(order)) : '—'}
                           </td>
                           <td style={{ padding: '12px 10px', color: colors.primary, fontWeight: 800 }}>
                             {formatPrice(order.total)}
@@ -3972,6 +4015,16 @@ export default function POS() {
                           {formatPrice(paymentOrder.subtotal)}
                         </td>
                       </tr>
+                      {getServiceCharge(paymentOrder) > 0 && (
+                        <tr>
+                          <td colSpan="5" style={{ padding: '6px 8px', textAlign: 'right', color: colors.textMuted, fontWeight: 600 }}>
+                            Service Charge
+                          </td>
+                          <td style={{ padding: '6px 8px', textAlign: 'center', color: colors.textPrimary, fontWeight: 700 }}>
+                            {formatPrice(getServiceCharge(paymentOrder))}
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -4113,7 +4166,7 @@ export default function POS() {
                         color: cashReceived >= paymentDue ? colors.success : colors.danger,
                         fontWeight: 700,
                       }}>
-                        {formatPrice(Math.max(0, safeNumber(cashReceived) - paymentDue))}
+                        {formatPrice(cashChange)}
                       </span>
                     </div>
                   </div>
@@ -4179,6 +4232,21 @@ export default function POS() {
                       {formatPrice(paymentDue)}
                     </span>
                   </div>
+                  {paymentMethod === PAYMENT_METHODS.CASH && (
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginTop: '8px',
+                      fontSize: '12px',
+                      color: colors.textMuted,
+                    }}>
+                      <span>Payment to record</span>
+                      <strong style={{ color: colors.textPrimary }}>
+                        {formatPrice(paymentDue)}
+                      </strong>
+                    </div>
+                  )}
                 </div>
 
                 {/* Action Buttons */}
@@ -4994,6 +5062,7 @@ export default function POS() {
                   ['Subtotal', safeNumber(detailOrder.subtotal), false],
                   ['Discount', -safeNumber(detailOrder.discount), false],
                   ['Tax', safeNumber(detailOrder.tax), false],
+                  ['Service charge', getServiceCharge(detailOrder), false],
                   ['Total', safeNumber(detailOrder.total), true],
                 ].map(([label, value, important]) => (
                   <div key={label} style={{
