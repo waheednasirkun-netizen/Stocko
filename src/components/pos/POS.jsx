@@ -72,6 +72,9 @@ const ROLE_GROUPS = {
 
 const normalizeRole = (role) => String(role || '').trim().toLowerCase()
 const safeNumber = (value, fallback = 0) => {
+  if (value === null || value === undefined || value === '') {
+    return fallback
+  }
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
 }
@@ -150,46 +153,142 @@ const getPaymentMethod = (order) => (
   order?.order_payments?.[0]?.method ||
   null
 )
-const printReceipt = async (order, items, user, showToast) => {
-try {
-  const response = await fetch("http://127.0.0.1:3001/print", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      printer: "Counter",
-      order: {
-        invoice: orderReference(order),
-        customer: order.customer_name || "Walk-In",
-        cashier: order.created_by_name || user?.name || "",
-        payment: getPaymentMethod(order),
-        subtotal: safeNumber(order.subtotal),
-        discount: safeNumber(order.discount),
-        tax: safeNumber(order.tax),
-        total: safeNumber(order.total),
-      },
-      receipt: (items || []).map(item => ({
-        name: item.name,
-        qty: safeNumber(item.quantity),
-        price: extractLinePrice(item),
-      })),
-    }),
-  });
 
-  const result = await response.json();
+const getRecordedPaidAmount = (order) => {
+  if (!order) return 0
 
-  if (!result.success) {
-    console.error("Print Failed:", result.error);
-    return;
+  const total = Math.max(0, safeNumber(order.total))
+  const storedPaid = Math.max(0, safeNumber(order.paid_amount))
+  const paymentsLoaded = Array.isArray(order.order_payments)
+  const paymentsPaid = paymentsLoaded
+    ? order.order_payments.reduce(
+        (sum, payment) => sum + Math.max(0, safeNumber(payment?.amount)),
+        0
+      )
+    : 0
+
+  // When the payment relationship is available it is the source of truth for
+  // pending orders. This also repairs legacy rows whose paid_amount was
+  // accidentally populated even though no payment was recorded.
+  const recordedPaid = paymentsLoaded && order.status === ORDER_STATUS.PENDING
+    ? paymentsPaid
+    : Math.max(storedPaid, paymentsPaid)
+
+  return clamp(recordedPaid, 0, total)
+}
+
+const getOrderAmountDue = (order) => {
+  if (!order || order.status === ORDER_STATUS.CANCELLED) return 0
+  if ([ORDER_STATUS.PAID, ORDER_STATUS.COMPLETED].includes(order.status)) return 0
+
+  const total = Math.max(0, safeNumber(order.total))
+  return Math.max(0, total - getRecordedPaidAmount(order))
+}
+
+const printReceipt = (order, items, user) => {
+  const printWindow = window.open('', '_blank', 'width=320,height=600')
+  if (!printWindow) {
+    alert('Popup blocked. Please allow popups to print receipts.')
+    return
   }
 
-  console.log("Receipt Printed");
+  const date = new Date().toLocaleString('en-PK')
+  const invoice = escapeHtml(orderReference(order))
+  const branchName = escapeHtml(user?.branch_name || order?.branch_name || 'Branch')
+  const customerName = escapeHtml(order.customer_name || 'Walk-In')
+  const cashierName = escapeHtml(order.created_by_name || user?.name || 'Cashier')
+  const paymentMethod = escapeHtml((getPaymentMethod(order) || 'Pending').replaceAll('_', ' '))
+  const safeItems = Array.isArray(items) ? items : []
 
-} catch (err) {
-  console.error("Stocko Print Agent error:", err);
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Receipt #${invoice}</title>
+  <style>
+    @page { size: 80mm auto; margin: 0; }
+    body {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      width: 76mm;
+      margin: 0 auto;
+      padding: 8px;
+      line-height: 1.4;
+    }
+    .center { text-align: center; }
+    .bold { font-weight: bold; }
+    .line { border-top: 1px dashed #000; margin: 8px 0; }
+    .right { text-align: right; }
+    .total { font-size: 14px; font-weight: bold; }
+    .footer { margin-top: 16px; font-size: 10px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="center bold" style="font-size:14px;">STOCKO POS</div>
+  <div class="center">${branchName}</div>
+  <div class="center" style="font-size:10px;">${date}</div>
+  <div class="line"></div>
+  <div>Invoice: #${invoice}</div>
+  <div>Customer: ${customerName}</div>
+  <div>Cashier: ${cashierName}</div>
+  <div>Type: ${escapeHtml((order.type || order.order_type || 'sale').replaceAll('_', ' '))}</div>
+  <div>Payment: ${paymentMethod}</div>
+  <div>Status: ${escapeHtml((order.status || 'pending').toUpperCase())}</div>
+  <div class="line"></div>
+  <table style="width:100%; border-collapse:collapse;">
+    <tr style="font-weight:bold;">
+      <td style="text-align:left;">Item</td>
+      <td style="text-align:center;">Qty</td>
+      <td style="text-align:right;">Price</td>
+      <td style="text-align:right;">Total</td>
+    </tr>
+  </table>
+  ${safeItems.map(item => {
+    const price = extractLinePrice(item)
+    return `
+    <div style="display:flex; justify-content:space-between; font-size:11px; margin:4px 0;">
+      <span style="flex:1;">${escapeHtml(item.name || 'Item')}</span>
+      <span style="width:40px; text-align:center;">${safeNumber(item.quantity)}</span>
+      <span style="width:50px; text-align:right;">Rs. ${price.toFixed(2)}</span>
+      <span style="width:50px; text-align:right;">Rs. ${(safeNumber(item.quantity) * price).toFixed(2)}</span>
+    </div>
+  `}).join('')}
+  <div class="line"></div>
+  <div style="display:flex; justify-content:space-between; margin:4px 0;">
+    <span>Subtotal:</span>
+    <span class="bold">Rs. ${safeNumber(order.subtotal).toFixed(2)}</span>
+  </div>
+  ${safeNumber(order.discount) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0; color:green;">
+      <span>Discount:</span>
+      <span class="bold">-Rs. ${safeNumber(order.discount).toFixed(2)}</span>
+    </div>
+  ` : ''}
+  ${safeNumber(order.tax) > 0 ? `
+    <div style="display:flex; justify-content:space-between; margin:4px 0;">
+      <span>Tax:</span>
+      <span class="bold">Rs. ${safeNumber(order.tax).toFixed(2)}</span>
+    </div>
+  ` : ''}
+  <div class="line"></div>
+  <div style="display:flex; justify-content:space-between; margin:4px 0;">
+    <span class="total">TOTAL</span>
+    <span class="total">Rs. ${safeNumber(order.total).toFixed(2)}</span>
+  </div>
+  <div class="line"></div>
+  <div class="footer">Thank you for your business!</div>
+  <div class="footer">Powered by Stocko</div>
+  <div style="margin-top:20px; text-align:center; display:no-print;">
+    <button onclick="window.print()" style="padding:10px 20px; font-size:12px;">Print</button>
+  </div>
+</body>
+</html>`
+
+  printWindow.document.write(html)
+  printWindow.document.close()
+  setTimeout(() => { printWindow.focus(); printWindow.print() }, 300)
 }
-};
 
 /* ══════════════════════════════════════════════════════════════════════════
    LIGHT THEME COLOR PALETTE
@@ -591,15 +690,13 @@ export default function POS() {
   )
 
   const paymentDue = useMemo(() => {
-    if (!paymentOrder) return 0
-    return Math.max(
-      0,
-      safeNumber(
-        paymentOrder.due_amount,
-        safeNumber(paymentOrder.total) - safeNumber(paymentOrder.paid_amount)
-      )
-    )
+    return getOrderAmountDue(paymentOrder)
   }, [paymentOrder])
+
+  const cashChange = useMemo(() => {
+    if (paymentMethod !== PAYMENT_METHODS.CASH) return 0
+    return Math.max(0, safeNumber(cashReceived) - paymentDue)
+  }, [cashReceived, paymentDue, paymentMethod])
 
   const todaySales = useMemo(
     () => orders.filter(order => {
@@ -955,7 +1052,6 @@ export default function POS() {
       ...user,
       branch_name: currentBranch?.name || user?.branch_name,
     })
-    showToast
   }
 
   // ── Place Order ──
@@ -1003,9 +1099,10 @@ export default function POS() {
       }
 
       const optionalOrderData = {
-  notes: orderNotes.trim() || null,
-  reference: orderReferenceText.trim() || null,
-}
+        type: orderType,
+        notes: orderNotes.trim() || null,
+        reference: orderReferenceText.trim() || null,
+      }
 
       const { data: order, error: orderError } = await insertOrderWithFallback(
         coreOrderData,
@@ -1076,8 +1173,7 @@ export default function POS() {
 
   // ── Open Payment Modal ──
   const openPaymentModal = (order, shouldPrint = false) => {
-    const paidSoFar = safeNumber(order.paid_amount)
-    const due = Math.max(0, safeNumber(order.due_amount, safeNumber(order.total) - paidSoFar))
+    const due = getOrderAmountDue(order)
     setPaymentOrder(order)
     setCashReceived(due)
     setPaymentMethod(PAYMENT_METHODS.CASH)
@@ -1122,11 +1218,8 @@ export default function POS() {
     if (!paymentOrder || paymentProcessing) return
 
     const total = safeNumber(paymentOrder.total)
-    const alreadyPaid = safeNumber(paymentOrder.paid_amount)
-    const dueBefore = Math.max(
-      0,
-      safeNumber(paymentOrder.due_amount, total - alreadyPaid)
-    )
+    const alreadyPaid = getRecordedPaidAmount(paymentOrder)
+    const dueBefore = getOrderAmountDue(paymentOrder)
 
     if (dueBefore <= 0) {
       showToast('info', 'Already paid', 'This order has no outstanding balance')
@@ -4079,7 +4172,7 @@ export default function POS() {
                         color: cashReceived >= paymentDue ? colors.success : colors.danger,
                         fontWeight: 700,
                       }}>
-                        {formatPrice(Math.max(0, safeNumber(cashReceived) - paymentDue))}
+                        {formatPrice(cashChange)}
                       </span>
                     </div>
                   </div>
@@ -4145,6 +4238,21 @@ export default function POS() {
                       {formatPrice(paymentDue)}
                     </span>
                   </div>
+                  {paymentMethod === PAYMENT_METHODS.CASH && (
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginTop: '8px',
+                      fontSize: '12px',
+                      color: colors.textMuted,
+                    }}>
+                      <span>Payment to record</span>
+                      <strong style={{ color: colors.textPrimary }}>
+                        {formatPrice(paymentDue)}
+                      </strong>
+                    </div>
+                  )}
                 </div>
 
                 {/* Action Buttons */}
