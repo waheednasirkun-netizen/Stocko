@@ -150,8 +150,8 @@ const getPaymentMethod = (order) => (
   order?.order_payments?.[0]?.method ||
   null
 )
-const printReceipt = async (order, items, user) => {
-  try {
+const printReceipt = async (order, items, user, showToast) => {
+try {
     const response = await fetch("http://127.0.0.1:3001/print", {
       method: "POST",
       headers: {
@@ -956,6 +956,7 @@ export default function POS() {
       ...user,
       branch_name: currentBranch?.name || user?.branch_name,
     })
+    showToast
   }
 
   // ── Place Order ──
@@ -1003,10 +1004,9 @@ export default function POS() {
       }
 
       const optionalOrderData = {
-        type: orderType,
-        notes: orderNotes.trim() || null,
-        reference: orderReferenceText.trim() || null,
-      }
+  notes: orderNotes.trim() || null,
+  reference: orderReferenceText.trim() || null,
+}
 
       const { data: order, error: orderError } = await insertOrderWithFallback(
         coreOrderData,
