@@ -159,37 +159,6 @@ const getPaymentMethod = (order) => (
   null
 )
 
-const getRecordedPaidAmount = (order) => {
-  if (!order) return 0
-
-  const total = Math.max(0, safeNumber(order.total))
-  const storedPaid = Math.max(0, safeNumber(order.paid_amount))
-  const paymentsLoaded = Array.isArray(order.order_payments)
-  const paymentsPaid = paymentsLoaded
-    ? order.order_payments.reduce(
-        (sum, payment) => sum + Math.max(0, safeNumber(payment?.amount)),
-        0
-      )
-    : 0
-
-  // When the payment relationship is available it is the source of truth for
-  // pending orders. This also repairs legacy rows whose paid_amount was
-  // accidentally populated even though no payment was recorded.
-  const recordedPaid = paymentsLoaded && order.status === ORDER_STATUS.PENDING
-    ? paymentsPaid
-    : Math.max(storedPaid, paymentsPaid)
-
-  return clamp(recordedPaid, 0, total)
-}
-
-const getOrderAmountDue = (order) => {
-  if (!order || order.status === ORDER_STATUS.CANCELLED) return 0
-  if ([ORDER_STATUS.PAID, ORDER_STATUS.COMPLETED].includes(order.status)) return 0
-
-  const total = Math.max(0, safeNumber(order.total))
-  return Math.max(0, total - getRecordedPaidAmount(order))
-}
-
 const printReceipt = (order, items, user) => {
   const printWindow = window.open('', '_blank', 'width=320,height=600')
   if (!printWindow) {
@@ -492,6 +461,36 @@ export default function POS() {
   const [reportData, setReportData] = useState([])
   const [reportLoading, setReportLoading] = useState(false)
 
+  // Payment balance helpers intentionally live inside the component so a
+  // partial merge cannot leave hook code calling an undefined global helper.
+  const getRecordedPaidAmount = useCallback((order) => {
+    if (!order) return 0
+
+    const total = Math.max(0, safeNumber(order.total))
+    const storedPaid = Math.max(0, safeNumber(order.paid_amount))
+    const paymentsLoaded = Array.isArray(order.order_payments)
+    const paymentsPaid = paymentsLoaded
+      ? order.order_payments.reduce(
+          (sum, payment) => sum + Math.max(0, safeNumber(payment?.amount)),
+          0
+        )
+      : 0
+
+    const recordedPaid = paymentsLoaded && order.status === ORDER_STATUS.PENDING
+      ? paymentsPaid
+      : Math.max(storedPaid, paymentsPaid)
+
+    return clamp(recordedPaid, 0, total)
+  }, [])
+
+  const getOrderAmountDue = useCallback((order) => {
+    if (!order || order.status === ORDER_STATUS.CANCELLED) return 0
+    if ([ORDER_STATUS.PAID, ORDER_STATUS.COMPLETED].includes(order.status)) return 0
+
+    const total = Math.max(0, safeNumber(order.total))
+    return Math.max(0, total - getRecordedPaidAmount(order))
+  }, [getRecordedPaidAmount])
+
   // ── Load Inventory ──
   const loadInventory = useCallback(async () => {
     if (!branchId) return
@@ -720,7 +719,7 @@ export default function POS() {
 
   const paymentDue = useMemo(() => {
     return getOrderAmountDue(paymentOrder)
-  }, [paymentOrder])
+  }, [getOrderAmountDue, paymentOrder])
 
   const cashChange = useMemo(() => {
     if (paymentMethod !== PAYMENT_METHODS.CASH) return 0
