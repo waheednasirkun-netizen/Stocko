@@ -40,6 +40,39 @@ async function logActivity({ branchId, userId, userName, action, details }) {
   }
 }
 
+async function insertLedgerEntry(ledgerEntry) {
+  if (!ledgerEntry) return null
+  if (!ledgerEntry.branch_id) {
+    return { message: 'Ledger entry requires a branch_id' }
+  }
+
+  if (ledgerEntry.type === 'sale') {
+    if (!ledgerEntry.order_id) {
+      return { message: 'Sale ledger entry requires an order_id' }
+    }
+
+    const { data: existing, error: lookupError } = await supabase
+      .from('ledger_entries')
+      .select('id')
+      .eq('branch_id', ledgerEntry.branch_id)
+      .eq('order_id', ledgerEntry.order_id)
+      .eq('type', 'sale')
+      .limit(1)
+
+    if (lookupError) return lookupError
+    if ((existing || []).length > 0) return null
+  }
+
+  const { error } = await supabase.from('ledger_entries').insert([{
+    ...ledgerEntry,
+    created_at: ledgerEntry.created_at || now(),
+  }])
+
+  // The database's sale-only partial unique index makes concurrent retries
+  // idempotent without restricting legitimate partial-payment entries.
+  return error?.code === '23505' && ledgerEntry.type === 'sale' ? null : error
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    POS API
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -162,9 +195,10 @@ export const posApi = {
     return wrap(orderData, null)
   },
 
-  async completeOrder({ orderId, status, payment, paid_amount, due_amount, completed_by, completed_by_name, ledgerEntry, activityLog }) {
+  async completeOrder({ orderId, branchId, status, payment, paid_amount, due_amount, completed_by, completed_by_name, ledgerEntry, activityLog }) {
+    if (!branchId) return wrap(null, { message: 'Branch ID is required' })
     // 1. Update order status
-    const { data: orderData, error: orderError } = await supabase
+    let orderQuery = supabase
       .from('orders')
       .update({
         status,
@@ -176,7 +210,8 @@ export const posApi = {
         updated_at: now(),
       })
       .eq('id', orderId)
-      .select()
+    orderQuery = orderQuery.eq('branch_id', branchId)
+    const { data: orderData, error: orderError } = await orderQuery.select()
       .single()
 
     if (orderError) return wrap(null, orderError)
@@ -195,10 +230,7 @@ export const posApi = {
 
     // 3. Insert ledger entry if provided
     if (ledgerEntry) {
-      const { error: ledgerError } = await supabase.from('ledger').insert([{
-        ...ledgerEntry,
-        created_at: now(),
-      }])
+      const ledgerError = await insertLedgerEntry(ledgerEntry)
       if (ledgerError) console.warn('[pos] ledger error:', ledgerError)
     }
 
@@ -216,9 +248,10 @@ export const posApi = {
     return wrap(orderData, null)
   },
 
-  async cancelOrder({ orderId, cancelledBy, cancelledByName, reason, ledgerEntry, activityLog }) {
+  async cancelOrder({ orderId, branchId, cancelledBy, cancelledByName, reason, ledgerEntry, activityLog }) {
+    if (!branchId) return wrap(null, { message: 'Branch ID is required' })
     // 1. Update order status
-    const { data: orderData, error: orderError } = await supabase
+    let orderQuery = supabase
       .from('orders')
       .update({
         status: 'cancelled',
@@ -229,7 +262,9 @@ export const posApi = {
         updated_at: now(),
       })
       .eq('id', orderId)
-      .select()
+      .neq('status', 'cancelled')
+    orderQuery = orderQuery.eq('branch_id', branchId)
+    const { data: orderData, error: orderError } = await orderQuery.select()
       .single()
 
     if (orderError) return wrap(null, orderError)
@@ -258,10 +293,7 @@ export const posApi = {
 
     // 3. Insert ledger entry if provided (refund)
     if (ledgerEntry) {
-      const { error: ledgerError } = await supabase.from('ledger').insert([{
-        ...ledgerEntry,
-        created_at: now(),
-      }])
+      const ledgerError = await insertLedgerEntry(ledgerEntry)
       if (ledgerError) console.warn('[pos] ledger error:', ledgerError)
     }
 
@@ -279,9 +311,10 @@ export const posApi = {
     return wrap(orderData, null)
   },
 
-  async processPayment({ orderId, payment, status, paid, due, ledgerEntry, activityLog }) {
+  async processPayment({ orderId, branchId, payment, status, paid, due, ledgerEntry, activityLog }) {
+    if (!branchId) return wrap(null, { message: 'Branch ID is required' })
     // 1. Update order payment status
-    const { data: orderData, error: orderError } = await supabase
+    let orderQuery = supabase
       .from('orders')
       .update({
         status,
@@ -290,32 +323,30 @@ export const posApi = {
         updated_at: now(),
       })
       .eq('id', orderId)
-      .select()
+    orderQuery = orderQuery.eq('branch_id', branchId)
+    const { data: orderData, error: orderError } = await orderQuery.select()
       .single()
 
     if (orderError) return wrap(null, orderError)
 
     // 2. Insert payment record
-    const { error: paymentError } = await supabase
-  .from('order_payments')
-  .insert([{
-    order_id: orderId,
-    amount: payment.amount,
-    method: payment.method,
-    remarks: payment.remarks || null,
-    created_at: _now(),
-  }]);
+    if (payment && payment.amount > 0) {
+      const { error: paymentError } = await supabase
+        .from('order_payments')
+        .insert([{
+          order_id: orderId,
+          amount: payment.amount,
+          method: payment.method,
+          remarks: payment.remarks || null,
+          created_at: now(),
+        }])
 
-if (paymentError) {
-  console.warn('[POS] payment error:', paymentError);
-}
+      if (paymentError) console.warn('[pos] payment error:', paymentError)
+    }
 
     // 3. Insert ledger entry if provided
     if (ledgerEntry) {
-      const { error: ledgerError } = await supabase.from('ledger').insert([{
-        ...ledgerEntry,
-        created_at: now(),
-      }])
+      const ledgerError = await insertLedgerEntry(ledgerEntry)
       if (ledgerError) console.warn('[pos] ledger error:', ledgerError)
     }
 

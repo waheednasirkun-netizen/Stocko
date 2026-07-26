@@ -507,6 +507,7 @@ export default function POS() {
   // Payment modal state
   const [paymentOrder, setPaymentOrder] = useState(null)
   const [paymentMethod, setPaymentMethod] = useState(PAYMENT_METHODS.CASH)
+  const [paymentAmount, setPaymentAmount] = useState(0)
   const [cashReceived, setCashReceived] = useState(0)
   const [paymentProcessing, setPaymentProcessing] = useState(false)
   const [printAfterPayment, setPrintAfterPayment] = useState(false)
@@ -785,8 +786,8 @@ export default function POS() {
 
   const cashChange = useMemo(() => {
     if (paymentMethod !== PAYMENT_METHODS.CASH) return 0
-    return Math.max(0, safeNumber(cashReceived) - paymentDue)
-  }, [cashReceived, paymentDue, paymentMethod])
+    return Math.max(0, safeNumber(cashReceived) - safeNumber(paymentAmount))
+  }, [cashReceived, paymentAmount, paymentMethod])
 
   const todaySales = useMemo(
     () => orders.filter(order => {
@@ -1268,6 +1269,7 @@ export default function POS() {
   const openPaymentModal = (order, shouldPrint = false) => {
     const due = getOrderAmountDue(order)
     setPaymentOrder(order)
+    setPaymentAmount(due)
     setCashReceived(due)
     setPaymentMethod(PAYMENT_METHODS.CASH)
     setPaymentRemarks('')
@@ -1286,8 +1288,7 @@ export default function POS() {
       .limit(1)
 
     if (lookupError) {
-      console.warn('[POS] Ledger lookup failed:', lookupError.message)
-      return
+      throw lookupError
     }
 
     if ((existing || []).length === 0) {
@@ -1302,7 +1303,9 @@ export default function POS() {
         created_by_name: user?.name,
         created_at: now(),
       }])
-      if (error) console.warn('[POS] Sale ledger entry failed:', error.message)
+      // The partial unique index added by the ledger migration closes the
+      // check/insert race. A concurrent caller winning is a successful no-op.
+      if (error && error.code !== '23505') throw error
     }
   }
 
@@ -1320,28 +1323,40 @@ export default function POS() {
       return
     }
 
-    const paymentAmount = paymentMethod === PAYMENT_METHODS.CREDIT ? 0 : dueBefore
-    if (paymentMethod === PAYMENT_METHODS.CASH && safeNumber(cashReceived) < paymentAmount) {
-      showToast('error', 'Insufficient cash', `Receive at least ${formatPrice(paymentAmount)}`)
+    const amountReceived = paymentMethod === PAYMENT_METHODS.CREDIT
+      ? 0
+      : Math.min(dueBefore, Math.max(0, safeNumber(paymentAmount)))
+    if (paymentMethod !== PAYMENT_METHODS.CREDIT && amountReceived <= 0) {
+      showToast('error', 'Invalid payment', 'Enter an amount greater than zero')
+      return
+    }
+    if (paymentMethod === PAYMENT_METHODS.CASH && safeNumber(cashReceived) < amountReceived) {
+      showToast('error', 'Insufficient cash', `Receive at least ${formatPrice(amountReceived)}`)
       return
     }
 
     setPaymentProcessing(true)
 
     try {
-      const status = paymentMethod === PAYMENT_METHODS.CREDIT 
-        ? ORDER_STATUS.CREDIT 
-        : ORDER_STATUS.PAID
-      const paidTotal = alreadyPaid + paymentAmount
+      const paidTotal = alreadyPaid + amountReceived
       const dueAfter = Math.max(0, total - paidTotal)
+      const status = paymentMethod === PAYMENT_METHODS.CREDIT
+        ? ORDER_STATUS.CREDIT
+        : dueAfter > 0.0001
+          ? ORDER_STATUS.PARTIALLY_PAID
+          : ORDER_STATUS.PAID
       let paymentRecord = null
 
-      if (paymentAmount > 0) {
+      if (paymentOrder.customer_id) {
+        await ensureLedgerSale(paymentOrder)
+      }
+
+      if (amountReceived > 0) {
         const { data, error: paymentError } = await supabase
           .from('order_payments')
           .insert([{
             order_id: paymentOrder.id,
-            amount: paymentAmount,
+            amount: amountReceived,
             method: paymentMethod,
             remarks: paymentRemarks.trim() || null,
             created_at: now(),
@@ -1358,7 +1373,7 @@ export default function POS() {
         .update({ 
           status,
           paid_amount: paidTotal,
-          due_amount: paymentMethod === PAYMENT_METHODS.CREDIT ? dueBefore : dueAfter,
+          due_amount: dueAfter,
           completed_by: user?.id,
           completed_by_name: user?.name,
           completed_at: now(),
@@ -1377,13 +1392,12 @@ export default function POS() {
       }
 
       if (order.customer_id) {
-        await ensureLedgerSale({ ...paymentOrder, ...order })
-        if (paymentAmount > 0) {
+        if (amountReceived > 0) {
           const { error: ledgerPaymentError } = await supabase.from('ledger_entries').insert([{
             customer_id: order.customer_id,
             branch_id: branchId,
             order_id: order.id,
-            amount: -paymentAmount,
+            amount: -amountReceived,
             type: 'payment',
             description: `Payment received via ${paymentMethod.replaceAll('_', ' ')} for order #${orderReference(order)}`,
             created_by: user?.id,
@@ -1409,7 +1423,7 @@ export default function POS() {
 
       await logPosActivity(
         'Payment Processed',
-        `Order #${orderReference(order)}; ${paymentMethod}; amount ${paymentAmount.toFixed(2)}; status ${status}`
+        `Order #${orderReference(order)}; ${paymentMethod}; amount ${amountReceived.toFixed(2)}; status ${status}`
       )
 
       showToast('success', 'Payment processed', `Order #${orderReference(order)} is ${status.replaceAll('_', ' ')}`)
@@ -1423,6 +1437,7 @@ export default function POS() {
 
       setShowPaymentModal(false)
       setPaymentOrder(null)
+      setPaymentAmount(0)
       setCashReceived(0)
       setPaymentRemarks('')
       setPrintAfterPayment(false)
@@ -1496,13 +1511,16 @@ export default function POS() {
           .eq('order_id', order.id)
           .eq('branch_id', branchId)
 
-        if (!ledgerLookupError) {
-          const netAmount = (ledgerRows || []).reduce(
-            (sum, entry) => sum + safeNumber(entry.amount),
-            0
-          )
-          if (Math.abs(netAmount) > 0.0001) {
-            await supabase.from('ledger_entries').insert([{
+        if (ledgerLookupError) throw ledgerLookupError
+
+        const netAmount = (ledgerRows || []).reduce(
+          (sum, entry) => sum + safeNumber(entry.amount),
+          0
+        )
+        if (Math.abs(netAmount) > 0.0001) {
+          const { error: cancellationLedgerError } = await supabase
+            .from('ledger_entries')
+            .insert([{
               customer_id: order.customer_id,
               branch_id: branchId,
               order_id: order.id,
@@ -1513,7 +1531,7 @@ export default function POS() {
               created_by_name: user?.name,
               created_at: now(),
             }])
-          }
+          if (cancellationLedgerError) throw cancellationLedgerError
         }
       }
 
@@ -4219,7 +4237,13 @@ export default function POS() {
                     {PAYMENT_OPTIONS.map((method) => (
                       <button
                         key={method.id}
-                        onClick={() => setPaymentMethod(method.id)}
+                        onClick={() => {
+                          setPaymentMethod(method.id)
+                          if (method.id !== PAYMENT_METHODS.CREDIT) {
+                            setPaymentAmount(paymentDue)
+                            setCashReceived(paymentDue)
+                          }
+                        }}
                         style={{
                           padding: '14px',
                           background: paymentMethod === method.id ? colors.primary : colors.bgCard,
@@ -4255,6 +4279,48 @@ export default function POS() {
                   </div>
                 </div>
 
+                {paymentMethod !== PAYMENT_METHODS.CREDIT && (
+                  <label style={{
+                    display: 'block',
+                    marginBottom: '16px',
+                    color: colors.textMuted,
+                    fontSize: '12px',
+                    fontWeight: 700,
+                  }}>
+                    Payment amount
+                    <input
+                      type="number"
+                      min="0.01"
+                      max={paymentDue}
+                      step="0.01"
+                      value={paymentAmount}
+                      onChange={(event) => {
+                        const nextAmount = Math.min(
+                          paymentDue,
+                          Math.max(0, safeNumber(event.target.value))
+                        )
+                        setPaymentAmount(nextAmount)
+                        if (paymentMethod === PAYMENT_METHODS.CASH) {
+                          setCashReceived(nextAmount)
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        marginTop: '6px',
+                        padding: '10px 11px',
+                        borderRadius: '8px',
+                        border: `1px solid ${colors.border}`,
+                        background: colors.bgCard,
+                        color: colors.textPrimary,
+                        fontSize: '16px',
+                        fontWeight: 700,
+                        outline: 'none',
+                        textAlign: 'right',
+                      }}
+                    />
+                  </label>
+                )}
+
                 {/* Cash Input (only for cash) */}
                 {paymentMethod === PAYMENT_METHODS.CASH && (
                   <div style={{ marginBottom: '16px' }}>
@@ -4269,7 +4335,7 @@ export default function POS() {
                     </label>
                     <input
                       type="number"
-                      min={paymentDue}
+                      min={paymentAmount}
                       value={cashReceived}
                       onChange={(e) => setCashReceived(Math.max(0, safeNumber(e.target.value)))}
                       style={{
@@ -4292,10 +4358,10 @@ export default function POS() {
                       marginTop: '8px',
                     }}>
                       {[
-                        paymentDue,
-                        Math.ceil(paymentDue / 100) * 100,
-                        Math.ceil(paymentDue / 500) * 500,
-                        Math.ceil(paymentDue / 1000) * 1000,
+                        paymentAmount,
+                        Math.ceil(paymentAmount / 100) * 100,
+                        Math.ceil(paymentAmount / 500) * 500,
+                        Math.ceil(paymentAmount / 1000) * 1000,
                       ].filter((value, index, list) => value > 0 && list.indexOf(value) === index).map(value => (
                         <button
                           key={value}
@@ -4326,7 +4392,7 @@ export default function POS() {
                     }}>
                       <span style={{ color: colors.textMuted }}>Change Return:</span>
                       <span style={{ 
-                        color: cashReceived >= paymentDue ? colors.success : colors.danger,
+                        color: cashReceived >= paymentAmount ? colors.success : colors.danger,
                         fontWeight: 700,
                       }}>
                         {formatPrice(cashChange)}
@@ -4406,7 +4472,7 @@ export default function POS() {
                     }}>
                       <span>Payment to record</span>
                       <strong style={{ color: colors.textPrimary }}>
-                        {formatPrice(paymentDue)}
+                        {formatPrice(paymentAmount)}
                       </strong>
                     </div>
                   )}
@@ -4421,7 +4487,8 @@ export default function POS() {
                     onClick={() => processPayment(false)}
                     disabled={
                       paymentProcessing ||
-                      (paymentMethod === PAYMENT_METHODS.CASH && cashReceived < paymentDue) ||
+                      (paymentMethod !== PAYMENT_METHODS.CREDIT && paymentAmount <= 0) ||
+                      (paymentMethod === PAYMENT_METHODS.CASH && cashReceived < paymentAmount) ||
                       (paymentMethod === PAYMENT_METHODS.CREDIT && !paymentOrder.customer_id)
                     }
                     style={{
@@ -4445,7 +4512,8 @@ export default function POS() {
                     onClick={() => processPayment(true)}
                     disabled={
                       paymentProcessing ||
-                      (paymentMethod === PAYMENT_METHODS.CASH && cashReceived < paymentDue) ||
+                      (paymentMethod !== PAYMENT_METHODS.CREDIT && paymentAmount <= 0) ||
+                      (paymentMethod === PAYMENT_METHODS.CASH && cashReceived < paymentAmount) ||
                       (paymentMethod === PAYMENT_METHODS.CREDIT && !paymentOrder.customer_id)
                     }
                     style={{
