@@ -277,58 +277,62 @@ const printReceipt = async (order, items, user) => {
   const safeItems = Array.isArray(items) ? items : []
 
   try {
-    const response = await fetch('http://127.0.0.1:3001/print', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const { error } = await supabase
+  .from("print_jobs")
+  .insert({
+    branch_id: user?.branch_id, // Current user's branch
+    status: "pending",
+    payload: {
+      printer: "Counter",
+      order: {
+        shopName: user?.branch_name || order?.branch_name || "STOCKO",
+        status: [ORDER_STATUS.PAID, ORDER_STATUS.CREDIT, ORDER_STATUS.COMPLETED].includes(order?.status)
+          ? "Paid"
+          : "Unpaid",
+        token: orderReference(order),
+        orderId: orderReference(order),
+        invoice: orderReference(order),
+        orderType: (order?.type || order?.order_type || "sale").replaceAll("_", " "),
+        date: createdAt.toLocaleDateString("en-PK"),
+        time: createdAt.toLocaleTimeString("en-PK"),
+        user: order?.created_by_name || user?.name || "",
+        orderTaker: order?.created_by_name || user?.name || "",
       },
-      body: JSON.stringify({
-        printer: 'Counter',
-        order: {
-          shopName: user?.branch_name || order?.branch_name || 'STOCKO',
-          status: [ORDER_STATUS.PAID, ORDER_STATUS.CREDIT, ORDER_STATUS.COMPLETED].includes(order?.status)
-            ? 'Paid'
-            : 'Unpaid',
-          token: orderReference(order),
-          orderId: orderReference(order),
-          invoice: orderReference(order),
-          orderType: (order?.type || order?.order_type || 'sale').replaceAll('_', ' '),
-          date: createdAt.toLocaleDateString('en-PK'),
-          time: createdAt.toLocaleTimeString('en-PK'),
-          user: order?.created_by_name || user?.name || '',
-          orderTaker: order?.created_by_name || user?.name || '',
-        },
-        receipt: {
-          items: safeItems.map(item => ({
-            name: item.name || 'Item',
-            qty: safeNumber(item.quantity),
-            rate: extractLinePrice(item),
-            total: safeNumber(item.quantity) * extractLinePrice(item),
-          })),
-          subTotal: safeNumber(order?.subtotal),
-          discount: safeNumber(order?.discount),
-          tax: safeNumber(order?.tax),
-          serviceCharge: getServiceCharge(order),
-          grandTotal: safeNumber(order?.total),
-          customerPhone: order?.customer_phone || '',
-          deliveryAddress: order?.customer_name || '',
-        },
-      }),
-    })
+      receipt: {
+        items: safeItems.map(item => ({
+          name: item.name || "Item",
+          qty: safeNumber(item.quantity),
+          rate: extractLinePrice(item),
+          total: safeNumber(item.quantity) * extractLinePrice(item),
+        })),
+        subTotal: safeNumber(order?.subtotal),
+        discount: safeNumber(order?.discount),
+        tax: safeNumber(order?.tax),
+        serviceCharge: getServiceCharge(order),
+        grandTotal: safeNumber(order?.total),
+        customerPhone: order?.customer_phone || "",
+        deliveryAddress: order?.customer_name || "",
+      },
+    },
+  });
+if (error) {
+  throw error;
+}
 
-    if (!response.ok) {
-      throw new Error(`Print agent returned HTTP ${response.status}`)
-    }
+console.log("Print job queued successfully.");
+if (error) {
+  console.error("Order insert error:", error);
+} else {
+  console.log("Print job queued successfully.");
+}
 
-    const result = await response.json()
-    if (!result?.success) {
-      throw new Error(result?.error || 'Print agent rejected the receipt')
-    }
+   
 
-    console.info('[POS] Receipt printed through local print agent')
-  } catch (error) {
-    console.warn('[POS] Local print agent unavailable; using browser print', error)
-    printReceiptInBrowser(order, safeItems, user)
+      console.info("[POS] Print job queued successfully.");
+} catch (error) {
+  console.error("[POS] Failed to queue print job:", error);
+  printReceiptInBrowser(order, safeItems, user); // optional fallback
+    
   }
 }
 
