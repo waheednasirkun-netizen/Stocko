@@ -283,6 +283,7 @@ const printReceipt = async (order, items, user) => {
     branch_id: user?.branch_id, // Current user's branch
     status: "pending",
     payload: {
+      type: "pos", 
       printer: "Counter",
       order: {
         shopName: user?.branch_name || order?.branch_name || "STOCKO",
@@ -312,6 +313,7 @@ const printReceipt = async (order, items, user) => {
         grandTotal: safeNumber(order?.total),
         customerPhone: order?.customer_phone || "",
         deliveryAddress: order?.customer_name || "",
+       
       },
     },
   });

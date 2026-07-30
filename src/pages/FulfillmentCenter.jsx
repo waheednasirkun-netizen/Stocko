@@ -265,13 +265,22 @@ async function sendPrintJob(receiptData) {
 
       // 2. Update request status
       const { error: reqError } = await supabase
-        .from('requests')
-        .update({
-          status: newStatus,
-          fulfilled_at: newStatus === 'Completed' ? new Date().toISOString() : request.fulfilled_at,
-        })
-        .eq('id', request.id)
+  .from('requests')
+  .update({
+    status: newStatus,
+    fulfilled_at: newStatus === 'Completed' ? new Date().toISOString() : request.fulfilled_at,
 
+    // ADD THESE
+  fulfilled_by: newStatus === 'Completed'
+  ? request.created_by
+  : request.fulfilled_by,
+    fulfilled_by_name: newStatus === 'Completed'
+  ? "print agent"
+  : request.fulfilled_by_name,
+
+    updated_at: new Date().toISOString(),
+  })
+  .eq('id', request.id)
       if (reqError) {
         console.error('Update requests error:', reqError)
         throw new Error(`Failed to update request: ${reqError.message}`)
@@ -329,6 +338,7 @@ recorded_by_name: user?.name || user?.email,
 
       // 5. Set receipt data and trigger print
      const receipt = {
+      type: "fulfillment", 
   receipt: {
     items: [
       {
