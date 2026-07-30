@@ -36,6 +36,18 @@ export default function FulfillmentCenter() {
 
   // ── Tabs ─────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(TAB_PENDING)
+  async function sendPrintJob(receiptData) {
+  const { error } =await supabase
+    .from("print_jobs")
+    .insert({
+      branch_id: user?.branch_id,
+      payload: receiptData,
+    });
+
+  if (error) {
+    console.error(error);
+  }
+}
 
   // ── Search & Filters ─────────────────────────────────
   const [search, setSearch] = useState('')
@@ -53,7 +65,20 @@ export default function FulfillmentCenter() {
 
   // ── Receipt print state ──────────────────────────────
   const [receiptData, setReceiptData] = useState(null)
+async function sendPrintJob(receiptData) {
+  const { error } = await supabase
+    .from("print_jobs")
+    .insert({
+      branch_id: user?.branch_id,
+      payload: receiptData,
+    });
 
+  if (error) {
+    console.error("Print queue failed:", error);
+  } else {
+    console.log("Print job sent successfully");
+  }
+}
   // ── Real-time subscription ───────────────────────────
   useEffect(() => {
     if (!supabase) return
@@ -286,8 +311,8 @@ export default function FulfillmentCenter() {
           reference_type: 'fulfillment',
           reference_id: request.id,
           notes: notes || `Fulfilled request from ${request.department}`,
-          created_by: user?.id,
-          created_by_name: user?.name || user?.email,
+          recorded_by: user?.id,
+recorded_by_name: user?.name || user?.email,
         })
 
         if (txnError) {
@@ -303,26 +328,37 @@ export default function FulfillmentCenter() {
       showToast('success', 'Dispatched', `${fmtNum(qty)} ${item._unit} of ${item._displayName}`)
 
       // 5. Set receipt data and trigger print
-      setReceiptData({
-        request,
-        item,
-        qty,
-        notes,
-        user,
-        fulfilled: newFulfilled,
-        remaining,
-        newStatus,
-        timestamp: new Date(),
-        branchName: request.branch_name || request.branchName,
-      })
+     const receipt = {
+  receipt: {
+    items: [
+      {
+        name: item.name,
+        quantity: qty,
+        unit: item.unit,
+      },
+    ],
+  },
+
+  request,
+  item,
+  qty,
+  notes,
+  user,
+  fulfilled: newFulfilled,
+  remaining,
+  newStatus,
+  timestamp: new Date(),
+  branchName: request.branch_name || request.branchName,
+}
+
+setReceiptData(receipt)
 
       // Small delay to let React render the receipt, then print
-      setTimeout(() => {
-        window.print()
-        // Clear receipt data after print dialog closes
-        setTimeout(() => setReceiptData(null), 1000)
-      }, 100)
+      await sendPrintJob(receipt)
 
+setTimeout(() => {
+  setReceiptData(null)
+}, 1000)
       resetDispatch()
     } catch (err) {
       console.error('Dispatch error:', err)
