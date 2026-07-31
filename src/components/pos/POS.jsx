@@ -300,21 +300,22 @@ const printReceipt = async (order, items, user) => {
         orderTaker: order?.created_by_name || user?.name || "",
       },
       receipt: {
-        items: safeItems.map(item => ({
-          name: item.name || "Item",
-          qty: safeNumber(item.quantity),
-          rate: extractLinePrice(item),
-          total: safeNumber(item.quantity) * extractLinePrice(item),
-        })),
-        subTotal: safeNumber(order?.subtotal),
-        discount: safeNumber(order?.discount),
-        tax: safeNumber(order?.tax),
-        serviceCharge: getServiceCharge(order),
-        grandTotal: safeNumber(order?.total),
-        customerPhone: order?.customer_phone || "",
-        deliveryAddress: order?.customer_name || "",
-       
-      },
+  items: safeItems.map(item => ({
+    name: item.name || "Item",
+    qty: safeNumber(item.quantity),
+    rate: extractLinePrice(item),
+    total: safeNumber(item.quantity) * extractLinePrice(item),
+  })),
+  subTotal: safeNumber(order?.subtotal),
+  discount: safeNumber(order?.discount),
+  tax: safeNumber(order?.tax),
+  serviceCharge: getServiceCharge(order),
+  grandTotal: safeNumber(order?.total),
+
+  customerName: order?.customer_name || "",
+  customerPhone: order?.customer_phone || "",
+  deliveryAddress: order?.customer_address || "", // ✅ Fix
+},
     },
   });
 if (error) {
