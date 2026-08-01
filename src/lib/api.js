@@ -1158,7 +1158,13 @@ export const posApi = {
   },
 
   // Create customer
-  async createCustomer(customerData) {
+  async createCustomer({ branch_id, name, phone, address }) {
+    const customerData = {
+      branch_id,
+      name: name.trim(),
+      phone: phone?.trim() || null,
+      address: address?.trim() || null,
+    }
     const { data, error } = await supabase
       .from('customers')
       .insert([customerData])

@@ -84,49 +84,6 @@ export function AppProvider({ children }) {
   const [activityLogs,          setActivityLogs]          = useState([])
   const [dataLoaded,            setDataLoaded]            = useState(false)
 
-  // CODEX_DASHBOARD_QA_START — temporary local-only data, removed after visual QA
-  const dashboardQaPreview = import.meta.env.DEV &&
-    new URLSearchParams(window.location.search).get('dashboard-preview') === '1'
-
-  useEffect(() => {
-    if (!dashboardQaPreview) return
-
-    const branchId = '6c647f96-4160-45c7-85c9-445be42887b1'
-    const previewBranch = { id: branchId, name: 'Responsive QA Branch', address: '12 Preview Street' }
-    const now = new Date().toISOString()
-
-    setUser({
-      id: 'dashboard-qa-user', name: 'Responsive QA', email: 'qa@example.test',
-      role: ROLES.DEVELOPER, branch_id: branchId, branch_name: previewBranch.name,
-    })
-    setUserRole(ROLES.DEVELOPER)
-    setBranches([previewBranch])
-    setCurrentBranch(previewBranch)
-    setTransactions([
-      { id: 'tx-1', branch_id: branchId, type: 'Stock IN', item_name: 'Coffee Beans', quantity: 18, unit: 'kg', created_at: now },
-      { id: 'tx-2', branch_id: branchId, type: 'Stock OUT', item_name: 'Ketchup (Green)', quantity: 7, unit: 'bottles', created_at: now },
-      { id: 'tx-3', branch_id: branchId, type: 'Stock IN', item_name: 'Cheese Slices', quantity: 12, unit: 'packs', created_at: now },
-    ])
-    setRequests([
-      { id: 'rq-1', branch_id: branchId, status: 'Pending', department: 'Kitchen', priority: 'High', created_at: now, request_items: [{ name: 'Ketchup (Green)', qty: 28 }] },
-      { id: 'rq-2', branch_id: branchId, status: 'Approved', department: 'Counter', priority: 'Medium', created_at: now, request_items: [{ name: 'Coffee Beans', qty: 22 }] },
-      { id: 'rq-3', branch_id: branchId, status: 'Partially Fulfilled', department: 'Kitchen', priority: 'High', created_at: now, request_items: [{ name: 'Cheese Slices', qty: 18 }] },
-      { id: 'rq-4', branch_id: branchId, status: 'Completed', department: 'Kitchen', priority: 'Low', created_at: now, request_items: [{ name: 'Burger Buns Large', qty: 16 }] },
-      { id: 'rq-5', branch_id: branchId, status: 'Rejected', department: 'Store', priority: 'Medium', created_at: now, request_items: [{ name: 'Paper Cups', qty: 9 }] },
-    ])
-    setInventory([
-      { id: 'in-1', branch_id: branchId, name: 'Ketchup (Green)', category: 'Condiments', quantity: 2, threshold: 10, status: 'Low Stock' },
-      { id: 'in-2', branch_id: branchId, name: 'Coffee Beans', category: 'Beverages', quantity: 24, threshold: 8, status: 'Good' },
-      { id: 'in-3', branch_id: branchId, name: 'Burger Buns Large', category: 'Bakery', quantity: 0, threshold: 12, status: 'Critical' },
-      { id: 'in-4', branch_id: branchId, name: 'Cheese Slices', category: 'Dairy', quantity: 8, threshold: 10, status: 'Low Stock' },
-      { id: 'in-5', branch_id: branchId, name: 'Paper Cups', category: 'Packaging', quantity: 45, threshold: 15, status: 'Good' },
-    ])
-    setLoading(false)
-    setDataLoaded(true)
-    setAuthReady(true)
-  }, [dashboardQaPreview])
-  // CODEX_DASHBOARD_QA_END
-
   // ── Derived: all units ────────────────────────────────────────────────────
   const allUnits = useMemo(
     () => [...new Set([...DEFAULT_UNITS, ...customUnits])],
@@ -495,10 +452,6 @@ export function AppProvider({ children }) {
   useEffect(() => { fetchUserBranchesRef.current = fetchUserBranches }, [fetchUserBranches])
 
   useEffect(() => {
-    // CODEX_DASHBOARD_QA_START — avoid real authentication in the temporary preview
-    if (dashboardQaPreview) return undefined
-    // CODEX_DASHBOARD_QA_END
-
     const finishAuth = async (session) => {
       console.log('[Auth] finishAuth called, session exists:', !!session)
       if (!session) {
@@ -558,7 +511,7 @@ export function AppProvider({ children }) {
     )
 
     return () => subscription.unsubscribe()
-  }, [dashboardQaPreview, loadUserRole, showToast])
+  }, [loadUserRole, showToast])
 
   // ── Login ───────────────────────────────────────────────────────────────────
   const login = useCallback(async (email, password) => {

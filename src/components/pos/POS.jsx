@@ -510,7 +510,7 @@ export default function POS() {
   const [orders, setOrders] = useState([])
   const [pendingOrders, setPendingOrders] = useState([])
   const [cancelledOrders, setCancelledOrders] = useState([])
-  const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', email: '' })
+  const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address: '' })
   const [customerAddress, setCustomerAddress] = useState('')
   const [addressError, setAddressError] = useState('')
   const [addressSaving, setAddressSaving] = useState(false)
@@ -966,22 +966,18 @@ export default function POS() {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('customers')
-        .insert([{
-          branch_id: branchId,
-          name: newCustomer.name.trim(),
-          phone: normalizedPhone || null,
-          email: newCustomer.email.trim() || null,
-        }])
-        .select()
-        .single()
+      const { data, error } = await posApi.createCustomer({
+        branch_id: branchId,
+        name: newCustomer.name,
+        phone: normalizedPhone,
+        address: newCustomer.address,
+      })
 
       if (error) throw error
 
       setCustomers(prev => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)))
       setSelectedCustomer(data)
-      setNewCustomer({ name: '', phone: '', email: '' })
+      setNewCustomer({ name: '', phone: '', address: '' })
       setShowCustomerModal(false)
       showToast('success', 'Created', 'Customer created successfully')
     } catch (err) {
@@ -2637,7 +2633,7 @@ export default function POS() {
                   <button
                     type="button"
                     onClick={() => {
-                      setNewCustomer({ name: '', phone: '', email: '' })
+                      setNewCustomer({ name: '', phone: '', address: '' })
                       setShowCustomerModal(true)
                     }}
                     title="Add a new customer"
@@ -4937,13 +4933,13 @@ export default function POS() {
                   marginBottom: '6px',
                   textTransform: 'uppercase',
                 }}>
-                  Email
+                  Address
                 </label>
-                <input
-                  type="email"
-                  placeholder="Enter email address"
-                  value={newCustomer.email}
-                  onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                <textarea
+                  rows={3}
+                  placeholder="Enter customer address"
+                  value={newCustomer.address}
+                  onChange={(e) => setNewCustomer({ ...newCustomer, address: e.target.value })}
                   style={{
                     width: '100%',
                     padding: '12px',
@@ -4953,6 +4949,7 @@ export default function POS() {
                     fontSize: '15px',
                     color: colors.textPrimary,
                     outline: 'none',
+                    resize: 'vertical',
                     transition: 'border-color 0.2s',
                   }}
                   onFocus={(e) => e.target.style.borderColor = colors.borderActive}
