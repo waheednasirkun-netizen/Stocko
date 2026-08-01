@@ -435,8 +435,8 @@ export default function Login() {
   const danger = theme.danger
 
   return (
-    <div style={{
-      minHeight: '100vh',
+    <div className="login-page-shell" style={{
+      minHeight: '100dvh',
       background: bgGradient,
       display: 'flex',
       alignItems: 'center',
@@ -476,7 +476,7 @@ export default function Login() {
       </button>
 
       {/* Main Card */}
-      <div style={{
+      <div className="login-card" style={{
         position: 'relative',
         zIndex: 1,
         background: cardBg,

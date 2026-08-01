@@ -6,7 +6,7 @@ export default function ActivityLog() {
   const { activityLogs, theme } = useApp()
   const sorted = useMemo(() => [...activityLogs].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0)), [activityLogs])
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page activity-page">
       <h2 style={{ fontSize:18, fontWeight:700, color:theme.text, marginBottom:20 }}>Activity Log</h2>
       <Card style={{ padding:0, overflow:'hidden' }}>
         {sorted.length === 0

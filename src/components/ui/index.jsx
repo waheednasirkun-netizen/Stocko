@@ -2,7 +2,7 @@
  * UI primitives — all shared components used across pages.
  * Fully theme-aware for light/dark mode.
  */
-import { createContext, useContext, useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect } from 'react'
 import { useApp } from '../../context/AppContext'
 
 // ── ICONS ─────────────────────────────────────────────────────────────────────
@@ -110,10 +110,32 @@ export const Btn = ({ variant = 'primary', children, style = {}, disabled, onCli
 // ── MODAL ─────────────────────────────────────────────────────────────────────
 export const Modal = ({ open, onClose, title, children, width = 520 }) => {
   const { theme } = useApp()
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    const previousOverflow = document.body.style.overflow
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose()
+    }
+
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open, onClose])
+
   if (!open) return null
 
   return (
     <div
+      className="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
       style={{
         position: 'fixed', inset: 0,
         background: theme.overlayBg,
@@ -123,6 +145,7 @@ export const Modal = ({ open, onClose, title, children, width = 520 }) => {
       onClick={onClose}
     >
       <div
+        className="modal-content"
         style={{
           background: theme.cardBg,
           borderRadius: 14, padding: 28, width: '100%', maxWidth: width,
@@ -133,11 +156,11 @@ export const Modal = ({ open, onClose, title, children, width = 520 }) => {
         }}
         onClick={e => e.stopPropagation()}
       >
-        <div style={{
+        <div className="modal-header" style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20
         }}>
           <h3 style={{ fontSize: 17, fontWeight: 700, color: theme.text }}>{title}</h3>
-          <button onClick={onClose}
+          <button onClick={onClose} aria-label="Close dialog"
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
               color: theme.textMuted, padding: 4
@@ -386,7 +409,7 @@ export const EmptyState = ({ icon = 'Package', title = 'No data', message = '' }
 export const KpiCard = ({ label, value, icon, trend, trendUp }) => {
   const { theme } = useApp()
   return (
-    <div style={{
+    <div className="page-header" style={{
       background: theme.kpiBg,
       border: `1px solid ${theme.kpiBorder}`,
       borderRadius: 12,
@@ -547,7 +570,7 @@ export const PageHeader = ({ title, subtitle, actions }) => {
       flexWrap: 'wrap',
       gap: 12,
     }}>
-      <div>
+      <div className="page-header-copy">
         <h1 style={{ fontSize: 20, fontWeight: 700, color: theme.text, margin: 0 }}>
           {title}
         </h1>
@@ -558,7 +581,7 @@ export const PageHeader = ({ title, subtitle, actions }) => {
         )}
       </div>
       {actions && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div className="page-header-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {actions}
         </div>
       )}
@@ -570,7 +593,7 @@ export const PageHeader = ({ title, subtitle, actions }) => {
 export const TableContainer = ({ children, style = {} }) => {
   const { theme } = useApp()
   return (
-    <div style={{
+    <div className="table-container" style={{
       background: theme.cardBg,
       border: `1px solid ${theme.border}`,
       borderRadius: 12,

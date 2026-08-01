@@ -114,7 +114,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page settings-page">
       <h2 style={{ fontSize:18, fontWeight:700, color:theme.text, marginBottom:20 }}>Settings</h2>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }} className="grid-mobile-1">

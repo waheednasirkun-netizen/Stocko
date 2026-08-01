@@ -7,7 +7,7 @@ export default function PurchaseOrders() {
   const { purchaseOrders, updatePOStatus, suppliers, theme, user, showToast } = useApp()
   const sorted = useMemo(() => [...purchaseOrders].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0)), [purchaseOrders])
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page purchase-orders-page">
       <div style={{ marginBottom:20 }}>
         <h2 style={{ fontSize:18, fontWeight:700, color:theme.text }}>Purchase Orders</h2>
         <p style={{ fontSize:12, color:theme.textMuted }}>{purchaseOrders.length} orders</p>

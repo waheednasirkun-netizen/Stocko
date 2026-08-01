@@ -169,7 +169,7 @@ export default function RequestList() {
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page requests-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: theme.text }}>Request List</h2>

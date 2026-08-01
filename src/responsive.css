@@ -7,10 +7,14 @@
 html,
 body,
 #root,
-.app-shell,
-#main-content {
+.app-shell {
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+}
+
+#main-content {
+  width: auto;
   min-width: 0;
 }
 
@@ -115,6 +119,28 @@ body:has(.stocko-pos-modal) {
   min-width: 0;
 }
 
+.dashboard-main-grid,
+.dashboard-main-column,
+.dashboard-side-column,
+.dashboard-secondary-grid,
+.dashboard-main-grid > *,
+.dashboard-main-column > *,
+.dashboard-side-column > *,
+.dashboard-secondary-grid > *,
+.dashboard-chart-card,
+.dashboard-chart-frame {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.dashboard-chart-frame,
+.dashboard-chart-frame .recharts-responsive-container,
+.dashboard-chart-frame .recharts-wrapper,
+.dashboard-chart-frame svg {
+  max-width: 100%;
+}
+
 @media (max-width: 1180px) {
   .dashboard-grid {
     grid-template-columns: minmax(0, 1fr) !important;
@@ -146,6 +172,10 @@ body:has(.stocko-pos-modal) {
 }
 
 @media (max-width: 768px) {
+  body:has(#sidebar.open) {
+    overflow: hidden;
+  }
+
   #sidebar {
     height: 100dvh;
   }
@@ -193,12 +223,19 @@ body:has(.stocko-pos-modal) {
   }
 
   #mob-nav {
-    justify-content: flex-start !important;
-    gap: 2px;
-    padding: 6px 4px calc(6px + env(safe-area-inset-bottom)) !important;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    scrollbar-width: none;
+    position: fixed !important;
+    inset: auto 0 0 0 !important;
+    z-index: 90 !important;
+    display: flex !important;
+    align-items: stretch;
+    justify-content: stretch !important;
+    gap: 0;
+    width: 100%;
+    min-height: 64px;
+    padding: 5px 3px calc(5px + env(safe-area-inset-bottom, 0px)) !important;
+    overflow: hidden;
+    transform: none !important;
+    isolation: isolate;
   }
 
   #mob-nav::-webkit-scrollbar {
@@ -206,20 +243,48 @@ body:has(.stocko-pos-modal) {
   }
 
   #mob-nav .mob-nav-btn {
-    flex: 1 0 62px;
-    min-width: 62px;
-    min-height: 52px;
-    padding: 4px 3px !important;
+    flex: 1 1 0;
+    width: calc(100% / 6);
+    min-width: 0;
+    min-height: 54px;
+    padding: 4px 1px !important;
+    overflow: hidden;
+  }
+
+  #mob-nav .mob-nav-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+  }
+
+  #mob-nav .mob-nav-label {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  #mob-nav .mob-nav-btn.active {
+    background: rgba(37, 99, 235, 0.1) !important;
+  }
+
+  body.dark-mode #mob-nav .mob-nav-btn.active {
+    background: rgba(96, 165, 250, 0.14) !important;
   }
 
   #main-content {
-    padding-bottom: calc(70px + env(safe-area-inset-bottom)) !important;
+    padding-bottom: 0 !important;
   }
 
   .app-main {
     width: 100%;
     padding: 12px !important;
-    padding-bottom: calc(16px + env(safe-area-inset-bottom)) !important;
+    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)) !important;
     overflow-x: clip;
   }
 
@@ -245,6 +310,69 @@ body:has(.stocko-pos-modal) {
 
   .responsive-page h2 {
     overflow-wrap: anywhere;
+  }
+
+  .dashboard-main-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .dashboard-main-column,
+  .dashboard-side-column {
+    display: contents !important;
+  }
+
+  .dashboard-secondary-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 16px !important;
+  }
+
+  .dashboard-section-stock-trend { order: 1; }
+  .dashboard-secondary-grid { order: 2; }
+  .dashboard-section-pending { order: 3; }
+  .dashboard-section-inventory-health { order: 4; }
+  .dashboard-section-category { order: 5; }
+  .dashboard-section-low-stock { order: 6; }
+
+  .dashboard-chart-card,
+  .dashboard-section-inventory-health,
+  .dashboard-section-low-stock,
+  .dashboard-section-recent-activity {
+    padding: 16px !important;
+  }
+
+  .dashboard-section-pending {
+    min-width: 0;
+  }
+
+  .dashboard-chart-frame {
+    overflow: hidden;
+  }
+
+  .dashboard-stock-trend-frame {
+    height: 260px !important;
+  }
+
+  .dashboard-request-status-frame,
+  .dashboard-top-requested-frame {
+    height: 270px !important;
+  }
+
+  .dashboard-category-frame {
+    height: 240px !important;
+  }
+
+  .dashboard-section-inventory-health [style*="justify-content: space-between"],
+  .dashboard-section-low-stock [style*="justify-content: space-between"] {
+    gap: 12px;
+  }
+
+  .dashboard-section-low-stock [style*="justify-content: space-between"] > span:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .dashboard-section-low-stock [style*="justify-content: space-between"] > span:last-child {
+    flex-shrink: 0;
   }
 
   .responsive-page [style*="minmax(340px"],

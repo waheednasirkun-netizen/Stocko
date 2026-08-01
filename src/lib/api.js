@@ -1178,6 +1178,22 @@ export const posApi = {
     return { data, error }
   },
 
+  // Address-only update. The narrow signature and branch filter prevent this
+  // customer workflow from changing identity, contact, or balance fields.
+  async updateCustomerAddress(id, branchId, address) {
+    if (!id || !branchId) {
+      return { data: null, error: new Error('Customer and branch are required') }
+    }
+    const { data, error } = await supabase
+      .from('customers')
+      .update({ address })
+      .eq('id', id)
+      .eq('branch_id', branchId)
+      .select()
+      .single()
+    return { data, error }
+  },
+
   // Delete customer
   async deleteCustomer(id) {
     const { error } = await supabase

@@ -355,7 +355,7 @@ export default function CustomerLedger() {
   )
 
   return (
-    <div style={{ padding: '24px', background: colors.bg, minHeight: '100vh', fontFamily: fontStack }}>
+    <div className="responsive-page customer-ledger-page" style={{ padding: '24px', background: colors.bg, minHeight: '100dvh', fontFamily: fontStack }}>
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
         marginBottom: '20px', flexWrap: 'wrap', gap: '14px'
@@ -420,7 +420,7 @@ export default function CustomerLedger() {
           {searchQuery ? 'No customers match your search.' : 'No customers found for this branch yet.'}
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
+        <div className="customer-ledger-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
           {filteredCustomers.map(customer => {
             const balance = customerBalances[customer.id] || { total: 0, paid: 0, due: 0 }
             const hasDue = balance.due > 0

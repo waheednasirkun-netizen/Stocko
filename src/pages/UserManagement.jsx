@@ -428,7 +428,7 @@ export default function UserManagement() {
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page users-page">
       {/* ── Header ── */}
       <div style={{
         display: 'flex',

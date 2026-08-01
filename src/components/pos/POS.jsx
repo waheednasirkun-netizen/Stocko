@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useApp } from '../../context/AppContext'
 import { supabase } from '../../lib/supabase'
+import { posApi } from '../../lib/api'
 import { Ic } from '../ui'
 
 /**
@@ -494,6 +495,7 @@ export default function POS() {
 
   // Modals
   const [showCustomerModal, setShowCustomerModal] = useState(false)
+  const [showAddressModal, setShowAddressModal] = useState(false)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [showAuthModal, setShowAuthModal] = useState(false)
   const [showHistoryModal, setShowHistoryModal] = useState(false)
@@ -509,6 +511,9 @@ export default function POS() {
   const [pendingOrders, setPendingOrders] = useState([])
   const [cancelledOrders, setCancelledOrders] = useState([])
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', email: '' })
+  const [customerAddress, setCustomerAddress] = useState('')
+  const [addressError, setAddressError] = useState('')
+  const [addressSaving, setAddressSaving] = useState(false)
   const [customerHistory, setCustomerHistory] = useState([])
 
   // Payment modal state
@@ -983,6 +988,60 @@ export default function POS() {
       showToast('error', 'Failed', err.message)
     }
   }
+
+  const openAddressEditor = () => {
+    if (!selectedCustomer?.id) return
+    setCustomerAddress(selectedCustomer.address || '')
+    setAddressError('')
+    setShowAddressModal(true)
+  }
+
+  const closeAddressEditor = useCallback(() => {
+    if (addressSaving) return
+    setShowAddressModal(false)
+    setAddressError('')
+  }, [addressSaving])
+
+  const saveCustomerAddress = async () => {
+    if (!selectedCustomer?.id || !branchId || addressSaving) return
+    setAddressSaving(true)
+    setAddressError('')
+    try {
+      const address = customerAddress.trim()
+      const { data, error } = await posApi.updateCustomerAddress(
+        selectedCustomer.id,
+        branchId,
+        address
+      )
+      if (error) throw error
+
+      const updatedCustomer = data || { ...selectedCustomer, address }
+      setCustomers(previous => previous.map(customer => (
+        customer.id === updatedCustomer.id ? updatedCustomer : customer
+      )))
+      setSelectedCustomer(updatedCustomer)
+      setShowAddressModal(false)
+      showToast('success', 'Address updated', `${updatedCustomer.name}'s address was saved`)
+    } catch (error) {
+      setAddressError(error?.message || 'Unable to update the address')
+    } finally {
+      setAddressSaving(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!showAddressModal) return undefined
+    const previousOverflow = document.body.style.overflow
+    const handleKeyDown = event => {
+      if (event.key === 'Escape' && !addressSaving) closeAddressEditor()
+    }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [showAddressModal, addressSaving, closeAddressEditor])
 
   const insertOrderWithFallback = async (corePayload, optionalPayload) => {
     let response = await supabase
@@ -1885,7 +1944,7 @@ export default function POS() {
   }
 
   return (
-    <div className="stocko-pos-shell animate-fade-in" style={{
+    <div className="stocko-pos-shell animate-fade-in responsive-page pos-page" style={{
       display: 'flex',
       flexDirection: 'column',
       width: '100%',
@@ -2648,17 +2707,52 @@ export default function POS() {
                 </div>
 
                 {selectedCustomer && (
-                  <div style={{
+                  <div className="stocko-pos-customer-summary" style={{
                     fontSize: '11px',
                     color: colors.textMuted,
                     marginTop: '7px',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '5px',
+                    gap: '6px',
+                    flexWrap: 'wrap',
                   }}>
                     <Ic n="User" size={12} />
                     <strong style={{ color: colors.textSecondary }}>{selectedCustomer.name}</strong>
+                    {selectedCustomer.id && (
+                      <button
+                        type="button"
+                        onClick={openAddressEditor}
+                        aria-label={`Edit address for ${selectedCustomer.name}`}
+                        style={{
+                          marginLeft: 'auto',
+                          padding: '5px 8px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          border: `1px solid ${colors.border}`,
+                          borderRadius: '7px',
+                          background: colors.bgInput,
+                          color: colors.primary,
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Ic n="Edit" size={12} />
+                        Edit address
+                      </button>
+                    )}
                     {selectedCustomer.phone && <span>· {selectedCustomer.phone}</span>}
+                    {selectedCustomer.address && (
+                      <span style={{
+                        width: '100%',
+                        paddingLeft: '17px',
+                        overflowWrap: 'anywhere',
+                        lineHeight: 1.45,
+                      }}>
+                        {selectedCustomer.address}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
@@ -4542,6 +4636,173 @@ export default function POS() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Address-only customer editor */}
+      {showAddressModal && selectedCustomer?.id && (
+        <div
+          className="responsive-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="customer-address-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: theme?.overlayBg || 'rgba(15, 23, 42, 0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1100,
+            padding: '16px',
+          }}
+          onClick={closeAddressEditor}
+        >
+          <div
+            className="stocko-pos-modal responsive-modal-card address-only-modal"
+            style={{
+              width: '100%',
+              maxWidth: '500px',
+              background: colors.bgModal,
+              border: `1px solid ${colors.border}`,
+              borderRadius: '14px',
+              boxShadow: colors.shadowLg,
+              overflow: 'hidden',
+            }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div style={{
+              padding: '18px 20px',
+              borderBottom: `1px solid ${colors.border}`,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: '12px',
+            }}>
+              <div>
+                <h3 id="customer-address-title" style={{
+                  margin: '0 0 4px',
+                  color: colors.textPrimary,
+                  fontSize: '17px',
+                }}>
+                  Edit customer address
+                </h3>
+                <p style={{ margin: 0, color: colors.textMuted, fontSize: '12px' }}>
+                  {selectedCustomer.name}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeAddressEditor}
+                disabled={addressSaving}
+                aria-label="Close address editor"
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  flexShrink: 0,
+                  border: 'none',
+                  borderRadius: '8px',
+                  background: colors.bgHover,
+                  color: colors.textMuted,
+                  cursor: addressSaving ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <Ic n="X" size={17} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px' }}>
+              <label htmlFor="customer-address" style={{
+                display: 'block',
+                marginBottom: '7px',
+                color: colors.textSecondary,
+                fontSize: '12px',
+                fontWeight: 700,
+              }}>
+                Address
+              </label>
+              <textarea
+                id="customer-address"
+                autoFocus
+                rows={5}
+                maxLength={500}
+                value={customerAddress}
+                onChange={event => setCustomerAddress(event.target.value)}
+                placeholder="Enter the customer's address"
+                style={{
+                  width: '100%',
+                  minHeight: '120px',
+                  padding: '12px',
+                  resize: 'vertical',
+                  border: `1px solid ${addressError ? colors.danger : colors.border}`,
+                  borderRadius: '9px',
+                  background: colors.bgInput,
+                  color: colors.textPrimary,
+                  fontSize: '14px',
+                  lineHeight: 1.5,
+                  outline: 'none',
+                }}
+              />
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: '12px',
+                marginTop: '6px',
+                color: colors.textMuted,
+                fontSize: '11px',
+              }}>
+                <span>Only the address field will be changed.</span>
+                <span>{customerAddress.length}/500</span>
+              </div>
+              {addressError && (
+                <p role="alert" style={{ margin: '10px 0 0', color: colors.danger, fontSize: '12px' }}>
+                  {addressError}
+                </p>
+              )}
+            </div>
+
+            <div className="modal-footer-actions" style={{
+              padding: '14px 20px',
+              borderTop: `1px solid ${colors.border}`,
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '10px',
+            }}>
+              <button
+                type="button"
+                onClick={closeAddressEditor}
+                disabled={addressSaving}
+                style={{
+                  padding: '10px 16px',
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: '8px',
+                  background: colors.bgPage,
+                  color: colors.textSecondary,
+                  fontWeight: 700,
+                  cursor: addressSaving ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveCustomerAddress}
+                disabled={addressSaving}
+                style={{
+                  padding: '10px 16px',
+                  border: 'none',
+                  borderRadius: '8px',
+                  background: colors.primary,
+                  color: '#fff',
+                  fontWeight: 700,
+                  cursor: addressSaving ? 'not-allowed' : 'pointer',
+                  opacity: addressSaving ? 0.65 : 1,
+                }}
+              >
+                {addressSaving ? 'Saving…' : 'Save address'}
+              </button>
             </div>
           </div>
         </div>

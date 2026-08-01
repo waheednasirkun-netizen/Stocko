@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, memo, useRef } from "react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, Legend
+  LineChart, Line, Legend, LabelList
 } from "recharts";
 import { useApp } from "../context/AppContext";
 import { Ic, Card, EmptyState, Btn } from "../components/ui";
@@ -41,6 +41,57 @@ const STATUS_COLORS = {
   Good: { bg: "#D1FAE5", color: "#065F46", dot: "#22C55E" },
   "Low Stock": { bg: "#FEF3C7", color: "#92400E", dot: "#F59E0B" },
   "Out of Stock": { bg: "#FEE2E2", color: "#991B1B", dot: "#EF4444" },
+};
+
+const useMediaQuery = (query) => {
+  const [matches, setMatches] = useState(() => (
+    typeof window !== "undefined" && window.matchMedia(query).matches
+  ));
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [query]);
+
+  return matches;
+};
+
+const MobileAxisTick = ({ x, y, payload, fill = "#64748B", maxChars = 18 }) => {
+  const value = String(payload?.value || "");
+  const words = value.split(" ");
+  const lines = [];
+  let current = "";
+
+  words.forEach(word => {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= maxChars || current.length === 0) {
+      current = candidate;
+    } else if (lines.length === 0) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = `${current} ${word}`;
+    }
+  });
+  if (current) lines.push(current);
+
+  const visibleLines = lines.slice(0, 2);
+  if (lines.length > 2 && visibleLines[1]) {
+    visibleLines[1] = `${visibleLines[1].slice(0, Math.max(1, maxChars - 1))}…`;
+  }
+
+  return (
+    <text x={x - 6} y={y} textAnchor="end" fill={fill} fontSize="10">
+      {visibleLines.map((line, index) => (
+        <tspan key={line} x={x - 6} dy={index === 0 ? (visibleLines.length > 1 ? -4 : 3) : 12}>
+          {line}
+        </tspan>
+      ))}
+    </text>
+  );
 };
 
 /* ═══════════════════════════════════════════════════════════
@@ -221,6 +272,7 @@ export default function Dashboard() {
 
   const [timeRange, setTimeRange] = useState("7d");
   const [mounted, setMounted] = useState(false);
+  const isPhone = useMediaQuery("(max-width: 640px)");
 
   useEffect(() => { setMounted(true); }, []);
 
@@ -433,7 +485,7 @@ export default function Dashboard() {
   const noBranchSelected = !currentBranch && !isLoadingBranchData
 
   return (
-    <div className="animate-fade-in" style={{ maxWidth: 1440, margin: "0 auto" }}>
+    <div className="animate-fade-in responsive-page dashboard-page" style={{ maxWidth: 1440, margin: "0 auto" }}>
       {/* ═══════════════════════════════════════════════════
             HEADER / WELCOME
       ═══════════════════════════════════════════════════ */}
@@ -750,13 +802,13 @@ export default function Dashboard() {
           <div style={{
             display: "grid", gridTemplateColumns: "1fr 340px", gap: 20,
             marginBottom: 20, padding: "0 4px"
-          }} className="dashboard-grid">
+          }} className="dashboard-grid dashboard-main-grid">
 
             {/* LEFT COLUMN */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div className="dashboard-main-column" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
               {/* Stock Trend Chart */}
-              <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
+              <Card className="dashboard-chart-card dashboard-section-stock-trend" style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                   <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
                     <Ic n="Activity" size={18} color={theme.text} /> Stock Movement Trend
@@ -770,7 +822,7 @@ export default function Dashboard() {
                     </span>
                   </div>
                 </div>
-                <div style={{ width: "100%", height: 280 }}>
+                <div className="dashboard-chart-frame dashboard-stock-trend-frame" style={{ width: "100%", height: 280 }}>
                   <ResponsiveContainer>
                     <AreaChart data={stockTrendData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                       <defs>
@@ -798,18 +850,25 @@ export default function Dashboard() {
               </Card>
 
               {/* Bottom Row: Request Status + Top Items */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+              <div className="dashboard-secondary-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
                 {/* Request Status */}
-                <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
+                <Card className="dashboard-chart-card dashboard-section-request-status" style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
                   <h2 style={{ margin: "0 0 18px 0", fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
                     <Ic n="BarChart" size={18} color={theme.text} /> Request Status
                   </h2>
-                  <div style={{ width: "100%", height: 220 }}>
+                  <div className="dashboard-chart-frame dashboard-request-status-frame" style={{ width: "100%", height: 220 }}>
                     <ResponsiveContainer>
-                      <BarChart data={requestStatusData} layout="vertical" margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
+                      <BarChart data={requestStatusData} layout="vertical" margin={{ top: 0, right: isPhone ? 34 : 20, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke={theme.border} horizontal={false} />
                         <XAxis type="number" tick={{ fontSize: 11, fill: theme.textMuted }} axisLine={false} tickLine={false} />
-                        <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: theme.text }} axisLine={false} tickLine={false} width={120} />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          tick={isPhone ? <MobileAxisTick fill={theme.text} maxChars={13}/> : { fontSize: 11, fill: theme.text }}
+                          axisLine={false}
+                          tickLine={false}
+                          width={isPhone ? 104 : 120}
+                        />
                         <Tooltip contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12, color: theme.text }} />
                         <Bar dataKey="value" radius={[0, 8, 8, 0]} barSize={24}>
                           {requestStatusData.map((entry, index) => (
@@ -820,6 +879,7 @@ export default function Dashboard() {
                               entry.name === "Rejected" ? COLORS.danger : COLORS.purple
                             } />
                           ))}
+                          <LabelList dataKey="value" position="right" fill={theme.textMuted} fontSize={10}/>
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -827,26 +887,59 @@ export default function Dashboard() {
                 </Card>
 
                 {/* Top Requested Items */}
-                <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
+                <Card className="dashboard-chart-card dashboard-section-top-requested" style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
                   <h2 style={{ margin: "0 0 18px 0", fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
                     <Ic n="TrendingUp" size={18} color={theme.text} /> Top Requested
                   </h2>
-                  <div style={{ width: "100%", height: 220 }}>
-                    <ResponsiveContainer>
-                      <BarChart data={topRequestedData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={theme.border} vertical={false} />
-                        <XAxis dataKey="name" tick={{ fontSize: 10, fill: theme.textMuted }} axisLine={false} tickLine={false} angle={-25} textAnchor="end" height={45} />
-                        <YAxis tick={{ fontSize: 11, fill: theme.textMuted }} axisLine={false} tickLine={false} />
-                        <Tooltip contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12, color: theme.text }} />
-                        <Bar dataKey="value" radius={[8, 8, 0, 0]} fill={COLORS.primary} barSize={28} />
-                      </BarChart>
-                    </ResponsiveContainer>
+                  <div className="dashboard-chart-frame dashboard-top-requested-frame" style={{ width: "100%", height: 220 }}>
+                    {topRequestedData.length === 0 ? (
+                      <EmptyState icon="BarChart" title="No requested items" message="Requested items will appear here." />
+                    ) : (
+                      <ResponsiveContainer>
+                        <BarChart
+                          data={topRequestedData}
+                          layout={isPhone ? "vertical" : "horizontal"}
+                          margin={isPhone
+                            ? { top: 5, right: 34, left: 0, bottom: 0 }
+                            : { top: 12, right: 10, left: -10, bottom: 0 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke={theme.border} vertical={!isPhone} horizontal={isPhone} />
+                          {isPhone ? (
+                            <>
+                              <XAxis type="number" tick={{ fontSize: 10, fill: theme.textMuted }} axisLine={false} tickLine={false} />
+                              <YAxis
+                                type="category"
+                                dataKey="name"
+                                width={112}
+                                tick={<MobileAxisTick fill={theme.textMuted} maxChars={16}/>}
+                                axisLine={false}
+                                tickLine={false}
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <XAxis dataKey="name" tick={{ fontSize: 10, fill: theme.textMuted }} axisLine={false} tickLine={false} angle={-25} textAnchor="end" height={45} />
+                              <YAxis tick={{ fontSize: 11, fill: theme.textMuted }} axisLine={false} tickLine={false} />
+                            </>
+                          )}
+                          <Tooltip contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12, color: theme.text }} />
+                          <Bar
+                            dataKey="value"
+                            radius={isPhone ? [0, 8, 8, 0] : [8, 8, 0, 0]}
+                            fill={COLORS.primary}
+                            barSize={isPhone ? 22 : 28}
+                          >
+                            <LabelList dataKey="value" position={isPhone ? "right" : "top"} fill={theme.textMuted} fontSize={10}/>
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
                   </div>
                 </Card>
               </div>
 
               {/* Pending Requests Table */}
-              <Card style={{ padding: 0, borderRadius: 14, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
+              <Card className="dashboard-section-pending" style={{ padding: 0, borderRadius: 14, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
                 <div style={{ padding: "20px 24px", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
                     <Ic n="Clock" size={18} color={theme.text} /> Pending Requests
@@ -906,10 +999,10 @@ export default function Dashboard() {
             </div>
 
             {/* RIGHT COLUMN */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div className="dashboard-side-column" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
               {/* Inventory Health */}
-              <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
+              <Card className="dashboard-section-inventory-health" style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
                 <h2 style={{ margin: "0 0 18px 0", fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
                   <Ic n="Heart" size={18} color={theme.text} /> Inventory Health
                 </h2>
@@ -935,23 +1028,27 @@ export default function Dashboard() {
               </Card>
 
               {/* Category Distribution */}
-              <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
+              <Card className="dashboard-chart-card dashboard-section-category" style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
                 <h2 style={{ margin: "0 0 18px 0", fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
                   <Ic n="PieChart" size={18} color={theme.text} /> By Category
                 </h2>
-                <div style={{ width: "100%", height: 220 }}>
-                  <ResponsiveContainer>
-                    <PieChart>
-                      <Pie data={categoryData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={45} paddingAngle={3} label={({ name, percent }) => `${(percent * 100).toFixed(0)}%`}>
-                        {categoryData.map((entry, index) => (
-                          <Cell key={index} fill={[COLORS.primary, COLORS.success, COLORS.warning, COLORS.purple, COLORS.teal][index % 5]} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12, color: theme.text }} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                <div className="dashboard-chart-frame dashboard-category-frame" style={{ width: "100%", height: 220 }}>
+                  {categoryData.length === 0 ? (
+                    <EmptyState icon="PieChart" title="No category data" message="Inventory categories will appear here." />
+                  ) : (
+                    <ResponsiveContainer>
+                      <PieChart>
+                        <Pie data={categoryData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={isPhone ? 72 : 80} innerRadius={isPhone ? 40 : 45} paddingAngle={3} label={({ percent }) => `${(percent * 100).toFixed(0)}%`}>
+                          {categoryData.map((entry, index) => (
+                            <Cell key={index} fill={[COLORS.primary, COLORS.success, COLORS.warning, COLORS.purple, COLORS.teal][index % 5]} />
+                          ))}
+                        </Pie>
+                        <Tooltip contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12, color: theme.text }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )}
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px 14px", marginTop: 8, justifyContent: "center" }}>
+                <div className="dashboard-category-legend" style={{ display: "flex", flexWrap: "wrap", gap: "8px 14px", marginTop: 8, justifyContent: "center" }}>
                   {categoryData.map((cat, i) => (
                     <div key={cat.name} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: theme.textMuted }}>
                       <span style={{ width: 8, height: 8, borderRadius: 2, background: [COLORS.primary, COLORS.success, COLORS.warning, COLORS.purple, COLORS.teal][i % 5] }} />
@@ -962,9 +1059,9 @@ export default function Dashboard() {
               </Card>
 
               {/* Low Stock Alerts */}
-              <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
+              <Card className="dashboard-section-low-stock" style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}` }}>
                 <h2 style={{ margin: "0 0 14px 0", fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
-                  <Ic n="AlertTriangle" size={18} color={COLORS.danger} /> Low Stock
+                  <Ic n="AlertTriangle" size={18} color={COLORS.danger} /> Low Stock Alert
                 </h2>
                 {lowStock.length === 0 && criticalStock.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "20px 0" }}>
@@ -1000,7 +1097,7 @@ export default function Dashboard() {
           {/* ═══════════════════════════════════════════════════
                 ACTIVITY TIMELINE
           ═══════════════════════════════════════════════════ */}
-          <Card style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}`, marginBottom: 20, margin: "0 4px 20px 4px" }}>
+          <Card className="dashboard-section-recent-activity" style={{ padding: 24, borderRadius: 14, border: `1px solid ${theme.border}`, marginBottom: 20, margin: "0 4px 20px 4px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
               <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
                 <Ic n="Clock" size={18} color={theme.text} /> Recent Activity

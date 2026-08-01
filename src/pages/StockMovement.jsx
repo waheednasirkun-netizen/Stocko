@@ -531,7 +531,7 @@ export default function StockMovement() {
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page stock-movement-page">
       {/* Header */}
       <div style={{
         display: 'flex',

@@ -34,7 +34,7 @@ export default function ProcurementRequests() {
   )
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page procurement-page">
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
         <h2 style={{ fontSize:18, fontWeight:700, color:theme.text }}>Procurement Requests</h2>
         <Btn variant="primary" onClick={() => setShowModal(true)}><Ic n="Plus" size={14} color="white"/> New Request</Btn>

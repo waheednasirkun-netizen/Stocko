@@ -16,7 +16,7 @@ export default function InventoryExpenses() {
     </div>
   )
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page expenses-page">
       <h2 style={{ fontSize:18, fontWeight:700, color:theme.text, marginBottom:20 }}>Inventory Expenses</h2>
       <Card style={{ padding:0, overflow:'hidden' }}>
         {sorted.length === 0

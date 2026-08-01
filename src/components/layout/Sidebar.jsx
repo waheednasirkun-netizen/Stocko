@@ -121,9 +121,9 @@ export default function Sidebar() {
           )}
         </div>
 
-        <nav style={{
+        <nav className="sidebar-nav" aria-label="Primary navigation" style={{
           padding: '12px 8px', overflowY: 'auto', flex: 1,
-          height: 'calc(100vh - 160px)'
+          height: 'calc(100dvh - 160px)'
         }}>
           {visible.map(item => {
             const active = tab === item.key

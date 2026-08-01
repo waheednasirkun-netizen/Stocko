@@ -671,7 +671,7 @@ export default function Reports() {
   };
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page reports-page">
       {/* ═══════════════════════════════════════
             HEADER
       ═══════════════════════════════════════ */}
@@ -973,7 +973,7 @@ export default function Reports() {
             CHARTS (context-aware)
       ═══════════════════════════════════════ */}
       {reportType === "stock" && (
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 18 }}>
+        <div className="reports-chart-grid" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 18 }}>
           {/* Stock Trend */}
           <Card style={{ padding: 22, borderRadius: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -1029,7 +1029,7 @@ export default function Reports() {
       )}
 
       {reportType === "requests" && (
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 18 }}>
+        <div className="reports-chart-grid" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 18 }}>
           {/* Request Status Bar Chart */}
           <Card style={{ padding: 22, borderRadius: 14 }}>
             <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
@@ -1079,7 +1079,7 @@ export default function Reports() {
       )}
 
       {reportType === "inventory" && (
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 18 }}>
+        <div className="reports-chart-grid" style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 18, marginBottom: 18 }}>
           {/* Category Bar Chart */}
           <Card style={{ padding: 22, borderRadius: 14 }}>
             <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>
@@ -1183,7 +1183,7 @@ export default function Reports() {
             BOTTOM ROW: STOCK ACTIVITIES + TOP ITEMS
       ═══════════════════════════════════════ */}
       {reportType === "stock" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 20 }}>
+        <div className="reports-activity-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 20 }}>
           {/* Stock In Activity */}
           <Card style={{ padding: 22, borderRadius: 14 }}>
             <h2 style={{ margin: "0 0 16px 0", fontSize: 15, fontWeight: 700, color: theme.text, display: "flex", alignItems: "center", gap: 8 }}>

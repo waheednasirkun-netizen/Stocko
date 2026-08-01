@@ -66,7 +66,7 @@ export default function Header() {
   }
 
   return (
-    <header style={{
+    <header className="app-header" style={{
       position: 'sticky', top: 0, zIndex: 40,
       background: theme.cardBg,
       borderBottom: `1px solid ${theme.border}`,
@@ -78,6 +78,8 @@ export default function Header() {
       <button
         onClick={() => setSidebar(p => !p)}
         className="hide-desktop"
+        aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
+        aria-expanded={sidebarOpen}
         style={{
           background: 'none', border: 'none', cursor: 'pointer',
           color: theme.textMuted, padding: 6, display: 'none'
@@ -102,6 +104,7 @@ export default function Header() {
           transition: 'background 0.15s'
         }}
         title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+        aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
       >
         <Ic n={dark ? 'Sun' : 'Moon'} size={18}/>
       </button>
@@ -111,6 +114,8 @@ export default function Header() {
         <button
           onClick={handleNotifClick}
           className="header-notif-btn"
+          aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+          aria-expanded={showNotifs}
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
             color: theme.textMuted, padding: 6, position: 'relative',
@@ -280,6 +285,8 @@ export default function Header() {
       <div ref={profileRef} id="header-profile" style={{ position: 'relative' }}>
         <button
           onClick={() => setShowProfile(p => !p)}
+          aria-label="Open profile menu"
+          aria-expanded={showProfile}
           style={{
             display: 'flex', alignItems: 'center', gap: 8, background: 'none',
             border: 'none', cursor: 'pointer', padding: '4px 8px', borderRadius: 8
@@ -300,7 +307,7 @@ export default function Header() {
           </div>
         </button>
         {showProfile && (
-          <div style={{
+          <div className="profile-dropdown" style={{
             position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 200,
             background: theme.cardBg, border: `1px solid ${theme.border}`,
             borderRadius: 12, boxShadow: theme.shadowLg, zIndex: 200, overflow: 'hidden'

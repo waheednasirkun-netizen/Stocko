@@ -39,7 +39,7 @@ export default function Suppliers() {
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page suppliers-page">
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
         <h2 style={{ fontSize:18, fontWeight:700, color:theme.text }}>Suppliers</h2>
         {canManage && <Btn variant="primary" onClick={openCreate}><Ic n="Plus" size={14} color="white"/> Add Supplier</Btn>}

@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useApp } from './context/AppContext'
-import { ToastContainer, LoadingScreen } from './components/ui'
-import { ConfirmProvider } from './components/ui'
+import { ToastContainer, LoadingScreen, ConfirmProvider, Ic } from './components/ui'
 import Sidebar  from './components/layout/Sidebar'
 import Header   from './components/layout/Header'
 import Login    from './pages/Login'
@@ -46,38 +45,27 @@ const PAGES = {
 }
 
 const MOB_TABS = [
-  { key: 'pos',                  icon: '🛒', label: 'POS'      },
-  { key: 'dashboard',          icon: '🏠', label: 'Home'     },
-  { key: 'inventory',          icon: '📦', label: 'Stock'    },
-  { key: 'demands',            icon: '📋', label: 'Demands'  },
-  { key: 'fulfillment-center', icon: '✅', label: 'Fulfill'  },
-  { key: 'stock-movement',     icon: '🔄', label: 'Movement' },
+  { key: 'pos',                icon: 'ShoppingCart',   label: 'POS'      },
+  { key: 'dashboard',          icon: 'LayoutDashboard', label: 'Home'     },
+  { key: 'inventory',          icon: 'Package',        label: 'Stock'    },
+  { key: 'demands',            icon: 'ClipboardList',  label: 'Demands'  },
+  { key: 'fulfillment-center', icon: 'CheckCircle',    label: 'Fulfill'  },
+  { key: 'stock-movement',     icon: 'ArrowLeftRight', label: 'Movement' },
 ]
-
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768)
-
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth <= 768)
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
-  }, [])
-
-  return isMobile
-}
 
 function MobileBottomNav() {
   const { tab, setTab, theme } = useApp()
   return (
-    <nav id="mob-nav" style={{
-      position: 'fixed', bottom: 0, left: 0, right: 0,
+    <nav id="mob-nav" aria-label="Primary mobile navigation" style={{
       background: theme.cardBg || '#ffffff',
       borderTop: `1px solid ${theme.border || '#e2e8f0'}`,
-      display: 'flex', justifyContent: 'space-around', alignItems: 'center',
-      padding: '8px 0', zIndex: 100, boxShadow: '0 -2px 10px rgba(0,0,0,0.05)',
+      boxShadow: '0 -2px 10px rgba(0,0,0,0.05)',
     }}>
       {MOB_TABS.map(t => (
         <button key={t.key}
+          className={`mob-nav-btn${tab === t.key ? ' active' : ''}`}
+          aria-label={t.label}
+          aria-current={tab === t.key ? 'page' : undefined}
           onClick={() => setTab(t.key)}
           style={{
             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
@@ -87,8 +75,10 @@ function MobileBottomNav() {
             transition: 'all 0.15s',
           }}
         >
-          <span style={{ fontSize: 20 }}>{t.icon}</span>
-          <span>{t.label}</span>
+          <span className="mob-nav-icon" aria-hidden="true">
+            <Ic n={t.icon} size={20}/>
+          </span>
+          <span className="mob-nav-label">{t.label}</span>
         </button>
       ))}
     </nav>
@@ -153,8 +143,6 @@ function AppContent() {
     user, tab, sidebarOpen, theme, toasts, dismissToast,
     systemEnabled, loading, dataLoaded, authReady, dark,
   } = useApp()
-
-  const isMobile = useIsMobile()
 
   useEffect(() => {
     if (dark) {
@@ -224,7 +212,7 @@ function AppContent() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: theme.bg || '#f8fafc' }}>
+    <div className="app-shell" style={{ minHeight: '100dvh', background: theme.bg || '#f8fafc' }}>
       {!systemEnabled && <SystemDisabledOverlay/>}
       <KeyboardShortcuts/>
       <Sidebar/>
@@ -236,7 +224,7 @@ function AppContent() {
           </div>
         </main>
       </div>
-      {isMobile && <MobileBottomNav/>}
+      <MobileBottomNav/>
       <ToastContainer toasts={toasts} onDismiss={dismissToast}/>
     </div>
   )

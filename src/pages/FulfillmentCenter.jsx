@@ -444,7 +444,7 @@ setTimeout(() => {
   const canFulfill = user?.role !== undefined
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in responsive-page fulfillment-page">
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
         <div>
@@ -543,7 +543,7 @@ setTimeout(() => {
           message={activeTab === TAB_PENDING ? 'All requests have been handled. Great work!' : 'Completed and rejected requests appear here.'}
         />
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
+        <div className="fulfillment-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
           {filteredItems.map(item => {
             const inv = getInvItem(item._displayName)
             const name = item._displayName
@@ -586,7 +586,7 @@ setTimeout(() => {
                 </div>
 
                 <div style={{ padding: '14px 16px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
+                  <div className="fulfillment-quantity-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
                     <div style={{ padding: '10px 12px', background: theme.bg, borderRadius: 8, textAlign: 'center' }}>
                       <div style={{ fontSize: 10, color: theme.textMuted, marginBottom: 3, fontWeight: 600, letterSpacing: 0.5 }}>REQUESTED</div>
                       <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{fmtNum(requested)} <span style={{ fontSize: 11, fontWeight: 500 }}>{item._unit}</span></div>
