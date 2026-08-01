@@ -1,0 +1,533 @@
+/*
+ * Stocko responsive layer
+ * Keeps the existing visual system while making shared shells, data views,
+ * forms, and dialogs adapt consistently across phones, tablets, and laptops.
+ */
+
+html,
+body,
+#root,
+.app-shell,
+#main-content {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+body:has(.modal-overlay),
+body:has(.responsive-modal-overlay),
+body:has(.confirm-overlay) {
+  overflow: hidden;
+}
+
+body:has(.stocko-pos-modal) {
+  overflow: hidden;
+}
+
+.app-header,
+.app-page,
+.app-page > *,
+.responsive-page,
+.responsive-page > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.responsive-page {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.responsive-page img,
+.responsive-page svg,
+.responsive-modal-card img,
+.responsive-modal-card svg {
+  max-width: 100%;
+}
+
+.responsive-page [style*="display: flex"] > *,
+.responsive-page [style*="display:flex"] > * {
+  min-width: 0;
+}
+
+.responsive-page input,
+.responsive-page select,
+.responsive-page textarea,
+.modal-content input,
+.modal-content select,
+.modal-content textarea,
+.responsive-modal-card input,
+.responsive-modal-card select,
+.responsive-modal-card textarea {
+  max-width: 100%;
+}
+
+.app-page [style*="overflow-x"],
+.app-page [style*="overflowX"],
+.table-container {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.responsive-page div[style*="overflow-x: auto"],
+.responsive-page div[style*="overflow-x:auto"] {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sidebar-nav {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.header-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.responsive-modal-overlay {
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.responsive-modal-card {
+  width: 100%;
+  max-width: min(680px, calc(100vw - 32px));
+}
+
+.responsive-form-actions,
+.receipt-modal-actions {
+  flex-wrap: wrap;
+}
+
+.dashboard-list-grid {
+  min-width: 0;
+}
+
+@media (max-width: 1180px) {
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .dashboard-grid > * {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 1024px) {
+  .reports-chart-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .reports-activity-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .responsive-form-grid-three {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .dashboard-secondary-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 768px) {
+  #sidebar {
+    height: 100dvh;
+  }
+
+  #sidebar.open {
+    width: min(84vw, 288px);
+  }
+
+  #mob-overlay.active {
+    display: block;
+    touch-action: none;
+  }
+
+  .app-header {
+    height: 56px !important;
+    padding: 0 10px !important;
+    gap: 4px !important;
+  }
+
+  .app-header > button,
+  .app-header .header-notif-btn,
+  .header-profile-button {
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
+  }
+
+  .header-title {
+    font-size: 15px !important;
+  }
+
+  .notif-dropdown {
+    position: fixed !important;
+    inset: 64px 10px auto 10px !important;
+    width: auto !important;
+    max-height: calc(100dvh - 82px) !important;
+  }
+
+  .profile-dropdown {
+    position: fixed !important;
+    top: 64px !important;
+    right: 10px !important;
+    left: auto !important;
+    width: min(260px, calc(100vw - 20px)) !important;
+  }
+
+  #mob-nav {
+    justify-content: flex-start !important;
+    gap: 2px;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom)) !important;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  #mob-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  #mob-nav .mob-nav-btn {
+    flex: 1 0 62px;
+    min-width: 62px;
+    min-height: 52px;
+    padding: 4px 3px !important;
+  }
+
+  #main-content {
+    padding-bottom: calc(70px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .app-main {
+    width: 100%;
+    padding: 12px !important;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom)) !important;
+    overflow-x: clip;
+  }
+
+  .app-page {
+    width: 100%;
+  }
+
+  .responsive-page-header,
+  .page-header {
+    align-items: flex-start !important;
+    flex-wrap: wrap !important;
+    gap: 12px !important;
+  }
+
+  .page-header-copy,
+  .page-header-actions {
+    min-width: 0;
+  }
+
+  .responsive-page h1 {
+    font-size: clamp(20px, 6vw, 24px) !important;
+  }
+
+  .responsive-page h2 {
+    overflow-wrap: anywhere;
+  }
+
+  .responsive-page [style*="minmax(340px"],
+  .responsive-page [style*="minmax(320px"],
+  .responsive-page [style*="minmax(300px"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .responsive-form-grid,
+  .responsive-form-grid-three {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .responsive-form-actions > button,
+  .responsive-form-actions > .btn {
+    flex: 1 1 120px !important;
+    justify-content: center;
+  }
+
+  .table-container {
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    background-image:
+      linear-gradient(to right, transparent, transparent),
+      linear-gradient(to right, rgba(15, 23, 42, 0.08), transparent 14px);
+    background-position: right center;
+    background-repeat: no-repeat;
+  }
+
+  .table-container > table,
+  .responsive-page [style*="overflow-x"] > table,
+  .responsive-page [style*="overflowX"] > table,
+  .responsive-page div[style*="overflow-x: auto"] > table,
+  .responsive-page div[style*="overflow-x:auto"] > table,
+  .responsive-modal-card table {
+    width: max-content !important;
+    min-width: 640px;
+  }
+
+  .modal-overlay,
+  .responsive-modal-overlay {
+    align-items: flex-start !important;
+    padding: 8px !important;
+    min-height: 100dvh;
+  }
+
+  .modal-content,
+  .responsive-modal-card {
+    width: 100% !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+    margin: auto 0;
+    padding: 18px !important;
+    overflow-y: auto !important;
+    border-radius: 12px !important;
+  }
+
+  .modal-header {
+    position: sticky;
+    top: -18px;
+    z-index: 2;
+    padding: 4px 0 10px;
+    background: inherit;
+  }
+
+  .modal-header button {
+    flex: 0 0 40px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .confirm-overlay {
+    padding: 8px;
+  }
+
+  .confirm-box {
+    max-width: calc(100vw - 16px);
+    padding: 22px 18px 18px;
+  }
+
+  .system-disabled-card {
+    padding: 28px 20px !important;
+  }
+
+  .login-page-shell {
+    min-height: 100dvh !important;
+    padding: 12px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  .login-card {
+    padding: 32px 24px 26px !important;
+    border-radius: 18px !important;
+  }
+
+  .dashboard-page [style*="minmax(300px"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .reports-activity-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .fulfillment-grid,
+  .customer-ledger-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .responsive-page [style*="minmax(280px"],
+  .responsive-page [style*="minmax(260px"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .fulfillment-page input[placeholder*="Search"] {
+    width: 100% !important;
+  }
+
+  .customer-ledger-page {
+    min-height: auto !important;
+    padding: 0 !important;
+  }
+
+  .customer-ledger-search {
+    width: 100%;
+  }
+
+  .customer-ledger-search input {
+    width: 100% !important;
+  }
+
+  .customer-ledger-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  .receipt-modal-card {
+    overflow: hidden !important;
+  }
+
+  .receipt-modal-card > div:nth-child(2) {
+    overflow: auto !important;
+  }
+
+  .receipt-modal-actions {
+    padding: 12px !important;
+  }
+
+  .stocko-pos-modal {
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+    overflow: auto !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .responsive-page-header > *,
+  .page-header > *,
+  .page-header-actions {
+    width: 100%;
+  }
+
+  .responsive-page-header > button,
+  .responsive-page-header > div:last-child button,
+  .page-header-actions > button {
+    justify-content: center;
+  }
+
+  .reports-page [style*="minmax(200px"],
+  .dashboard-page [style*="minmax(200px"],
+  .inventory-page [style*="minmax(170px"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .fulfillment-quantity-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .checkout-modal .responsive-form-actions,
+  .modal-footer-actions {
+    flex-direction: column;
+  }
+
+  .modal-footer-actions > button {
+    width: 100%;
+  }
+
+  .responsive-page [style*="justify-content: space-between"] {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 430px) {
+  .app-main {
+    padding: 10px !important;
+  }
+
+  .responsive-page-header {
+    margin-bottom: 16px !important;
+  }
+
+  .responsive-form-actions {
+    gap: 8px !important;
+  }
+
+  .responsive-form-actions > button {
+    min-width: 0 !important;
+  }
+
+  .customer-ledger-summary-grid {
+    gap: 6px !important;
+  }
+
+  .customer-ledger-summary-grid > div {
+    padding: 8px 4px !important;
+  }
+
+  .customer-ledger-summary-grid > div > div:first-child {
+    font-size: 9px !important;
+  }
+
+  .customer-ledger-summary-grid > div > div:last-child {
+    font-size: 12px !important;
+  }
+
+  .toast {
+    width: calc(100vw - 20px);
+    min-width: 0;
+    max-width: none;
+  }
+
+  #toast-container {
+    inset: 66px 10px auto 10px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .reports-page [style*="minmax(200px"],
+  .dashboard-page [style*="minmax(200px"],
+  .inventory-page [style*="minmax(170px"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .confirm-actions {
+    flex-direction: column-reverse;
+  }
+
+  .confirm-actions button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@supports not (overflow: clip) {
+  @media (max-width: 768px) {
+    .app-main {
+      overflow-x: hidden;
+    }
+  }
+}
+
+@media (orientation: landscape) and (max-height: 540px) {
+  .modal-overlay,
+  .responsive-modal-overlay {
+    align-items: flex-start !important;
+  }
+
+  .modal-content,
+  .responsive-modal-card {
+    max-height: calc(100dvh - 12px) !important;
+  }
+}
+
+@media print {
+  body {
+    overflow: visible !important;
+  }
+
+  .responsive-modal-card,
+  .receipt-modal-card {
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+}
