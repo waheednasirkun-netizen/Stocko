@@ -48,8 +48,7 @@ function CategorySelect({ value, onChange, options, theme, error, disabled, onOp
         style={{
           width: '100%',
           padding: '10px 12px',
-          border: `1px solid Pkr
-          {error ? '#ef4444' : theme.inputBorder}`,
+          border: `1px solid ${error ? '#ef4444' : theme.inputBorder}`,
           borderRadius: 8,
           fontSize: 14,
           background: (disabled || noCategories) ? '#f3f4f6' : theme.inputBg,
@@ -72,7 +71,7 @@ function CategorySelect({ value, onChange, options, theme, error, disabled, onOp
           left: 0,
           right: 0,
           background: theme.inputBg || '#ffffff',
-          border: `1px solid Pkr{theme.inputBorder}`,
+          border: `1px solid ${theme.inputBorder}`,
           borderRadius: 8,
           boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
           zIndex: 50,
@@ -81,7 +80,7 @@ function CategorySelect({ value, onChange, options, theme, error, disabled, onOp
           flexDirection: 'column',
           overflow: 'hidden'
         }}>
-          <div style={{ padding: '8px 10px', borderBottom: `1px solid Pkr{theme.inputBorder}` }}>
+          <div style={{ padding: '8px 10px', borderBottom: `1px solid ${theme.inputBorder}` }}>
             <div style={{ position: 'relative' }}>
               <Ic n="Search" size={13} color="#9ca3af" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }} />
               <input
@@ -93,7 +92,7 @@ function CategorySelect({ value, onChange, options, theme, error, disabled, onOp
                 style={{
                   width: '100%',
                   padding: '7px 10px 7px 28px',
-                  border: `1px solid Pkr{theme.inputBorder}`,
+                  border: `1px solid ${theme.inputBorder}`,
                   borderRadius: 6,
                   fontSize: 13,
                   background: theme.inputBg,
@@ -148,7 +147,7 @@ function CategorySelect({ value, onChange, options, theme, error, disabled, onOp
           </div>
 
           {onOpenAddCategory && (
-            <div style={{ padding: '8px 10px', borderTop: `1px solid Pkr{theme.inputBorder}`, background: '#fafafa' }}>
+            <div style={{ padding: '8px 10px', borderTop: `1px solid ${theme.inputBorder}`, background: '#fafafa' }}>
               <button
                 type="button"
                 onClick={() => { setOpen(false); setQuery(''); onOpenAddCategory() }}
@@ -230,11 +229,11 @@ function AddCategoryModal({ open, onClose, onSave, theme, existingCategories, ed
     // Check for duplicate (case-insensitive) — branch-scoped via existingCategories prop
     const lowerExisting = (existingCategories || []).map(c => c.toLowerCase())
     if (!isEditMode && lowerExisting.includes(trimmed.toLowerCase())) {
-      setError(`Category "Pkr{trimmed}" already exists`)
+      setError(`Category "${trimmed}" already exists`)
       return
     }
     if (isEditMode && trimmed.toLowerCase() !== editingCategory.toLowerCase() && lowerExisting.includes(trimmed.toLowerCase())) {
-      setError(`Category "Pkr{trimmed}" already exists`)
+      setError(`Category "${trimmed}" already exists`)
       return
     }
     setSaving(true)
@@ -247,7 +246,7 @@ function AddCategoryModal({ open, onClose, onSave, theme, existingCategories, ed
       }
       onClose()
     } catch (err) {
-      setError(err.message || `Failed to Pkr{isEditMode ? 'update' : 'create'} category`)
+      setError(err.message || `Failed to ${isEditMode ? 'update' : 'create'} category`)
     } finally {
       setSaving(false)
     }
@@ -297,7 +296,7 @@ function AddCategoryModal({ open, onClose, onSave, theme, existingCategories, ed
               style={{
                 width: '100%',
                 padding: '10px 12px',
-                border: `1px solid Pkr{error ? '#ef4444' : theme.inputBorder}`,
+                border: `1px solid ${error ? '#ef4444' : theme.inputBorder}`,
                 borderRadius: 8,
                 fontSize: 14,
                 background: theme.inputBg,
@@ -348,7 +347,10 @@ export default function ItemTemplates() {
   const [showAddCategory, setShowAddCategory] = useState(false)
   const [editingCategory, setEditingCategory] = useState(null)
 
-  const canManage = userCan('createTemplate', user?.role)
+  /* ─── CHANGE: allow store keeper to manage templates & categories ─── */
+  const normalizedRole = user?.role?.toLowerCase().replace(/[-_\s]/g, '')
+  const canManage = userCan('createTemplate', user?.role) || normalizedRole === 'storekeeper'
+  /* ─────────────────────────────────────────────────────────────────── */
 
   const categoryNames = useMemo(() => {
     if (!categories) return []
@@ -465,7 +467,7 @@ export default function ItemTemplates() {
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search templates…"
-            style={{ width: '100%', padding: '8px 10px 8px 28px', border: `1px solid Pkr{theme.inputBorder}`, borderRadius: 7, fontSize: 13, background: theme.inputBg, color: theme.text }}
+            style={{ width: '100%', padding: '8px 10px 8px 28px', border: `1px solid ${theme.inputBorder}`, borderRadius: 7, fontSize: 13, background: theme.inputBg, color: theme.text }}
           />
         </div>
       </Card>
@@ -495,7 +497,7 @@ export default function ItemTemplates() {
                 )}
                 {t.default_price > 0 && (
                   <span style={{ fontSize: 11, padding: '2px 8px', background: '#dcfce7', color: '#166534', borderRadius: 6, fontWeight: 500 }}>
-                    Pkr{fmtNum(t.default_price)}
+                    ${fmtNum(t.default_price)}
                   </span>
                 )}
               </div>
@@ -511,7 +513,7 @@ export default function ItemTemplates() {
             type="text"
             value={form.name}
             onChange={e => set('name', e.target.value)}
-            style={{ width: '100%', padding: '10px 12px', border: `1px solid Pkr{errors.name ? '#ef4444' : theme.inputBorder}`, borderRadius: 8, fontSize: 14, background: theme.inputBg, color: theme.text }}
+            style={{ width: '100%', padding: '10px 12px', border: `1px solid ${errors.name ? '#ef4444' : theme.inputBorder}`, borderRadius: 8, fontSize: 14, background: theme.inputBg, color: theme.text }}
           />
           {errors.name && <div style={{ marginTop: 4, fontSize: 12, color: '#ef4444' }}>{errors.name}</div>}
         </div>
@@ -537,7 +539,7 @@ export default function ItemTemplates() {
             <select
               value={form.unit}
               onChange={e => set('unit', e.target.value)}
-              style={{ width: '100%', padding: '10px 12px', border: `1px solid Pkr{theme.inputBorder}`, borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
+              style={{ width: '100%', padding: '10px 12px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
             >
               {allUnits.map(u => <option key={u}>{u}</option>)}
             </select>
@@ -551,13 +553,13 @@ export default function ItemTemplates() {
               min="0"
               step="0.01"
               placeholder="0"
-              style={{ width: '100%', padding: '10px 12px', border: `1px solid Pkr{theme.inputBorder}`, borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
+              style={{ width: '100%', padding: '10px 12px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
             />
           </div>
         </div>
 
         <div style={{ marginBottom: 18 }}>
-          <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>default_price (Optional)</label>
+          <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 5 }}>Default Price (Optional)</label>
           <input
             type="number"
             value={form.default_price}
@@ -565,7 +567,7 @@ export default function ItemTemplates() {
             min="0"
             step="0.01"
             placeholder="e.g. 9.99"
-            style={{ width: '100%', padding: '10px 12px', border: `1px solid Pkr{theme.inputBorder}`, borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
+            style={{ width: '100%', padding: '10px 12px', border: `1px solid ${theme.inputBorder}`, borderRadius: 8, fontSize: 13, background: theme.inputBg, color: theme.text }}
           />
         </div>
 

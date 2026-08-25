@@ -68,7 +68,14 @@ export default function Sidebar() {
 
   const visible = navItems.filter(item => {
     const check = permChecks[item.perm]
-    const hasPermission = check ? check() : true
+    let hasPermission = check ? check() : true
+
+    /* ── CHANGE: grant store keeper access to item templates ── */
+    const normalizedRole = userRole?.toLowerCase().replace(/[-_\s]/g, '')
+    if (item.key === 'item-templates' && normalizedRole === 'storekeeper') {
+      hasPermission = true
+    }
+    /* ─────────────────────────────────────────────────────── */
 
     if (!hasPermission) return false
 
