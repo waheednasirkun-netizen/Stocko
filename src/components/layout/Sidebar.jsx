@@ -1,0 +1,215 @@
+import { useApp } from '../../context/AppContext'
+import { ROLE_COLORS } from '../../lib/constants'
+import { Ic } from '../ui'
+
+const navItems = [
+  { key: 'dashboard',            label: 'Dashboard',           icon: 'LayoutDashboard',  perm: 'canAccessDashboard' },
+  { key: 'pos',                  label: 'Point of Sale',       icon: 'ShoppingCart',     perm: 'canAccessPOS' },
+  { key: 'inventory',            label: 'Inventory',           icon: 'Package',          perm: 'canAccessInventory' },
+  { key: 'item-templates',       label: 'Item Templates',      icon: 'Box',              perm: 'canAccessItemTemplates' },
+  { key: 'stock-movement',       label: 'Stock Movement',      icon: 'ArrowLeftRight',   perm: 'canAccessStockMovement' },
+  { key: 'demands',              label: 'Demands',             icon: 'ClipboardList',    perm: 'canAccessDemands' },
+  { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle',      perm: 'canAccessFulfillment' },
+  { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'Wallet',           perm: 'canAccessLedger' },
+  { key: 'complaints',            label: 'Complaints',           icon: 'MessageSquareWarning', perm: 'canAccessComplaints' },
+  { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
+  { key: 'reports',              label: 'Reports',             icon: 'BarChart2',        perm: 'canViewReports' },
+  { key: 'user-management',      label: 'Users',               icon: 'UserPlus',         perm: 'canAccessUserManagement' },
+  { key: 'activity-log',         label: 'Activity Log',        icon: 'Activity',         perm: 'canAccessActivityLog' },
+  { key: 'settings',             label: 'Settings',            icon: 'Settings',         perm: 'canAccessSettings' },
+]
+
+const BRANCH_LOCKED_PAGES = ['pos', 'customer-ledger']
+const ALLOWED_BRANCHES = [
+  '6c647f96-4160-45c7-85c9-445be42887b1',
+  '8b2e0fdb-5337-4aa1-81f2-63d23af7dbbc',
+]
+
+export default function Sidebar() {
+  const {
+    user, tab, setTab, sidebarOpen, setSidebar, dark, theme,
+    userRole,
+    canAccessPOS,
+    canAccessDashboard,
+    canAccessInventory,
+    canAccessItemTemplates,
+    canAccessStockMovement,
+    canAccessDemands,
+    canAccessFulfillment,
+    canAccessSuppliers,
+    canAccessLedger,
+    canAccessComplaints,
+    canViewReports,
+    canAccessUserManagement,
+    canAccessActivityLog,
+    canAccessSettings,
+  } = useApp()
+
+  const go = (key) => {
+    setTab(key)
+    if (window.innerWidth <= 768) setSidebar(false)
+  }
+
+  const permChecks = {
+    canAccessPOS,
+    canAccessDashboard,
+    canAccessInventory,
+    canAccessItemTemplates,
+    canAccessStockMovement,
+    canAccessDemands,
+    canAccessFulfillment,
+    canAccessSuppliers,
+    canAccessLedger,
+    canAccessComplaints,
+    canViewReports,
+    canAccessUserManagement,
+    canAccessActivityLog,
+    canAccessSettings,
+  }
+
+  const userBranch = user?.branch_id ?? user?.branchId ?? null
+
+  const visible = navItems.filter(item => {
+    const check = permChecks[item.perm]
+    let hasPermission = check ? check() : true
+
+    /* ── CHANGE: grant store keeper access to item templates ── */
+    const normalizedRole = userRole?.toLowerCase().replace(/[-_\s]/g, '')
+    if (item.key === 'item-templates' && normalizedRole === 'storekeeper') {
+      hasPermission = true
+    }
+    /* ─────────────────────────────────────────────────────── */
+
+    if (!hasPermission) return false
+
+    if (BRANCH_LOCKED_PAGES.includes(item.key)) {
+      return ALLOWED_BRANCHES.includes(userBranch)
+    }
+
+    return true
+  })
+
+  const roleColor = ROLE_COLORS[userRole] || theme.textMuted
+
+  return (
+    <>
+      <div
+        id="mob-overlay"
+        className={sidebarOpen && window.innerWidth <= 768 ? 'active' : ''}
+        onClick={() => setSidebar(false)}
+      />
+
+      <div
+        id="sidebar"
+        className={sidebarOpen ? 'open' : 'closed'}
+        style={{
+          background: theme.cardBg,
+          borderRight: `1px solid ${theme.border}`
+        }}
+      >
+        <div style={{
+          padding: sidebarOpen ? '20px 16px 16px' : '20px 0 16px',
+          display: 'flex', alignItems: 'center', gap: 10,
+          justifyContent: sidebarOpen ? 'flex-start' : 'center',
+          borderBottom: `1px solid ${theme.border}`
+        }}>
+          <div style={{
+            width: 36, height: 36, background: '#2563eb', borderRadius: 10, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }}>
+            <Ic n="Package" size={20} color="white"/>
+          </div>
+          {sidebarOpen && (
+            <div>
+              <div className="sidebar-logo-text" style={{ fontWeight: 800, fontSize: 15, color: theme.text }}>
+                Stocko
+              </div>
+              <div className="sidebar-version" style={{ fontSize: 10, color: theme.textMuted }}>
+                v5 · Supabase
+              </div>
+            </div>
+          )}
+        </div>
+
+        <nav className="sidebar-nav" aria-label="Primary navigation" style={{
+          padding: '12px 8px', overflowY: 'auto', flex: 1,
+          height: 'calc(100dvh - 160px)'
+        }}>
+          {visible.map(item => {
+            const active = tab === item.key
+            return (
+              <button
+                key={item.key}
+                className="sidebar-item"
+                onClick={() => go(item.key)}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center',
+                  gap: 10, padding: sidebarOpen ? '9px 12px' : '9px 0',
+                  justifyContent: sidebarOpen ? 'flex-start' : 'center',
+                  borderRadius: 8, border: 'none', cursor: 'pointer', marginBottom: 2,
+                  background: active ? theme.navActive : 'transparent',
+                  color: active ? (dark ? '#60a5fa' : '#2563eb') : theme.textMuted,
+                  fontWeight: active ? 600 : 400, fontSize: 13,
+                  transition: 'all 0.15s',
+                }}
+              >
+                <Ic
+                  n={item.icon}
+                  size={18}
+                  color={active ? (dark ? '#60a5fa' : '#2563eb') : theme.textMuted}
+                />
+                {sidebarOpen && <span>{item.label}</span>}
+                {sidebarOpen && active && (
+                  <div style={{
+                    marginLeft: 'auto', width: 4, height: 4, borderRadius: '50%',
+                    background: dark ? '#60a5fa' : '#2563eb'
+                  }}/>
+                )}
+              </button>
+            )
+          })}
+        </nav>
+
+        {sidebarOpen && userRole && (
+          <div style={{
+            padding: '8px 12px',
+            borderTop: `1px solid ${theme.border}`,
+            fontSize: 11,
+            color: theme.textMuted,
+            textAlign: 'center',
+          }}>
+            <span style={{
+              display: 'inline-block',
+              padding: '3px 10px',
+              borderRadius: 10,
+              background: `${roleColor}20`,
+              color: roleColor,
+              fontWeight: 700,
+              fontSize: 11,
+              letterSpacing: 0.3,
+            }}>
+              {userRole}
+            </span>
+          </div>
+        )}
+
+        <div style={{ padding: 8, borderTop: `1px solid ${theme.border}` }}>
+          <button
+            className="sidebar-toggle-btn"
+            onClick={() => setSidebar(p => !p)}
+            style={{
+              width: '100%', padding: '8px', borderRadius: 8, border: 'none',
+              background: 'transparent', cursor: 'pointer', color: theme.textMuted,
+              display: 'flex', alignItems: 'center',
+              justifyContent: sidebarOpen ? 'flex-start' : 'center', gap: 8,
+              transition: 'background 0.15s'
+            }}
+          >
+            <Ic n={sidebarOpen ? 'X' : 'Menu'} size={18}/>
+            {sidebarOpen && <span style={{ fontSize: 12 }}>Collapse</span>}
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}

@@ -1,0 +1,244 @@
+/* ============================================================
+   DispatchReceipt.css
+   Professional Epson 80mm thermal printer receipt styles.
+   OPTIMIZED FOR THERMAL PRINTERS - High contrast, no gray tones.
+
+   Printable content width: 72mm
+   Paper size: 80mm
+   ============================================================ */
+
+@page {
+  size: 80mm auto;
+  margin: 0;
+}
+
+/* === Screen wrapper (hidden from print) === */
+.receipt-root {
+  display: none;
+}
+
+/* === Print styles === */
+@media print {
+
+  /* Hide everything on the page */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Show only the receipt and its children */
+  .receipt-root,
+  .receipt-root * {
+    visibility: visible;
+  }
+
+  /* Position receipt at top-left, fixed width */
+  .receipt-root {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Paper content area - 72mm wide, centered */
+  .receipt-paper {
+    width: 72mm;
+    margin: 0 auto;
+    padding: 3mm 0;
+    font-family: "Courier New", "Courier", monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    color: #000000;
+    background: #ffffff;
+    box-sizing: border-box;
+  }
+}
+
+/* === Screen preview (for debugging) === */
+@media screen {
+  .receipt-root {
+    display: block;
+    background: #e5e5e5;
+    padding: 20px;
+    min-height: 100vh;
+  }
+
+  .receipt-paper {
+    width: 72mm;
+    margin: 0 auto;
+    padding: 3mm;
+    font-family: "Courier New", "Courier", monospace;
+    font-size: 12px;
+    line-height: 1.35;
+    color: #000000;
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    box-sizing: border-box;
+  }
+}
+
+/* === Text alignment utilities === */
+.receipt-center {
+  text-align: center;
+}
+
+.receipt-bold {
+  font-weight: bold;
+}
+
+/* === Store Header === */
+.receipt-store-name {
+  font-size: 18px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  margin-bottom: 2px;
+  color: #000000;
+}
+
+.receipt-subtitle {
+  font-size: 11px;
+  font-weight: bold;
+  color: #000000;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+/* === Separator line === */
+.receipt-separator {
+  text-align: center;
+  font-size: 12px;
+  font-weight: bold;
+  margin: 6px 0;
+  color: #000000;
+  letter-spacing: 0;
+}
+
+/* === Tables === */
+.receipt-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 0;
+}
+
+.receipt-table td {
+  padding: 2px 0;
+  vertical-align: top;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #000000;
+}
+
+.receipt-table .receipt-label {
+  width: 45%;
+  color: #000000;
+  text-align: left;
+  word-break: break-word;
+  font-weight: normal;
+}
+
+.receipt-table .receipt-value {
+  width: 55%;
+  font-weight: bold;
+  text-align: right;
+  word-break: break-word;
+  color: #000000;
+}
+
+/* === Section Title === */
+.receipt-section-title {
+  text-align: center;
+  font-weight: bold;
+  font-size: 13px;
+  margin: 4px 0;
+  color: #000000;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* === Highlight rows (This Dispatch) === */
+.receipt-highlight-label {
+  color: #000000;
+  font-weight: bold;
+}
+
+.receipt-highlight-value {
+  color: #000000;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+/* === Status Box === */
+.receipt-status-box {
+  border: 3px double #000000;
+  padding: 4px 6px;
+  text-align: center;
+  font-weight: bold;
+  font-size: 13px;
+  margin: 6px 0;
+  color: #000000;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.receipt-status-completed {
+  border: 3px double #000000;
+  color: #000000;
+}
+
+.receipt-status-partial {
+  border: 3px solid #000000;
+  color: #000000;
+}
+
+/* === Notes === */
+.receipt-notes {
+  font-size: 11px;
+  color: #000000;
+  word-break: break-word;
+  font-weight: normal;
+  margin: 4px 0;
+}
+
+/* === Barcode === */
+.receipt-barcode {
+  font-family: "Libre Barcode 39", "Code 39", "Courier New", monospace;
+  font-size: 32px;
+  text-align: center;
+  letter-spacing: 2px;
+  margin: 4px 0;
+  line-height: 1.1;
+  color: #000000;
+  font-weight: bold;
+}
+
+.receipt-barcode-text {
+  text-align: center;
+  font-size: 10px;
+  font-weight: bold;
+  color: #000000;
+  margin-bottom: 4px;
+  letter-spacing: 2px;
+}
+
+/* === Footer === */
+.receipt-footer {
+  text-align: center;
+  font-size: 10px;
+  font-weight: bold;
+  color: #000000;
+  margin-top: 4px;
+}
+
+.receipt-software-by {
+  font-size: 10px;
+  text-align: center;
+  font-weight: bold;
+  color: #000000;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 2px solid #000000;
+}

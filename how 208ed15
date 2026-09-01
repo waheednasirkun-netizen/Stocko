@@ -1,0 +1,259 @@
+// STOCKO POS — COMPACT BRANCH DISPATCH V2
+// Includes the restored New Customer action beside the destination selector.
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useApp } from '../../context/AppContext'
+import { supabase } from '../../lib/supabase'
+import { Ic } from '../ui'
+
+/**
+ * STOCKO POS — Store Edition (Light Theme)
+ * 
+ * ADJUSTED FOR STORE USE:
+ * ✓ Light theme as default
+ * ✓ Professional design (no emojis)
+ * ✓ Header tabs: Cancelled Orders, Reports, Pending Orders, New Order
+ * ✓ Search bar, customer select, new customer button only on New Order page
+ * ✓ History button shows customer order history
+ * ✓ Reports auto-show today's completed orders
+ * ✓ Payment modal with 4 options: Cash, Credit, Bank Transfer, Debit Card
+ * ✓ All paid orders go to customer ledger
+ * ✓ Manager auth required for cancellations
+ * 
+ * ACCESS CONTROL:
+ * - Cancelled Orders: Storekeeper, Admin, Manager, Developer
+ * - Reports: Admin, Manager, Developer only
+ * - Pending Orders: All authorized users
+ * - New Order: All authorized users
+ */
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CONSTANTS & HELPERS
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const now = () => new Date().toISOString()
+
+const PAYMENT_METHODS = {
+  CASH: 'cash',
+  CREDIT: 'credit',
+  BANK: 'bank_transfer',
+  DEBIT: 'debit_card',
+}
+
+const ORDER_STATUS = {
+  PENDING: 'pending',
+  COMPLETED: 'completed',
+  PAID: 'paid',
+  CREDIT: 'credit',
+  PARTIALLY_PAID: 'partially_paid',
+  CANCELLED: 'cancelled',
+}
+
+const PAYMENT_OPTIONS = [
+  { id: PAYMENT_METHODS.CASH, label: 'Cash', icon: 'DollarSign' },
+  { id: PAYMENT_METHODS.CREDIT, label: 'Credit', icon: 'FileText' },
+  { id: PAYMENT_METHODS.BANK, label: 'Bank Transfer', icon: 'ArrowLeftRight' },
+  { id: PAYMENT_METHODS.DEBIT, label: 'Debit Card', icon: 'CreditCard' },
+]
+
+const REPORT_STATUS_OPTIONS = [
+  { id: 'all', label: 'All statuses' },
+  { id: ORDER_STATUS.PENDING, label: 'Pending' },
+  { id: ORDER_STATUS.PARTIALLY_PAID, label: 'Partially paid' },
+  { id: ORDER_STATUS.PAID, label: 'Paid' },
+  { id: ORDER_STATUS.CREDIT, label: 'Credit' },
+  { id: ORDER_STATUS.CANCELLED, label: 'Cancelled' },
+]
+
+const ROLE_GROUPS = {
+  POS: ['developer', 'superadmin', 'admin', 'owner', 'manager', 'storekeeper', 'store keeper', 'staff', 'cashier'],
+  MANAGE: ['developer', 'superadmin', 'admin', 'owner', 'manager'],
+  REPORTS: ['developer', 'superadmin', 'admin', 'owner', 'manager'],
+}
+
+const normalizeRole = (role) => String(role || '').trim().toLowerCase()
+const safeNumber = (value, fallback = 0) => {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
+const getStock = (product) => Math.max(0, safeNumber(product?.quantity))
+
+// Extract sale price from both current and legacy inventory shapes.
+const extractSalePrice = (product) => {
+  if (!product) return 0
+
+  const price = safeNumber(
+    product?.sale_price ?? 
+    product?.selling_price ?? 
+    product?.default_price ?? 
+    product?.price ?? 
+    0
+  )
+
+  return Math.max(0, price)
+}
+
+const extractLinePrice = (item) => Math.max(
+  0,
+  safeNumber(item?.price ?? item?.sale_price ?? item?.selling_price)
+)
+
+const formatPrice = (value) => {
+  return new Intl.NumberFormat('en-PK', {
+    style: 'currency',
+    currency: 'PKR',
+    minimumFractionDigits: 2,
+  }).format(value)
+}
+
+const formatDateTime = (value) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString('en-PK', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const escapeHtml = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#039;')
+
+const csvCell = (value) => {
+  const text = String(value ?? '')
+  return `"${text.replaceAll('"', '""')}"`
+}
+
+const downloadTextFile = (filename, content, type = 'text/plain;charset=utf-8') => {
+  const blob = new Blob([content], { type })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}
+
+const orderReference = (order) => order?.invoice_no || order?.id?.slice(0, 8)?.toUpperCase() || 'N/A'
+const getPaymentMethod = (order) => (
+  order?.payment_type ||
+  order?.order_payments?.at?.(-1)?.method ||
+  order?.order_payments?.[0]?.method ||
+  null
+)
+const printReceipt = async (order, items, user, showToast) => {
+try {
+  const response = await fetch("http://127.0.0.1:3001/print", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      printer: "Counter",
+      order: {
+        invoice: orderReference(order),
+        customer: order.customer_name || "Walk-In",
+        cashier: order.created_by_name || user?.name || "",
+        payment: getPaymentMethod(order),
+        subtotal: safeNumber(order.subtotal),
+        discount: safeNumber(order.discount),
+        tax: safeNumber(order.tax),
+        total: safeNumber(order.total),
+      },
+      receipt: (items || []).map(item => ({
+        name: item.name,
+        qty: safeNumber(item.quantity),
+        price: extractLinePrice(item),
+      })),
+    }),
+  });
+
+  const result = await response.json();
+
+  if (!result.success) {
+    console.error("Print Failed:", result.error);
+    return;
+  }
+
+  console.log("Receipt Printed");
+
+} catch (err) {
+  console.error("Stocko Print Agent error:", err);
+}
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME COLOR PALETTE
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const baseColors = {
+  // Backgrounds
+  bgPage: '#f5f6fa',
+  bgCard: '#ffffff',
+  bgHeader: '#ffffff',
+  bgInput: '#ffffff',
+  bgModal: '#ffffff',
+  bgHover: '#f8f9fa',
+  bgDark: '#2c3e50',
+
+  // Borders
+  border: '#e0e0e0',
+  borderLight: '#eeeeee',
+  borderActive: '#2196f3',
+  borderHover: '#bdbdbd',
+
+  // Text
+  textPrimary: '#2c3e50',
+  textSecondary: '#546e7a',
+  textMuted: '#90a4ae',
+  textLight: '#b0bec5',
+  textWhite: '#ffffff',
+
+  // Accent colors
+  primary: '#2196f3',
+  primaryHover: '#1976d2',
+  primaryLight: '#e3f2fd',
+
+  success: '#4caf50',
+  successLight: '#e8f5e9',
+  danger: '#f44336',
+  dangerLight: '#ffebee',
+  warning: '#ff9800',
+  warningLight: '#fff3e0',
+  info: '#00bcd4',
+  infoLight: '#e0f7fa',
+
+  // Special
+  redText: '#e53935',
+  greenText: '#2e7d32',
+  goldText: '#f9a825',
+
+  // Table
+  tableHeader: '#f5f6fa',
+  tableRow: '#ffffff',
+  tableRowAlt: '#fafafa',
+  tableBorder: '#e0e0e0',
+
+  // Shadows
+  shadowSm: '0 1px 3px rgba(0,0,0,0.08)',
+  shadowMd: '0 4px 12px rgba(0,0,0,0.1)',
+  shadowLg: '0 8px 24px rgba(0,0,0,0.12)',
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MAIN POS COMPONENT
+   ══════════════════════════════════════════════════════════════════════════ */
+
+export default function POS() {
+  const {
+    user,
+    current

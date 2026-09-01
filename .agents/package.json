@@ -1,0 +1,11 @@
+{
+  "name": "printer-agent",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node printer-agent.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.9"
+  }
+}
