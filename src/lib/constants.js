@@ -121,7 +121,10 @@ export const lightTheme = {
   avatarKitchenBg: '#f3e8ff',  avatarKitchenText: '#7c3aed',
   avatarViewerBg: '#dbeafe',   avatarViewerText: '#1d4ed8',
   avatarDevBg: '#ede9fe',      avatarDevText: '#6d28d9',
+<<<<<<< HEAD
   avatarMasterBg: '#ccfbf1',   avatarMasterText: '#0f766e',
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 
   // Toast
   toastSuccessBg: '#dcfce7',   toastSuccessBorder: '#86efac',   toastSuccessText: '#166534',
@@ -214,7 +217,10 @@ export const darkTheme = {
   avatarKitchenBg: '#3b0764',  avatarKitchenText: '#d8b4fe',
   avatarViewerBg: '#1e3a5f',   avatarViewerText: '#93c5fd',
   avatarDevBg: '#2e1065',      avatarDevText: '#c4b5fd',
+<<<<<<< HEAD
   avatarMasterBg: '#134e4a',   avatarMasterText: '#99f6e4',
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 
   // Toast — Dark themed
   toastSuccessBg: '#064e3b',   toastSuccessBorder: '#16a34a',   toastSuccessText: '#86efac',
@@ -246,7 +252,10 @@ export const fmtShort = (n) => {
 // ─── ROLES ───────────────────────────────────────────────────────────────────
 export const ROLES = {
   DEVELOPER: 'Developer',
+<<<<<<< HEAD
   MASTER: 'Master',
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   ADMIN: 'Admin',
   MANAGER: 'Manager',
   CHIEF: 'Chief',
@@ -257,7 +266,11 @@ export const ROLES = {
 export const canAccessLedger = (role) =>
   [ROLES.ADMIN, ROLES.MANAGER, ROLES.CHIEF, ROLES.DEVELOPER].includes(role)
 // ALL_ROLES - Full list including Developer (for validation / role checks)
+<<<<<<< HEAD
 export const ALL_ROLES = ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer']
+=======
+export const ALL_ROLES = ['Developer', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer']
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 
 // ALL_ROLES_UI - Excludes Developer (for UI dropdowns where you can't create Developers)
 export const ALL_ROLES_UI = ['Admin', 'Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer']
@@ -266,7 +279,10 @@ export const ALL_ROLES_UI = ['Admin', 'Manager', 'Store Keeper', 'Kitchen Staff'
 export const hasRole = (userRole, role) => userRole === role
 export const hasAnyRole = (userRole, roles) => roles.includes(userRole)
 export const isDeveloper = (r) => r === ROLES.DEVELOPER
+<<<<<<< HEAD
 export const isMaster = (r) => r === ROLES.MASTER
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 export const isAdmin = (r) => r === ROLES.ADMIN
 export const isManager = (r) => r === ROLES.MANAGER
 export const isChief = (r) => r === ROLES.CHIEF
@@ -277,7 +293,10 @@ export const isViewer = (r) => r === ROLES.VIEWER
 // ─── Role Colors ───
 export const ROLE_COLORS = {
   'Developer': '#8b5cf6',      // Purple
+<<<<<<< HEAD
   'Master': '#0f766e',          // Teal
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   'Admin': '#3b82f6',          // Blue
   'Manager': '#f59e0b',        // Amber
   'Store Keeper': '#10b981',   // Emerald
@@ -288,7 +307,11 @@ export const ROLE_COLORS = {
 // ─── Permission helpers ───
 export const canCreateUsers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 export const canDeleteUsers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+<<<<<<< HEAD
 export const canAssignRoles = (r) => isDeveloper(r) || isAdmin(r)
+=======
+export const canAssignRoles = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 export const canApproveRequests = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 export const canRejectRequests = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 export const canFulfillRequests = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r)
@@ -302,7 +325,10 @@ export const canViewReports = (r) => isDeveloper(r) || isAdmin(r) || isManager(r
 export const canAccessSettings = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r)
 
 // ─── Page access helpers ───
+<<<<<<< HEAD
 export const canAccessComplaints = (r) => ['Developer','Master','Admin','Manager'].includes(r)
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 export const canAccessUserManagement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 export const canAccessSuppliers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 export const canAccessProcurement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
@@ -319,7 +345,10 @@ export const canAccessItemTemplates = (r) => isDeveloper(r) || isAdmin(r) || isM
 // ─── Sidebar visibility map ───
 export const SIDEBAR_PERMISSIONS = {
   'Dashboard': canAccessDashboard,
+<<<<<<< HEAD
   'Complaints': canAccessComplaints,
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   'Inventory': canAccessInventory,
   'Stock Movement': canAccessStockMovement,
   'Demands': canAccessDemands,

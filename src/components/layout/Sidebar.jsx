@@ -11,7 +11,10 @@ const navItems = [
   { key: 'demands',              label: 'Demands',             icon: 'ClipboardList',    perm: 'canAccessDemands' },
   { key: 'fulfillment-center',   label: 'Fulfillment',         icon: 'CheckCircle',      perm: 'canAccessFulfillment' },
   { key: 'customer-ledger',      label: 'Customer Ledger',     icon: 'Wallet',           perm: 'canAccessLedger' },
+<<<<<<< HEAD
   { key: 'complaints',            label: 'Complaints',           icon: 'MessageSquareWarning', perm: 'canAccessComplaints' },
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   { key: 'suppliers',            label: 'Suppliers',           icon: 'Users',            perm: 'canAccessSuppliers' },
   { key: 'reports',              label: 'Reports',             icon: 'BarChart2',        perm: 'canViewReports' },
   { key: 'user-management',      label: 'Users',               icon: 'UserPlus',         perm: 'canAccessUserManagement' },
@@ -38,7 +41,10 @@ export default function Sidebar() {
     canAccessFulfillment,
     canAccessSuppliers,
     canAccessLedger,
+<<<<<<< HEAD
     canAccessComplaints,
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
     canViewReports,
     canAccessUserManagement,
     canAccessActivityLog,
@@ -60,7 +66,10 @@ export default function Sidebar() {
     canAccessFulfillment,
     canAccessSuppliers,
     canAccessLedger,
+<<<<<<< HEAD
     canAccessComplaints,
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
     canViewReports,
     canAccessUserManagement,
     canAccessActivityLog,

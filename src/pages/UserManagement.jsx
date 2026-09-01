@@ -4,7 +4,18 @@ import { supabase } from '../lib/supabase'
 import { Ic, Btn, Modal, Card, StatusPill } from '../components/ui'
 import { useConfirm } from '../components/ui'
 
+<<<<<<< HEAD
 const BASE_ROLES = ['Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer']
+=======
+// Roles visible to ALL users (Developer hidden)
+const ROLES = [
+  'Admin',
+  'Manager',
+  'Store Keeper',
+  'Kitchen Staff',
+  'Viewer'
+]
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 
 export default function UserManagement() {
   const { users, setUsers, theme, user: currentUser, showToast } = useApp()
@@ -24,7 +35,10 @@ export default function UserManagement() {
     branch_id: ''
   })
   const [errors, setErrors] = useState({})
+<<<<<<< HEAD
   const [userStatusFilter, setUserStatusFilter] = useState('All')
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 
   // Branch management state (Developer only)
   const [showBranchModal, setShowBranchModal] = useState(false)
@@ -36,9 +50,12 @@ export default function UserManagement() {
   // Determine if current user is a Developer
   const isDeveloper = currentUser?.role === 'Developer'
   const canManageUsers = ['Developer', 'Admin', 'Manager'].includes(currentUser?.role)
+<<<<<<< HEAD
   // Only Developer may assign Master. Managers deliberately cannot assign Admin.
   const availableRoles = isDeveloper ? ['Master', 'Admin', ...BASE_ROLES] : currentUser?.role === 'Admin' ? ['Manager', 'Store Keeper', 'Kitchen Staff', 'Viewer'] : BASE_ROLES
   const roleOptions = editing && form.role && !availableRoles.includes(form.role) ? [form.role, ...availableRoles] : availableRoles
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 
   // Filter users by branch - Developers see all, others see only their branch
   const visibleUsers = !canManageUsers
@@ -47,12 +64,15 @@ export default function UserManagement() {
       ? users
       : users?.filter(u => u.branch_id === currentUser?.branch_id)
 
+<<<<<<< HEAD
   const filteredUsers = (visibleUsers || []).filter(u => {
     if (u._hidden) return false
     if (userStatusFilter === 'All') return true
     return String(u.status || 'Active').toLowerCase() === userStatusFilter.toLowerCase()
   })
 
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   // Fetch branches (needed for Developers and for branch management)
   useEffect(() => {
     if (isDeveloper) {
@@ -83,7 +103,11 @@ export default function UserManagement() {
       name: '',
       email: '',
       password: '',
+<<<<<<< HEAD
       role: availableRoles.includes('Store Keeper') ? 'Store Keeper' : (availableRoles[0] || 'Store Keeper'),
+=======
+      role: 'Store Keeper',
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
       status: 'Active',
       phone: '',
       branch_id: isDeveloper ? '' : (currentUser?.branch_id || '')
@@ -93,6 +117,7 @@ export default function UserManagement() {
   }
 
   const openEdit = (u) => {
+<<<<<<< HEAD
     if (currentUser?.role === 'Manager' && ['Admin','Master','Developer'].includes(u.role)) {
       showToast('error', 'Access denied', 'Managers cannot edit Admin, Master, or Developer accounts')
       return
@@ -101,6 +126,8 @@ export default function UserManagement() {
       showToast('error', 'Access denied', 'Admins cannot edit Master or Developer accounts')
       return
     }
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
     setEditing(u)
     setForm({
       name: u.name || '',
@@ -432,7 +459,11 @@ export default function UserManagement() {
         <Ic n="Shield" size={32} color={theme.danger || '#dc2626'} />
         <h2 style={{ marginTop: 12, color: theme.text }}>Access Denied</h2>
         <p style={{ marginTop: 6, color: theme.textMuted }}>
+<<<<<<< HEAD
           Only Developers, Admins, and Managers can manage users. Managers cannot assign Admin or Master; only Developers can assign Master.
+=======
+          Only Developers, Admins, and Managers can manage users.
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
         </p>
       </Card>
     )
@@ -454,7 +485,11 @@ export default function UserManagement() {
             User Management
           </h2>
           <p style={{ fontSize: 12, color: theme.textMuted }}>
+<<<<<<< HEAD
             {filteredUsers.length} users · Manage roles and permissions
+=======
+            {visibleUsers?.length || 0} users · Manage roles and permissions
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -469,6 +504,7 @@ export default function UserManagement() {
         </div>
       </div>
 
+<<<<<<< HEAD
       {/* ── User Filters ── */}
       <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:14 }}>
         <span style={{ fontSize:12, fontWeight:700, color:theme.text }}>Status:</span>
@@ -479,6 +515,8 @@ export default function UserManagement() {
         ))}
       </div>
 
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
       {/* ── User Cards ── */}
       <div style={{
         display: 'grid',
@@ -486,7 +524,11 @@ export default function UserManagement() {
         gap: 12
       }}>
         {visibleUsers && visibleUsers.length > 0 ? (
+<<<<<<< HEAD
           filteredUsers.map(u => (
+=======
+          visibleUsers.filter(u => !u._hidden).map(u => (
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
             <Card key={u.id} style={{
               padding: '16px 18px',
               transition: 'all 0.2s ease',
@@ -748,7 +790,11 @@ export default function UserManagement() {
                   outline: 'none',
                 }}
               >
+<<<<<<< HEAD
                 {roleOptions.map(r => (
+=======
+                {ROLES.map(r => (
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
                   <option key={r} value={r}>{r}</option>
                 ))}
               </select>

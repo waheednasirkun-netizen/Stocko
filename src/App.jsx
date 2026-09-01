@@ -19,8 +19,11 @@ import Reports from './pages/Reports'
 import InventoryExpenses from './pages/InventoryExpenses'
 import SettingsPage from './pages/SettingsPage'
 import CustomerLedger from './pages/CustomerLedger'
+<<<<<<< HEAD
 import Complaints from './pages/Complaints'
 import ComplaintPublic from './pages/ComplaintPublic'
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 import POS from './components/pos/POS'
 import NotFound from './pages/NotFound'
 import { userCan } from './lib/constants'
@@ -44,7 +47,10 @@ const PAGES = {
   'activity-log':         <ActivityLog/>,
   'settings':             <SettingsPage/>,
   'customer-ledger':      <CustomerLedger/>,
+<<<<<<< HEAD
   'complaints':            <Complaints/>,
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 }
 
 const MOB_TABS = [
@@ -54,7 +60,10 @@ const MOB_TABS = [
   { key: 'demands',            icon: 'ClipboardList',  label: 'Demands'  },
   { key: 'fulfillment-center', icon: 'CheckCircle',    label: 'Fulfill'  },
   { key: 'stock-movement',     icon: 'ArrowLeftRight', label: 'Movement' },
+<<<<<<< HEAD
   { key: 'complaints',          icon: 'MessageSquareWarning', label: 'Complaints' },
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 ]
 
 function MobileBottomNav() {
@@ -143,6 +152,7 @@ function KeyboardShortcuts() {
 }
 
 function AppContent() {
+<<<<<<< HEAD
   const app = useApp()
 
   // Public QR complaint form must work without a Stocko login.
@@ -153,6 +163,12 @@ function AppContent() {
     user, tab, sidebarOpen, theme, toasts, dismissToast,
     systemEnabled, loading, dataLoaded, authReady, dark,
   } = app
+=======
+  const {
+    user, tab, sidebarOpen, theme, toasts, dismissToast,
+    systemEnabled, loading, dataLoaded, authReady, dark,
+  } = useApp()
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 
   useEffect(() => {
     if (dark) {
@@ -173,7 +189,11 @@ function AppContent() {
     return <LoadingScreen message={`Loading ${user.branch_name ?? 'branch'} data…`}/>
   }
 
+<<<<<<< HEAD
   if (!user.branch_id && user.role !== 'Master') {
+=======
+  if (!user.branch_id) {
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
     return (
       <div style={{
         minHeight: '100vh', background: theme.bg || '#f8fafc',

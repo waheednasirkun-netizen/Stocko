@@ -19,7 +19,10 @@ const PAGE_TITLES = {
   'activity-log':         'Activity Log',
   'settings':             'Settings',
   'customer-ledger':      'Customer Ledger',
+<<<<<<< HEAD
   'complaints':            'Complaints & Feedback',
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 }
 
 export default function Header() {
@@ -50,7 +53,10 @@ export default function Header() {
     'Kitchen Staff':theme.avatarKitchenBg,
     'Viewer':       theme.avatarViewerBg,
     'Developer':    theme.avatarDevBg,
+<<<<<<< HEAD
     'Master':        theme.avatarMasterBg || '#ccfbf1',
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   }
 
   const avatarColor = {
@@ -60,7 +66,10 @@ export default function Header() {
     'Kitchen Staff':theme.avatarKitchenText,
     'Viewer':       theme.avatarViewerText,
     'Developer':    theme.avatarDevText,
+<<<<<<< HEAD
     'Master':        theme.avatarMasterText || '#0f766e',
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   }
 
   const handleNotifClick = () => {

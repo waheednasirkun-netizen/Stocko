@@ -15,7 +15,10 @@ const json = (body: Record<string, unknown>, status = 200) =>
 
 const MANAGER_ROLES = new Set(["Developer", "Admin", "Manager"]);
 const ASSIGNABLE_ROLES = new Set(["Admin", "Manager", "Store Keeper", "Kitchen Staff", "Viewer"]);
+<<<<<<< HEAD
 const MASTER_ROLE = "Master";
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
 const PROFILE_SELECT = "id, auth_id, email, name, full_name, role, status, phone, branch_id, created_at";
 
 serve(async (req: Request) => {
@@ -125,6 +128,7 @@ serve(async (req: Request) => {
     if (password.length < 6) {
       return json({ success: false, error: "Password must be at least 6 characters" }, 400);
     }
+<<<<<<< HEAD
     if (role === MASTER_ROLE && caller.role !== "Developer") {
       return json({ success: false, error: "Only a Developer can assign the Master role" }, 403);
     }
@@ -132,6 +136,9 @@ serve(async (req: Request) => {
       return json({ success: false, error: "Managers cannot assign the Admin role" }, 403);
     }
     if (!ASSIGNABLE_ROLES.has(role) && !(role === MASTER_ROLE && caller.role === "Developer")) {
+=======
+    if (!ASSIGNABLE_ROLES.has(role)) {
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
       return json({ success: false, error: "That role cannot be assigned from User Management" }, 400);
     }
     if (!["Active", "Inactive"].includes(status)) {

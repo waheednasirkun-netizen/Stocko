@@ -1,6 +1,10 @@
 import {
   ROLES, ALL_ROLES, ALL_ROLES_UI,
+<<<<<<< HEAD
   isAdmin, isManager, isChief, isStoreKeeper, isDeveloper, isMaster,
+=======
+  isAdmin, isManager, isChief, isStoreKeeper, isDeveloper,
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   hasRole, hasAnyRole,
   canCreateUsers, canDeleteUsers, canAssignRoles,
   canApproveRequests, canRejectRequests, canFulfillRequests,
@@ -11,7 +15,11 @@ import {
   canAccessPurchaseOrders, canAccessFinancials, canAccessInventory,
   canAccessStockMovement, canAccessFulfillment, canAccessDemands,
   canAccessDashboard, canAccessActivityLog, canAccessItemTemplates,
+<<<<<<< HEAD
   canAccessLedger, canAccessComplaints,
+=======
+  canAccessLedger,
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   SIDEBAR_PERMISSIONS,
 } from '../lib/constants'
 import { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react'
@@ -100,6 +108,7 @@ export function AppProvider({ children }) {
 
     const branchesList = []
 
+<<<<<<< HEAD
     // Master is global: load every branch so the existing branch selectors can be used
     // without weakening the branch isolation rules for other roles.
     if (userProfile?.role === 'Master') {
@@ -117,6 +126,8 @@ export function AppProvider({ children }) {
       }
     }
 
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
     // ── Method 1: Try branch_members table (multi-branch) ──
     try {
       const { data: memberships, error: memError } = await supabase
@@ -457,6 +468,7 @@ export function AppProvider({ children }) {
   }, [currentBranch?.id, fetchInventory, fetchRequests])
 
   // ═══════════════════════════════════════════════════════════════════════════
+<<<<<<< HEAD
   // DATABASE NOTIFICATIONS
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -514,6 +526,8 @@ export function AppProvider({ children }) {
   }, [user?.id])
 
   // ═══════════════════════════════════════════════════════════════════════════
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   // AUTH LISTENER
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -542,6 +556,7 @@ export function AppProvider({ children }) {
       }
 
       console.log('[Auth] authenticated:', restoredUser.email, 'authId:', session.user?.id, 'profileId:', restoredUser.id)
+<<<<<<< HEAD
 
       await loadUserRole(restoredUser)
 
@@ -559,6 +574,20 @@ export function AppProvider({ children }) {
         await loadAllDataRef.current(sessionUser)
       } else {
         setUser(restoredUser)
+=======
+      setUser(restoredUser)
+
+      await loadUserRole(restoredUser)
+
+      // NEW: Fetch user's branches and set default
+      const userBranches = await fetchUserBranchesRef.current(restoredUser.id, restoredUser)
+      if (userBranches.length > 0) {
+        // Set current branch to user's default or first available
+        const defaultBranch = userBranches.find(b => b.id === restoredUser.branch_id) || userBranches[0]
+        setCurrentBranch(defaultBranch)
+        await loadAllDataRef.current(restoredUser)
+      } else {
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
         showToast('warning', 'No Branches', 'You have not been assigned to any branches.')
       }
 
@@ -1308,7 +1337,10 @@ export function AppProvider({ children }) {
     canAccessActivityLog: () => canAccessActivityLog(userRole),
     canAccessItemTemplates: () => canAccessItemTemplates(userRole),
     canAccessLedger: () => canAccessLedger(userRole),
+<<<<<<< HEAD
     canAccessComplaints: () => canAccessComplaints(userRole),
+=======
+>>>>>>> d2e3d9009c0e6cb7ac19ef4ced08be3a5e9f7e47
   }
 
   return (
