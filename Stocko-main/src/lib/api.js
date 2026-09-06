@@ -120,80 +120,72 @@ async function buildUser(authUser) {
 export const authApi = {
   async login(email, password) {
     console.log('[api] authApi.login for:', email)
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
-    })
+
+    const { data: authData, error: authError } =
+      await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      })
 
     if (authError) {
       console.error('[api] Supabase Auth error:', authError.message)
+
       const msg = authError.message.toLowerCase()
+
       if (msg.includes('invalid') || msg.includes('not found')) {
-        return wrap(null, { message: 'Incorrect email or password.' })
+        return wrap(null, {
+          message: 'Incorrect email or password.',
+        })
       }
+
       if (msg.includes('confirmed')) {
-        return wrap(null, { message: 'Please confirm your email first.' })
+        return wrap(null, {
+          message: 'Please confirm your email first.',
+        })
       }
+
       if (msg.includes('many')) {
-        return wrap(null, { message: 'Too many attempts. Please wait.' })
+        return wrap(null, {
+          message: 'Too many attempts. Please wait.',
+        })
       }
+
       return wrap(null, authError)
     }
 
-    if (authData.session) {
-      await supabase.auth.setSession({
-        access_token:  authData.session.access_token,
-        refresh_token: authData.session.refresh_token,
-      })
-    }
+    // signInWithPassword() already establishes the Supabase session.
+    // Do NOT call setSession() again here.
 
     const { user, error: buildError } = await buildUser(authData.user)
+
     if (buildError) {
       await supabase.auth.signOut()
       return wrap(null, buildError)
     }
-    return wrap(user, null)
-  },
 
-  async userFromSession(session) {
-    if (!session?.user) {
-      console.log('[api] userFromSession: no session user')
-      return wrap(null, null)
-    }
-    const { user, error: buildError } = await buildUser(session.user)
-    if (buildError) return wrap(null, buildError)
-    return wrap(user, null)
-  },
-
-  async restoreSession() {
-    console.log('[api] restoreSession')
-    const { data: { session }, error } = await supabase.auth.getSession()
-    if (error) return wrap(null, error)
-    if (!session) { console.log('[api] no active session'); return wrap(null, null) }
-    const { user, error: buildError } = await buildUser(session.user)
-    if (buildError) return wrap(null, buildError)
     return wrap(user, null)
   },
 
   async logout() {
+    console.log('[api] authApi.logout')
     const { error } = await supabase.auth.signOut()
-    return wrap(null, error)
+    if (error) {
+      console.error('[api] logout error:', error.message)
+      return wrap(null, error)
+    }
+    return wrap(true, null)
   },
 
-  async getCurrentUserProfile() {
-    const { data: { user: au }, error } = await supabase.auth.getUser()
-    if (error || !au) return wrap(null, { message: 'Not authenticated' })
-    const { user, error: be } = await buildUser(au)
-    return wrap(user, be)
-  },
-
-  async getUser(id) {
-    const { data, error } = await supabase
-      .from('users')
-      .select(USER_SELECT)
-      .eq('id', id)
-      .single()
-    return wrap(normalizeUser(data), error)
+  // Used by the onAuthStateChange listener for INITIAL_SESSION / restored
+  // sessions — NOT called for the explicit login() flow, which builds the
+  // user itself.
+  async userFromSession(session) {
+    const authUser = session?.user
+    if (!authUser) {
+      return wrap(null, { message: 'No session' })
+    }
+    const { user, error } = await buildUser(authUser)
+    return wrap(user, error)
   },
 }
 
@@ -665,7 +657,7 @@ export const inventoryApi = {
       `)
       .eq('branch_id', branchId)
       .order('name')
-    
+
     // Flatten to match frontend shape
     const flattened = (data || []).map(row => ({
       id: row.id,
@@ -679,7 +671,7 @@ export const inventoryApi = {
       supplier: row.item_templates?.supplier || row.supplier,
       notes: row.item_templates?.notes || row.notes,
     }))
-    
+
     return wrap(flattened, error)
   },
 

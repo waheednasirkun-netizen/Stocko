@@ -666,88 +666,162 @@ export function AppProvider({ children }) {
   }, [showToast, fetchRequests, requests.length])
 
   // ── Supabase Auth session listener ─────────────────────────────────────────
-  const loadAllDataRef  = useRef(loadAllData)
-  const clearDataRef    = useRef(clearData)
-  const handledByLogin  = useRef(false)
+const loadAllDataRef = useRef(loadAllData)
+const clearDataRef = useRef(clearData)
+const handledByLogin = useRef(false)
+const authProcessingRef = useRef(false)
 
-  useEffect(() => { loadAllDataRef.current = loadAllData }, [loadAllData])
-  useEffect(() => { clearDataRef.current   = clearData   }, [clearData])
+useEffect(() => {
+  loadAllDataRef.current = loadAllData
+}, [loadAllData])
 
-  useEffect(() => {
-    const finishAuth = async (session) => {
-      if (!session) {
-        setAuthReady(true)
-        return
-      }
+useEffect(() => {
+  clearDataRef.current = clearData
+}, [clearData])
 
-      if (handledByLogin.current) {
-        handledByLogin.current = false
-        setAuthReady(true)
-        return
-      }
+useEffect(() => {
+  let mounted = true
 
-      const { data: restoredUser, error } = await authApi.userFromSession(session)
+  const finishAuth = async (session) => {
+    if (!mounted) return
+
+    if (!session) {
+      setUser(null)
+      clearDataRef.current()
+      setAuthReady(true)
+      return
+    }
+
+    // GUARD 1: the explicit login() flow already calls authApi.login(),
+    // which builds the user itself. While that flow owns this sign-in,
+    // any SIGNED_IN (or duplicate INITIAL_SESSION) event for the same
+    // session must be ignored entirely — it must NOT build/fetch the
+    // user a second time. login() is solely responsible for clearing
+    // this flag once its own flow is fully done.
+    if (handledByLogin.current) {
+      return
+    }
+
+    // GUARD 2: re-entrancy lock. If finishAuth is already running (from
+    // an earlier event that hasn't finished awaiting fetchProfile/
+    // buildUser/loadAllData yet), any further event is dropped instead
+    // of starting a second, overlapping run. This is a synchronous ref
+    // check — it has nothing to do with timing/delays, it simply refuses
+    // to let two runs execute at once no matter how many events arrive
+    // or how close together they fire.
+    if (authProcessingRef.current) return
+    authProcessingRef.current = true
+
+    try {
+      const { data: restoredUser, error } =
+        await authApi.userFromSession(session)
+
+      if (!mounted) return
 
       if (error || !restoredUser) {
-        console.error('[AppContext] session profile failed:', error?.message)
+        console.error(
+          '[AppContext] session profile failed:',
+          error?.message
+        )
+
+        setUser(null)
+        clearDataRef.current()
         setAuthReady(true)
         return
       }
 
       console.log('[AppContext] authenticated:', restoredUser.email)
+
       setUser(restoredUser)
+
       await loadAllDataRef.current(restoredUser)
-      setAuthReady(true)
+
+      if (mounted) {
+        setAuthReady(true)
+      }
+    } catch (err) {
+      console.error('[AppContext] finishAuth error:', err)
+
+      if (mounted) {
+        setUser(null)
+        clearDataRef.current()
+        setAuthReady(true)
+      }
+    } finally {
+      authProcessingRef.current = false
+    }
+  }
+
+  // IMPORTANT:
+  // Do NOT call supabase.auth.getSession() from inside this listener.
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((event, session) => {
+    console.log('[AppContext] auth event:', event)
+
+    if (event === 'INITIAL_SESSION') {
+      setTimeout(() => {
+        void finishAuth(session)
+      }, 0)
+
+      return
     }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        console.log('[AppContext] auth event:', event)
+    if (event === 'SIGNED_IN') {
+      setTimeout(() => {
+        void finishAuth(session)
+      }, 0)
 
-        if (event === 'INITIAL_SESSION') {
-          setTimeout(() => { void finishAuth(session) }, 0)
-          return
-        }
+      return
+    }
 
-        if (event === 'SIGNED_IN') {
-          setTimeout(() => { void finishAuth(session) }, 0)
-          return
-        }
+    if (event === 'SIGNED_OUT') {
+      setUser(null)
+      clearDataRef.current()
+      setTab('dashboard')
+      setAuthReady(true)
+    }
+  })
 
-        if (event === 'SIGNED_OUT') {
-          setUser(null)
-          clearDataRef.current()
-          setTab('dashboard')
-          setAuthReady(true)
-          return
-        }
-      }
-    )
-
-    return () => subscription.unsubscribe()
-  }, [])
-
+  return () => {
+    mounted = false
+    subscription.unsubscribe()
+  }
+}, [])
   // ── Login ──────────────────────────────────────────────────────────────────
   const login = useCallback(async (email, password) => {
     console.log('[AppContext] login:', email)
     setAuthError(null)
 
-    const { data: loggedInUser, error } = await authApi.login(email, password)
+    // GUARD 3: set BEFORE calling authApi.login(). signInWithPassword()
+    // fires SIGNED_IN internally, and it can fire while authApi.login()
+    // is still awaiting fetchProfile/buildUser inside itself — so the
+    // flag has to already be true at that point, not set after login()
+    // resolves.
+    handledByLogin.current = true
 
-    if (error) {
-      setAuthError(error.message)
-      setAuthReady(true)
-      return { error }
+    try {
+      const { data: loggedInUser, error } = await authApi.login(email, password)
+
+      if (error) {
+        setAuthError(error.message)
+        setAuthReady(true)
+        return { error }
+      }
+
+      if (loggedInUser) {
+        setUser(loggedInUser)
+        await loadAllData(loggedInUser)
+        setAuthReady(true)
+      }
+
+      return { data: loggedInUser }
+    } finally {
+      // Cleared only once this explicit login flow (success or failure)
+      // is fully finished — not on a fixed timer, but tied to the
+      // completion of the actual async work above.
+      handledByLogin.current = false
     }
-
-    if (loggedInUser) {
-      handledByLogin.current = true
-      setUser(loggedInUser)
-      await loadAllData(loggedInUser)
-      setAuthReady(true)
-    }
-
-    return { data: loggedInUser }
   }, [loadAllData])
 
   // ── Logout ─────────────────────────────────────────────────────────────────
