@@ -29,10 +29,14 @@ export default function FulfillmentCenter() {
     inventory = [],
     theme,
     user,
+    currentBranch,
     showToast,
     fetchRequests,
     addNotification,
   } = useApp()
+
+  const branchId =
+    currentBranch?.id || user?.branch_id || user?.branchId || null
 
   // ── Tabs ─────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(TAB_PENDING)
@@ -81,7 +85,7 @@ async function sendPrintJob(receiptData) {
 }
   // ── Real-time subscription ───────────────────────────
   useEffect(() => {
-    if (!supabase) return
+    if (!supabase || !branchId) return
 
     const channel = supabase
       .channel('fulfillment-requests')
@@ -89,7 +93,7 @@ async function sendPrintJob(receiptData) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'requests' },
         () => {
-          fetchRequests?.()
+          fetchRequests?.(branchId)
         }
       )
       .subscribe()
@@ -97,7 +101,7 @@ async function sendPrintJob(receiptData) {
     return () => {
       channel.unsubscribe()
     }
-  }, [fetchRequests])
+  }, [fetchRequests, branchId])
 
   // ── Derived data ───────────────────────────────────
   const departments = useMemo(() => {
@@ -330,8 +334,8 @@ recorded_by_name: user?.name || user?.email,
       }
 
       // 4. Refresh data
-      if (fetchRequests) {
-        await fetchRequests()
+      if (fetchRequests && branchId) {
+        await fetchRequests(branchId)
       }
 
       showToast('success', 'Dispatched', `${fmtNum(qty)} ${item._unit} of ${item._displayName}`)
@@ -410,8 +414,8 @@ setTimeout(() => {
       }
 
       // Refresh data
-      if (fetchRequests) {
-        await fetchRequests()
+      if (fetchRequests && branchId) {
+        await fetchRequests(branchId)
       }
 
       showToast('info', 'Request Rejected', `${request.department}`)

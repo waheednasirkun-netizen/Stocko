@@ -986,14 +986,53 @@ export function AppProvider({ children }) {
   ============================================================ */
 
   const authRunRef = useRef(0)
+  // Auth uid we have already fully bootstrapped. Used to ignore redundant
+  // SIGNED_IN events (e.g. POS password re-verification via signInWithPassword).
+  const bootstrappedAuthUidRef = useRef(null)
+  const initializeSessionRef = useRef(null)
+  const clearDataRef = useRef(clearData)
+
+  useEffect(() => {
+    clearDataRef.current = clearData
+  }, [clearData])
 
   const initializeSession = useCallback(
-    async (session) => {
+    async (session, { force = false } = {}) => {
       const runId = ++authRunRef.current
+      const authUid = session?.user?.id ?? null
 
-      if (!session?.user) {
+      if (!authUid) {
+        bootstrappedAuthUidRef.current = null
         clearData()
         setUser(null)
+        setAuthReady(true)
+
+        // If GoTrue recovered to "no usable session" (expired/invalid refresh,
+        // or refresh 429 treated as failure), clear local persisted auth so
+        // auto-refresh cannot keep hammering /auth/v1/token.
+        if (force) {
+          try {
+            await supabase.auth.signOut({
+              scope: 'local',
+            })
+          } catch (signOutError) {
+            console.warn(
+              '[Auth] local signOut on empty session:',
+              signOutError
+            )
+          }
+        }
+
+        return
+      }
+
+      // Same auth user already loaded — do not reload profile/branches/data.
+      // Re-running here was a major amplifier: TOKEN_REFRESHED / duplicate
+      // SIGNED_IN → setUser → realtime remount → getSession → refresh → ...
+      if (
+        !force &&
+        bootstrappedAuthUidRef.current === authUid
+      ) {
         setAuthReady(true)
         return
       }
@@ -1020,7 +1059,20 @@ export function AppProvider({ children }) {
           )
 
           setUser(null)
+          bootstrappedAuthUidRef.current = null
           setAuthReady(true)
+
+          // Clear unusable persisted auth so GoTrue stops retrying refresh.
+          try {
+            await supabase.auth.signOut({
+              scope: 'local',
+            })
+          } catch (signOutError) {
+            console.warn(
+              '[Auth] local signOut after profile failure:',
+              signOutError
+            )
+          }
 
           return
         }
@@ -1047,6 +1099,7 @@ export function AppProvider({ children }) {
           setUser(profile)
           setCurrentBranch(null)
           setDataLoaded(true)
+          bootstrappedAuthUidRef.current = authUid
 
           showToast(
             'warning',
@@ -1075,6 +1128,7 @@ export function AppProvider({ children }) {
 
         setUser(sessionUser)
         setCurrentBranch(selectedBranch)
+        bootstrappedAuthUidRef.current = authUid
 
         await loadBranchData(
           selectedBranch.id
@@ -1092,6 +1146,7 @@ export function AppProvider({ children }) {
           )
 
           setUser(null)
+          bootstrappedAuthUidRef.current = null
         }
       } finally {
         if (runId === authRunRef.current) {
@@ -1109,30 +1164,21 @@ export function AppProvider({ children }) {
   )
 
   useEffect(() => {
+    initializeSessionRef.current = initializeSession
+  }, [initializeSession])
+
+  useEffect(() => {
     let mounted = true
 
-    const handleAuth = async () => {
-      const {
-        data: { session },
-        error,
-      } = await supabase.auth.getSession()
-
-      if (!mounted) return
-
-      if (error) {
-        console.error(
-          '[Auth] getSession:',
-          error
-        )
-
-        setAuthError(error.message)
-      }
-
-      await initializeSession(session)
-    }
-
-    void handleAuth()
-
+    /*
+     * Single auth subscription. Do NOT also call getSession() here.
+     * getSession() triggers token refresh when the access token is inside
+     * EXPIRY_MARGIN; combining that with TOKEN_REFRESHED → initializeSession
+     * (and Realtime's own getSession) produced the refresh_token 429 loop:
+     *   refresh → notify → app work → getSession → refresh → ...
+     *
+     * INITIAL_SESSION covers bootstrap after GoTrue finishes recovery.
+     */
     const {
       data: { subscription },
     } =
@@ -1140,31 +1186,46 @@ export function AppProvider({ children }) {
         (event, session) => {
           if (!mounted) return
 
-          /*
-           * INITIAL_SESSION is handled above.
-           * SIGNED_IN/SIGNED_OUT are handled here.
-           */
-          if (
-            event === 'SIGNED_IN' ||
-            event === 'TOKEN_REFRESHED'
-          ) {
+          if (event === 'INITIAL_SESSION') {
             window.setTimeout(() => {
               if (mounted) {
-                void initializeSession(session)
+                void initializeSessionRef.current?.(
+                  session,
+                  { force: true }
+                )
               }
             }, 0)
+            return
+          }
 
+          if (event === 'SIGNED_IN') {
+            window.setTimeout(() => {
+              if (mounted) {
+                // force:false skips reload when auth uid already bootstrapped
+                // (POS password verify also calls signInWithPassword).
+                void initializeSessionRef.current?.(
+                  session,
+                  { force: false }
+                )
+              }
+            }, 0)
+            return
+          }
+
+          if (event === 'TOKEN_REFRESHED') {
+            // Supabase already refreshed the JWT. Do not re-bootstrap the app.
             return
           }
 
           if (event === 'SIGNED_OUT') {
             authRunRef.current += 1
+            bootstrappedAuthUidRef.current = null
 
             setUser(null)
             setAuthError(null)
             setAuthReady(true)
 
-            clearData()
+            clearDataRef.current()
             setTab('dashboard')
           }
         }
@@ -1174,10 +1235,7 @@ export function AppProvider({ children }) {
       mounted = false
       subscription.unsubscribe()
     }
-  }, [
-    clearData,
-    initializeSession,
-  ])
+  }, [])
 
   /* ============================================================
      DATABASE NOTIFICATIONS
@@ -3265,9 +3323,8 @@ export function AppProvider({ children }) {
 
         /*
          * Do not manually load all branch data here.
-         * Supabase SIGNED_IN will trigger initializeSession().
-         *
-         * This prevents duplicate data loading.
+         * Supabase SIGNED_IN will trigger initializeSession() once.
+         * authApi.login must not call setSession() (duplicate auth events).
          */
         return {
           data,

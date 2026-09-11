@@ -2,7 +2,7 @@
 console.log('[Stocko] api.js loaded')
 
 /**
- * Stocko — src/lib/api.js
+ * Stocko - src/lib/api.js
  * Production-ready Supabase API layer
  *
  * Schema:
@@ -156,7 +156,7 @@ async function withRetry(
 
 async function fetchProfile(authId, email) {
   console.log(
-    '[api] fetchProfile — authId:',
+    '[api] fetchProfile - authId:',
     authId,
     'email:',
     email,
@@ -190,7 +190,7 @@ async function fetchProfile(authId, email) {
 
     if (data) {
       console.log(
-        `[api] fetchProfile success (${label}) — users.id:`,
+        `[api] fetchProfile success (${label}) - users.id:`,
         data.id,
       )
     }
@@ -294,7 +294,7 @@ async function fetchProfile(authId, email) {
   console.error(
     '[api] fetchProfile: no row returned for authId',
     authId,
-    '— row may exist but RLS is blocking SELECT.',
+    '- row may exist but RLS is blocking SELECT.',
   )
 
   return {
@@ -441,6 +441,11 @@ export const authApi = {
 
       return wrap(null, authError)
     }
+
+    // Do NOT call setSession() here. signInWithPassword() already persists the
+    // session and emits SIGNED_IN. A second setSession() re-notifies subscribers
+    // and can stack getSession/refresh work - a known contributor to auth/v1
+    // refresh_token 429 storms on slower connections.
 
     const {
       user,
@@ -1501,7 +1506,7 @@ export const transactionsApi = {
     if (!existingItem) {
       return wrap(null, {
         message:
-          `Item "${itemName}" not found in inventory`,
+          `Item -${itemName}- not found in inventory`,
       })
     }
 
@@ -1972,7 +1977,7 @@ export const inventoryApi = {
     if (existing) {
       return wrap(null, {
         message:
-          `Item "${itemData.name}" already exists in inventory`,
+          `Item -${itemData.name}- already exists in inventory`,
       })
     }
 
