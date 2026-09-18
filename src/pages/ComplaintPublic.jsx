@@ -357,7 +357,7 @@ export default function ComplaintPublic({ token }) {
                 marginBottom: 8,
               }}
             >
-              Stocko Feedback
+              Fifth Avenue Feedback
             </div>
 
             <p
@@ -492,7 +492,7 @@ export default function ComplaintPublic({ token }) {
                 fontWeight: 600,
               }}
             >
-              Powered by Stocko
+              Powered by Fifth Avenue
             </div>
           </div>
         </div>
@@ -512,7 +512,7 @@ export default function ComplaintPublic({ token }) {
         ====================================================== */}
         <div style={styles.header}>
           <div style={styles.brandBadge}>
-            STOCKO CUSTOMER CARE
+            Fifth Avenue CUSTOMER CARE
           </div>
 
           <h1 style={styles.title}>
