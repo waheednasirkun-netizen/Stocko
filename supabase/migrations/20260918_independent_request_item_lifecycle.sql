@@ -10,7 +10,8 @@ alter table public.request_items
   add column if not exists fulfilled_by uuid,
   add column if not exists fulfilled_by_name text,
   add column if not exists fulfilled_at timestamptz,
-  add column if not exists updated_at timestamptz default now();
+  add column if not exists updated_at timestamptz default now(),
+  add column if not exists cancelled_qty numeric not null default 0;
 
 -- Backfill legacy rows from fulfilled_qty. Do not use the parent request status
 -- as the lifecycle of each child item.
@@ -55,6 +56,8 @@ alter table public.transactions
 create index if not exists idx_transactions_request_item_id
   on public.transactions(request_item_id);
 
+comment on column public.request_items.cancelled_qty is
+  'Quantity cancelled/rejected without reversing inventory already fulfilled.';
 comment on column public.request_items.status is
   'Independent lifecycle of this product item; parent requests.status is only an aggregate.';
 comment on column public.transactions.request_item_id is

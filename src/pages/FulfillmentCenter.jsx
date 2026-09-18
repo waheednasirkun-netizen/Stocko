@@ -102,19 +102,21 @@ async function sendPrintJob(receiptData) {
     return ['All', ...Array.from(set).sort()]
   }, [requests])
 
-  const pendingStatuses = ['Pending', 'Approved', 'Partially Fulfilled']
-  const completedStatuses = ['Fulfilled', 'Completed', 'Rejected']
-
   // Child request_items are the source of truth for item-level lifecycle.
   // The parent request status is only an aggregate/container status.
   const getItemStatus = (request, requestItem) => {
     const explicit = requestItem?.status
-    if (explicit) return explicit
-
     const requested = Number(requestItem?.qty || 0)
     const fulfilled = Number(requestItem?.fulfilled_qty || 0)
+    const cancelled = Number(requestItem?.cancelled_qty || 0)
+    const remaining = Math.max(0, requested - fulfilled - cancelled)
+
+    // Quantity is the source of truth for lifecycle/tab placement.
+    // A stale status must never put a fully resolved item back in Pending.
     if (requested > 0 && fulfilled >= requested) return 'Fulfilled'
+    if (remaining <= 0 && cancelled >= requested && fulfilled <= 0) return 'Rejected'
     if (fulfilled > 0) return 'Partially Fulfilled'
+    if (explicit === 'Rejected' && remaining > 0) return 'Rejected'
     return request?.status === 'Approved' ? 'Approved' : 'Pending'
   }
 
@@ -127,13 +129,22 @@ async function sendPrintJob(receiptData) {
       if (reqItems.length === 0) {
         const requested = Number(req.quantity || req.qty || 0)
         const fulfilled = Number(req.fulfilled_qty || 0)
-        const status = req.status || (fulfilled >= requested && requested > 0 ? 'Fulfilled' : 'Pending')
+        const cancelled = Number(req.cancelled_qty || 0)
+        const remaining = Math.max(0, requested - fulfilled - cancelled)
+        const status = getItemStatus(req, {
+          qty: requested,
+          fulfilled_qty: fulfilled,
+          cancelled_qty: cancelled,
+          status: req.status,
+        })
         items.push({
           ...req,
           _displayName: req.item_name || req.name || '—',
           _qty: requested,
           _unit: req.unit || 'pcs',
           _fulfilledQty: fulfilled,
+          _cancelledQty: cancelled,
+          _remainingQty: remaining,
           _requestId: req.id,
           _itemIndex: 0,
           _itemId: null,
@@ -150,6 +161,8 @@ async function sendPrintJob(receiptData) {
             _qty: Number(ri.qty || 0),
             _unit: ri.unit || 'pcs',
             _fulfilledQty: Number(ri.fulfilled_qty || 0),
+            _cancelledQty: Number(ri.cancelled_qty || 0),
+            _remainingQty: Math.max(0, Number(ri.qty || 0) - Number(ri.fulfilled_qty || 0) - Number(ri.cancelled_qty || 0)),
             _requestId: req.id,
             _itemId: ri.id,
             _itemIndex: i,
@@ -169,8 +182,12 @@ async function sendPrintJob(receiptData) {
       return (pOrder[a?.priority] ?? 2) - (pOrder[b?.priority] ?? 2)
     })
 
-    const allowed = activeTab === TAB_PENDING ? pendingStatuses : completedStatuses
-    list = list.filter(d => allowed.includes(d._itemStatus))
+    // IMPORTANT: Pending/Completed is determined by remaining quantity,
+    // not by the historical item status.
+    list = list.filter(item => {
+      const remaining = Number(item?._remainingQty || 0)
+      return activeTab === TAB_PENDING ? remaining > 0 : remaining <= 0
+    })
 
     if (search) {
       const q = search.toLowerCase()
@@ -215,8 +232,11 @@ async function sendPrintJob(receiptData) {
     if (!dispatchModal || processingRef.current) return
     const { request, item, inv } = dispatchModal
     const requested = Number(item._qty || 0)
+    const fulfilled = Number(item._fulfilledQty || 0)
+    const cancelled = Number(item._cancelledQty || 0)
+    const remaining = Math.max(0, requested - fulfilled - cancelled)
     const available = inv?.quantity || 0
-    const qty = Math.min(requested, available)
+    const qty = Math.min(remaining, available)
 
     if (qty <= 0) {
       showToast('error', 'Cannot Dispatch', 'No stock available')
@@ -252,8 +272,16 @@ async function sendPrintJob(receiptData) {
     try {
       const requested = Number(item._qty || 0)
       const alreadyFulfilled = Number(item._fulfilledQty || 0)
-      const newFulfilled = alreadyFulfilled + qty
-      const remaining = Math.max(0, requested - newFulfilled)
+      const alreadyCancelled = Number(item._cancelledQty || 0)
+      const currentRemaining = Math.max(0, requested - alreadyFulfilled - alreadyCancelled)
+      const safeQty = Math.min(Number(qty || 0), currentRemaining, Number(inv?.quantity || 0))
+
+      if (safeQty <= 0) {
+        throw new Error('There is no remaining quantity to dispatch.')
+      }
+
+      const newFulfilled = alreadyFulfilled + safeQty
+      const remaining = Math.max(0, requested - newFulfilled - alreadyCancelled)
 
       // 1. Update ONLY the selected request item. Never use the parent request
       // status as the item's lifecycle.
@@ -282,12 +310,18 @@ async function sendPrintJob(receiptData) {
       // actually fulfilled. Mixed fulfilled/rejected remains Partially Fulfilled.
       const { data: latestItems, error: latestItemsError } = await supabase
         .from('request_items')
-        .select('id, qty, fulfilled_qty, status')
+        .select('id, qty, fulfilled_qty, cancelled_qty, status')
         .eq('request_id', request.id)
 
       if (latestItemsError) throw latestItemsError
 
       const childItems = Array.isArray(latestItems) ? latestItems : []
+      const allResolved = childItems.length > 0 && childItems.every(ri => {
+        const requestedQty = Number(ri.qty || 0)
+        const fulfilledQty = Number(ri.fulfilled_qty || 0)
+        const cancelledQty = Number(ri.cancelled_qty || 0)
+        return fulfilledQty + cancelledQty >= requestedQty
+      })
       const allFulfilled = childItems.length > 0 && childItems.every(ri => {
         return Number(ri.fulfilled_qty || 0) >= Number(ri.qty || 0)
       })
@@ -297,6 +331,10 @@ async function sendPrintJob(receiptData) {
       let newStatus = request.status || 'Pending'
       if (allFulfilled) {
         newStatus = 'Completed'
+      } else if (allResolved && anyFulfilled) {
+        newStatus = 'Partially Fulfilled'
+      } else if (allResolved && allRejected) {
+        newStatus = 'Rejected'
       } else if (anyFulfilled) {
         newStatus = 'Partially Fulfilled'
       } else if (allRejected) {
@@ -330,7 +368,7 @@ async function sendPrintJob(receiptData) {
 
       // 3. Deduct inventory
       if (inv && qty > 0) {
-        const newQty = Math.max(0, (inv.quantity || 0) - qty)
+        const newQty = Math.max(0, (inv.quantity || 0) - safeQty)
         const { error: invError } = await supabase
           .from('inventory')
           .update({ quantity: newQty, updated_at: new Date().toISOString() })
@@ -357,7 +395,7 @@ async function sendPrintJob(receiptData) {
           item_id: inv.id,
           item_name: inv.name,
           type: 'OUT',
-          quantity: qty,
+          quantity: safeQty,
           unit: inv.unit,
           reference_type: 'fulfillment',
           reference_id: request.id,
@@ -377,7 +415,7 @@ recorded_by_name: user?.name || user?.email,
         await fetchRequests(branchId)
       }
 
-      showToast('success', 'Dispatched', `${fmtNum(qty)} ${item._unit} of ${item._displayName}`)
+      showToast('success', 'Dispatched', `${fmtNum(safeQty)} ${item._unit} of ${item._displayName}`)
 
       // 5. Set receipt data and trigger print
      const receipt = {
@@ -386,7 +424,7 @@ recorded_by_name: user?.name || user?.email,
     items: [
       {
         name: item.name,
-        quantity: qty,
+        quantity: safeQty,
         unit: item.unit,
       },
     ],
@@ -394,7 +432,7 @@ recorded_by_name: user?.name || user?.email,
 
   request,
   item,
-  qty,
+  qty: safeQty,
   notes,
   user,
   fulfilled: newFulfilled,
@@ -437,19 +475,36 @@ setTimeout(() => {
       const { request, item } = rejectModal
       const now = new Date().toISOString()
 
-      // A fulfilled item cannot be rejected through this action because its
-      // inventory has already been deducted. Reversal must be a separate action.
       if (item && item._itemId) {
-        const currentStatus = item._itemStatus || item.status
-        const fulfilledQty = Number(item._fulfilledQty || 0)
-        if (currentStatus === 'Fulfilled' || fulfilledQty > 0) {
-          throw new Error('This item has already been fulfilled. Use a separate fulfillment reversal process instead of Reject.')
+        // Re-read the selected child so cancellation is based on the latest DB
+        // quantities, not stale card data. This supports partial fulfillment.
+        const { data: latestItem, error: latestItemError } = await supabase
+          .from('request_items')
+          .select('id, request_id, qty, fulfilled_qty, cancelled_qty, status')
+          .eq('id', item._itemId)
+          .eq('request_id', request.id)
+          .maybeSingle()
+
+        if (latestItemError) throw latestItemError
+        if (!latestItem) throw new Error('Request item was not found.')
+
+        const requestedQty = Number(latestItem.qty || 0)
+        const fulfilledQty = Number(latestItem.fulfilled_qty || 0)
+        const cancelledQty = Number(latestItem.cancelled_qty || 0)
+        const remainingQty = Math.max(0, requestedQty - fulfilledQty - cancelledQty)
+
+        if (remainingQty <= 0) {
+          if (fetchRequests && branchId) await fetchRequests(branchId)
+          resetReject()
+          showToast('info', 'Nothing to Cancel', 'This item has no remaining quantity.')
+          return
         }
 
         const { error: itemError } = await supabase
           .from('request_items')
           .update({
-            status: 'Rejected',
+            cancelled_qty: cancelledQty + remainingQty,
+            status: fulfilledQty > 0 ? 'Partially Fulfilled' : 'Rejected',
             rejection_reason: rejectReason.trim(),
             rejected_at: now,
             rejected_by: user?.id || null,
@@ -459,30 +514,38 @@ setTimeout(() => {
           .eq('id', item._itemId)
           .eq('request_id', request.id)
 
-        if (itemError) {
-          console.error('Reject request item error:', itemError)
-          throw new Error(`Failed to reject item: ${itemError.message}`)
-        }
-
         // Recalculate ONLY the parent aggregate. Never mark the parent Rejected
         // merely because one child was rejected.
         const { data: latestItems, error: latestItemsError } = await supabase
           .from('request_items')
-          .select('id, qty, fulfilled_qty, status')
+          .select('id, qty, fulfilled_qty, cancelled_qty, status')
           .eq('request_id', request.id)
 
         if (latestItemsError) throw latestItemsError
 
         const childItems = Array.isArray(latestItems) ? latestItems : []
+        const allResolved = childItems.length > 0 && childItems.every(ri => {
+          const requestedQty = Number(ri.qty || 0)
+          const fulfilledQty = Number(ri.fulfilled_qty || 0)
+          const cancelledQty = Number(ri.cancelled_qty || 0)
+          return fulfilledQty + cancelledQty >= requestedQty
+        })
         const allFulfilled = childItems.length > 0 && childItems.every(ri => {
           return Number(ri.fulfilled_qty || 0) >= Number(ri.qty || 0)
         })
         const anyFulfilled = childItems.some(ri => Number(ri.fulfilled_qty || 0) > 0)
         const allRejected = childItems.length > 0 && childItems.every(ri => ri.status === 'Rejected')
-        const hasPending = childItems.some(ri => !['Rejected', 'Fulfilled'].includes(ri.status))
+        const hasPending = childItems.some(ri => {
+          const requestedQty = Number(ri.qty || 0)
+          const fulfilledQty = Number(ri.fulfilled_qty || 0)
+          const cancelledQty = Number(ri.cancelled_qty || 0)
+          return Math.max(0, requestedQty - fulfilledQty - cancelledQty) > 0
+        })
 
         let parentStatus = request.status || 'Pending'
         if (allFulfilled) parentStatus = 'Completed'
+        else if (allResolved && anyFulfilled) parentStatus = 'Partially Fulfilled'
+        else if (allResolved && allRejected) parentStatus = 'Rejected'
         else if (anyFulfilled) parentStatus = 'Partially Fulfilled'
         else if (allRejected) parentStatus = 'Rejected'
         else if (hasPending) parentStatus = request.status === 'Approved' ? 'Approved' : 'Pending'
@@ -564,7 +627,7 @@ setTimeout(() => {
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: theme.text }}>Fulfillment Center</h2>
           <p style={{ fontSize: 12, color: theme.textMuted }}>
-            {flattenedItems.filter(i => pendingStatuses.includes(i._itemStatus)).length} pending · {flattenedItems.filter(i => completedStatuses.includes(i._itemStatus)).length} completed
+            {flattenedItems.filter(i => Number(i?._remainingQty || 0) > 0).length} pending · {flattenedItems.filter(i => Number(i?._remainingQty || 0) <= 0).length} completed
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -609,8 +672,8 @@ setTimeout(() => {
               color: activeTab === tab ? '#1e40af' : theme.textMuted,
             }}>
               {tab === TAB_PENDING
-                ? flattenedItems.filter(i => pendingStatuses.includes(i._itemStatus)).length
-                : flattenedItems.filter(i => completedStatuses.includes(i._itemStatus)).length}
+                ? flattenedItems.filter(i => Number(i?._remainingQty || 0) > 0).length
+                : flattenedItems.filter(i => Number(i?._remainingQty || 0) <= 0).length}
             </span>
           </button>
         ))}
@@ -663,11 +726,12 @@ setTimeout(() => {
             const name = item._displayName
             const requested = Number(item._qty || 0)
             const fulfilled = Number(item._fulfilledQty || 0)
-            const remaining = Math.max(0, requested - fulfilled)
+            const cancelled = Number(item._cancelledQty || 0)
+            const remaining = Math.max(0, requested - fulfilled - cancelled)
             const [pbg, pc] = (pColors[item.priority] || '#f3f4f6,#374151').split(',')
             const [sbg, sc] = (statusColors[item._itemStatus] || '#f3f4f6,#374151').split(',')
             const stock = getStockStatus(inv, requested)
-            const isPending = pendingStatuses.includes(item._itemStatus)
+            const isPending = remaining > 0
 
             return (
               <Card key={item._itemId ? `${item._requestId}-${item._itemId}` : `${item._requestId}-${item._itemIndex}`} style={{
