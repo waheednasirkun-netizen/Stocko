@@ -20,6 +20,7 @@ const statusColors = {
   Approved: '#dcfce7,#166534',
   'Partially Fulfilled': '#dbeafe,#1e40af',
   Completed: '#d1fae5,#065f46',
+  Fulfilled: '#d1fae5,#065f46',
   Rejected: '#fee2e2,#991b1b',
 }
 
@@ -40,19 +41,6 @@ export default function FulfillmentCenter() {
 
   // ── Tabs ─────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(TAB_PENDING)
-  async function sendPrintJob(receiptData) {
-  const { error } =await supabase
-    .from("print_jobs")
-    .insert({
-      branch_id: user?.branch_id,
-      payload: receiptData,
-    });
-
-  if (error) {
-    console.error(error);
-  }
-}
-
   // ── Search & Filters ─────────────────────────────────
   const [search, setSearch] = useState('')
   const [filterDept, setFilterDept] = useState('All')
@@ -87,14 +75,19 @@ async function sendPrintJob(receiptData) {
   useEffect(() => {
     if (!supabase || !branchId) return
 
+    const refresh = () => fetchRequests?.(branchId)
+
     const channel = supabase
-      .channel('fulfillment-requests')
+      .channel(`fulfillment-requests-${branchId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'requests' },
-        () => {
-          fetchRequests?.(branchId)
-        }
+        { event: '*', schema: 'public', table: 'requests', filter: `branch_id=eq.${branchId}` },
+        refresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'request_items' },
+        refresh
       )
       .subscribe()
 
@@ -110,29 +103,49 @@ async function sendPrintJob(receiptData) {
   }, [requests])
 
   const pendingStatuses = ['Pending', 'Approved', 'Partially Fulfilled']
-  const completedStatuses = ['Completed', 'Rejected']
+  const completedStatuses = ['Fulfilled', 'Completed', 'Rejected']
 
-  // Flatten requests + request_items for display
+  // Child request_items are the source of truth for item-level lifecycle.
+  // The parent request status is only an aggregate/container status.
+  const getItemStatus = (request, requestItem) => {
+    const explicit = requestItem?.status
+    if (explicit) return explicit
+
+    const requested = Number(requestItem?.qty || 0)
+    const fulfilled = Number(requestItem?.fulfilled_qty || 0)
+    if (requested > 0 && fulfilled >= requested) return 'Fulfilled'
+    if (fulfilled > 0) return 'Partially Fulfilled'
+    return request?.status === 'Approved' ? 'Approved' : 'Pending'
+  }
+
+  // Flatten requests + request_items for display. Each child keeps its own
+  // status, id, fulfilled quantity and rejection metadata.
   const flattenedItems = useMemo(() => {
     const items = []
     for (const req of requests) {
-      const reqItems = req.request_items || []
+      const reqItems = Array.isArray(req.request_items) ? req.request_items : []
       if (reqItems.length === 0) {
+        const requested = Number(req.quantity || req.qty || 0)
+        const fulfilled = Number(req.fulfilled_qty || 0)
+        const status = req.status || (fulfilled >= requested && requested > 0 ? 'Fulfilled' : 'Pending')
         items.push({
           ...req,
           _displayName: req.item_name || req.name || '—',
-          _qty: Number(req.quantity || req.qty || 0),
+          _qty: requested,
           _unit: req.unit || 'pcs',
-          _fulfilledQty: Number(req.fulfilled_qty || 0),
+          _fulfilledQty: fulfilled,
           _requestId: req.id,
           _itemIndex: 0,
           _itemId: null,
+          _itemStatus: status,
+          _itemNotes: req.notes,
         })
       } else {
         for (let i = 0; i < reqItems.length; i++) {
           const ri = reqItems[i]
           items.push({
             ...req,
+            ...ri,
             _displayName: ri.name || '—',
             _qty: Number(ri.qty || 0),
             _unit: ri.unit || 'pcs',
@@ -140,7 +153,9 @@ async function sendPrintJob(receiptData) {
             _requestId: req.id,
             _itemId: ri.id,
             _itemIndex: i,
+            _itemStatus: getItemStatus(req, ri),
             _itemNotes: ri.notes,
+            _parentStatus: req.status,
           })
         }
       }
@@ -155,7 +170,7 @@ async function sendPrintJob(receiptData) {
     })
 
     const allowed = activeTab === TAB_PENDING ? pendingStatuses : completedStatuses
-    list = list.filter(d => allowed.includes(d.status))
+    list = list.filter(d => allowed.includes(d._itemStatus))
 
     if (search) {
       const q = search.toLowerCase()
@@ -240,25 +255,19 @@ async function sendPrintJob(receiptData) {
       const newFulfilled = alreadyFulfilled + qty
       const remaining = Math.max(0, requested - newFulfilled)
 
-      // Determine new status
-      let newStatus = request.status
-      if (remaining <= 0) {
-        const allItems = request.request_items || []
-        const thisItemFulfilled = newFulfilled >= requested
-        const otherItemsFulfilled = allItems.every((ri, idx) => {
-          if (idx === item._itemIndex) return thisItemFulfilled
-          return Number(ri.fulfilled_qty || 0) >= Number(ri.qty || 0)
-        })
-        newStatus = otherItemsFulfilled ? 'Completed' : 'Partially Fulfilled'
-      } else if (newFulfilled > 0) {
-        newStatus = 'Partially Fulfilled'
-      }
-
-      // 1. Update request_items fulfilled_qty
+      // 1. Update ONLY the selected request item. Never use the parent request
+      // status as the item's lifecycle.
       if (item._itemId) {
         const { error: itemError } = await supabase
           .from('request_items')
-          .update({ fulfilled_qty: newFulfilled })
+          .update({
+            fulfilled_qty: newFulfilled,
+            status: remaining <= 0 ? 'Fulfilled' : 'Partially Fulfilled',
+            fulfilled_at: remaining <= 0 ? new Date().toISOString() : null,
+            fulfilled_by: user?.id || null,
+            fulfilled_by_name: user?.name || user?.full_name || user?.email || null,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', item._itemId)
 
         if (itemError) {
@@ -267,24 +276,53 @@ async function sendPrintJob(receiptData) {
         }
       }
 
-      // 2. Update request status
+      // 2. Re-read the child items and calculate the parent as an aggregate.
+      // Rejected/pending children do not become fulfilled just because another
+      // child was dispatched. A parent is Completed only when every child is
+      // actually fulfilled. Mixed fulfilled/rejected remains Partially Fulfilled.
+      const { data: latestItems, error: latestItemsError } = await supabase
+        .from('request_items')
+        .select('id, qty, fulfilled_qty, status')
+        .eq('request_id', request.id)
+
+      if (latestItemsError) throw latestItemsError
+
+      const childItems = Array.isArray(latestItems) ? latestItems : []
+      const allFulfilled = childItems.length > 0 && childItems.every(ri => {
+        return Number(ri.fulfilled_qty || 0) >= Number(ri.qty || 0)
+      })
+      const anyFulfilled = childItems.some(ri => Number(ri.fulfilled_qty || 0) > 0)
+      const allRejected = childItems.length > 0 && childItems.every(ri => ri.status === 'Rejected')
+
+      let newStatus = request.status || 'Pending'
+      if (allFulfilled) {
+        newStatus = 'Completed'
+      } else if (anyFulfilled) {
+        newStatus = 'Partially Fulfilled'
+      } else if (allRejected) {
+        newStatus = 'Rejected'
+      } else if (request.status === 'Rejected') {
+        // Do not let a stale parent rejection remain after an item is actively
+        // being fulfilled. The remaining parent lifecycle is recalculated.
+        newStatus = 'Pending'
+      }
+
+      const parentUpdate = {
+        status: newStatus,
+        updated_at: new Date().toISOString(),
+      }
+
+      if (newStatus === 'Completed') {
+        parentUpdate.fulfilled_at = new Date().toISOString()
+        parentUpdate.fulfilled_by = user?.id || null
+        parentUpdate.fulfilled_by_name = user?.name || user?.full_name || user?.email || null
+      }
+
       const { error: reqError } = await supabase
-  .from('requests')
-  .update({
-    status: newStatus,
-    fulfilled_at: newStatus === 'Completed' ? new Date().toISOString() : request.fulfilled_at,
-
-    // ADD THESE
-  fulfilled_by: newStatus === 'Completed'
-  ? request.created_by
-  : request.fulfilled_by,
-    fulfilled_by_name: newStatus === 'Completed'
-  ? "print agent"
-  : request.fulfilled_by_name,
-
-    updated_at: new Date().toISOString(),
-  })
-  .eq('id', request.id)
+        .from('requests')
+        .update(parentUpdate)
+        .eq('id', request.id)
+        .eq('branch_id', branchId)
       if (reqError) {
         console.error('Update requests error:', reqError)
         throw new Error(`Failed to update request: ${reqError.message}`)
@@ -323,7 +361,8 @@ async function sendPrintJob(receiptData) {
           unit: inv.unit,
           reference_type: 'fulfillment',
           reference_id: request.id,
-          notes: notes || `Fulfilled request from ${request.department}`,
+          request_item_id: item._itemId || null,
+          notes: notes || `Fulfilled ${item._displayName} from ${request.department}`,
           recorded_by: user?.id,
 recorded_by_name: user?.name || user?.email,
         })
@@ -383,7 +422,7 @@ setTimeout(() => {
     }
   }
 
-  // ── Reject Request ───────────────────────────────────
+  // ── Reject ONE request item ───────────────────────────
   const handleReject = async () => {
     if (!rejectModal || processingRef.current) return
     if (!rejectReason.trim()) {
@@ -395,30 +434,101 @@ setTimeout(() => {
     setLoading(true)
 
     try {
-      const { request } = rejectModal
+      const { request, item } = rejectModal
+      const now = new Date().toISOString()
 
+      // A fulfilled item cannot be rejected through this action because its
+      // inventory has already been deducted. Reversal must be a separate action.
+      if (item && item._itemId) {
+        const currentStatus = item._itemStatus || item.status
+        const fulfilledQty = Number(item._fulfilledQty || 0)
+        if (currentStatus === 'Fulfilled' || fulfilledQty > 0) {
+          throw new Error('This item has already been fulfilled. Use a separate fulfillment reversal process instead of Reject.')
+        }
+
+        const { error: itemError } = await supabase
+          .from('request_items')
+          .update({
+            status: 'Rejected',
+            rejection_reason: rejectReason.trim(),
+            rejected_at: now,
+            rejected_by: user?.id || null,
+            rejected_by_name: user?.name || user?.full_name || user?.email || null,
+            updated_at: now,
+          })
+          .eq('id', item._itemId)
+          .eq('request_id', request.id)
+
+        if (itemError) {
+          console.error('Reject request item error:', itemError)
+          throw new Error(`Failed to reject item: ${itemError.message}`)
+        }
+
+        // Recalculate ONLY the parent aggregate. Never mark the parent Rejected
+        // merely because one child was rejected.
+        const { data: latestItems, error: latestItemsError } = await supabase
+          .from('request_items')
+          .select('id, qty, fulfilled_qty, status')
+          .eq('request_id', request.id)
+
+        if (latestItemsError) throw latestItemsError
+
+        const childItems = Array.isArray(latestItems) ? latestItems : []
+        const allFulfilled = childItems.length > 0 && childItems.every(ri => {
+          return Number(ri.fulfilled_qty || 0) >= Number(ri.qty || 0)
+        })
+        const anyFulfilled = childItems.some(ri => Number(ri.fulfilled_qty || 0) > 0)
+        const allRejected = childItems.length > 0 && childItems.every(ri => ri.status === 'Rejected')
+        const hasPending = childItems.some(ri => !['Rejected', 'Fulfilled'].includes(ri.status))
+
+        let parentStatus = request.status || 'Pending'
+        if (allFulfilled) parentStatus = 'Completed'
+        else if (anyFulfilled) parentStatus = 'Partially Fulfilled'
+        else if (allRejected) parentStatus = 'Rejected'
+        else if (hasPending) parentStatus = request.status === 'Approved' ? 'Approved' : 'Pending'
+
+        const { error: parentError } = await supabase
+          .from('requests')
+          .update({
+            status: parentStatus,
+            updated_at: now,
+          })
+          .eq('id', request.id)
+          .eq('branch_id', branchId)
+
+        if (parentError) {
+          console.error('Parent aggregate update error:', parentError)
+          throw new Error(`Item rejected, but parent status could not be recalculated: ${parentError.message}`)
+        }
+
+        if (fetchRequests && branchId) await fetchRequests(branchId)
+
+        showToast('info', 'Item Rejected', `${item._displayName} · ${request.department || 'Request'}`)
+        resetReject()
+        return
+      }
+
+      // Legacy single-item request with no request_items row. Only in this
+      // legacy case is parent-level rejection safe.
       const { error } = await supabase
         .from('requests')
         .update({
           status: 'Rejected',
           rejection_reason: rejectReason.trim(),
-          rejected_at: new Date().toISOString(),
+          rejected_at: now,
           rejected_by: user?.id,
-          updated_at: new Date().toISOString(),
+          updated_at: now,
         })
         .eq('id', request.id)
+        .eq('branch_id', branchId)
 
       if (error) {
-        console.error('Reject update error:', error)
+        console.error('Legacy reject update error:', error)
         throw new Error(`Failed to reject: ${error.message}`)
       }
 
-      // Refresh data
-      if (fetchRequests && branchId) {
-        await fetchRequests(branchId)
-      }
-
-      showToast('info', 'Request Rejected', `${request.department}`)
+      if (fetchRequests && branchId) await fetchRequests(branchId)
+      showToast('info', 'Request Rejected', `${request.department || 'Request'}`)
       resetReject()
     } catch (err) {
       console.error('Reject error:', err)
@@ -454,7 +564,7 @@ setTimeout(() => {
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, color: theme.text }}>Fulfillment Center</h2>
           <p style={{ fontSize: 12, color: theme.textMuted }}>
-            {requests.filter(r => pendingStatuses.includes(r.status)).length} pending · {requests.filter(r => completedStatuses.includes(r.status)).length} completed
+            {flattenedItems.filter(i => pendingStatuses.includes(i._itemStatus)).length} pending · {flattenedItems.filter(i => completedStatuses.includes(i._itemStatus)).length} completed
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -499,8 +609,8 @@ setTimeout(() => {
               color: activeTab === tab ? '#1e40af' : theme.textMuted,
             }}>
               {tab === TAB_PENDING
-                ? requests.filter(r => pendingStatuses.includes(r.status)).length
-                : requests.filter(r => completedStatuses.includes(r.status)).length}
+                ? flattenedItems.filter(i => pendingStatuses.includes(i._itemStatus)).length
+                : flattenedItems.filter(i => completedStatuses.includes(i._itemStatus)).length}
             </span>
           </button>
         ))}
@@ -555,12 +665,12 @@ setTimeout(() => {
             const fulfilled = Number(item._fulfilledQty || 0)
             const remaining = Math.max(0, requested - fulfilled)
             const [pbg, pc] = (pColors[item.priority] || '#f3f4f6,#374151').split(',')
-            const [sbg, sc] = (statusColors[item.status] || '#f3f4f6,#374151').split(',')
+            const [sbg, sc] = (statusColors[item._itemStatus] || '#f3f4f6,#374151').split(',')
             const stock = getStockStatus(inv, requested)
-            const isPending = pendingStatuses.includes(item.status)
+            const isPending = pendingStatuses.includes(item._itemStatus)
 
             return (
-              <Card key={`${item.id}-${item._itemIndex}`} style={{
+              <Card key={item._itemId ? `${item._requestId}-${item._itemId}` : `${item._requestId}-${item._itemIndex}`} style={{
                 border: item.priority === 'Critical' ? '2px solid #ef4444' : `1px solid ${theme.border}`,
                 overflow: 'hidden',
               }}>
@@ -625,7 +735,7 @@ setTimeout(() => {
                       padding: '3px 10px', borderRadius: 6, fontSize: 11,
                       fontWeight: 600, background: sbg, color: sc
                     }}>
-                      {item.status}
+                      {item._itemStatus}
                     </span>
                     {item.rejection_reason && (
                       <span style={{ fontSize: 11, color: '#dc2626', fontStyle: 'italic' }}>
@@ -649,7 +759,7 @@ setTimeout(() => {
                         style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}>
                         <Ic n="Package" size={13} color="white" /> Dispatch
                       </Btn>
-                      <Btn variant="outline" onClick={() => setRejectModal({ request: { ...item, id: item._requestId } })}
+                      <Btn variant="outline" onClick={() => setRejectModal({ request: { ...item, id: item._requestId }, item })}
                         style={{ fontSize: 12 }}>
                         <Ic n="XCircle" size={13} /> Reject
                       </Btn>
@@ -803,18 +913,18 @@ setTimeout(() => {
 
       {/* Reject Modal */}
       {rejectModal && (
-        <Modal open onClose={resetReject} title="❌ Reject Request">
+        <Modal open onClose={resetReject} title="❌ Reject Item">
           {(() => {
-            const { request } = rejectModal
+            const { request, item } = rejectModal
             return (
               <>
                 <div style={{
                   padding: '14px 16px', background: '#fee2e2', borderRadius: 10, marginBottom: 16,
                   border: '1px solid #fecaca'
                 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>{request.department}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>{item?._displayName || request.department || 'Request Item'}</div>
                   <div style={{ fontSize: 12, color: '#991b1b' }}>
-                    Request from {request.created_by_name || '—'} · {fmtDate(request.created_at)}
+                    Request #{String(request.id || '').slice(0, 8)} · {request.created_by_name || '—'} · {fmtDate(request.created_at)}
                   </div>
                 </div>
 
@@ -827,7 +937,7 @@ setTimeout(() => {
                     value={rejectReason}
                     onChange={e => setRejectReason(e.target.value)}
                     rows={3}
-                    placeholder="Why is this request being rejected?"
+                    placeholder="Why is this item being rejected?"
                     style={{
                       width: '100%', padding: '10px 12px',
                       border: `1px solid ${!rejectReason.trim() ? '#ef4444' : theme.inputBorder}`,
@@ -846,7 +956,7 @@ setTimeout(() => {
                   <Btn variant="outline" onClick={resetReject}>Cancel</Btn>
                   <Btn variant="danger" onClick={handleReject}
                     disabled={loading || processingRef.current || !rejectReason.trim()}>
-                    {loading ? 'Rejecting…' : 'Reject Request'}
+                    {loading ? 'Rejecting…' : 'Reject Item'}
                   </Btn>
                 </div>
               </>
