@@ -1,4 +1,3 @@
-
 import { useApp } from '../../context/AppContext'
 import { ROLE_COLORS } from '../../lib/constants'
 import { Ic } from '../ui'
@@ -46,6 +45,15 @@ const navItems = [
     icon: 'CheckCircle',
     perm: 'canAccessFulfillment',
   },
+
+  // NEW
+  {
+    key: 'assignments',
+    label: 'Assignments',
+    icon: 'ClipboardList',
+    perm: 'canAccessAssignments',
+  },
+
   {
     key: 'customer-ledger',
     label: 'Customer Ledger',
@@ -117,6 +125,7 @@ export default function Sidebar() {
     canAccessStockMovement,
     canAccessDemands,
     canAccessFulfillment,
+    canAccessAssignments,
     canAccessSuppliers,
     canAccessLedger,
     canAccessComplaints,
@@ -157,6 +166,7 @@ export default function Sidebar() {
     canAccessStockMovement,
     canAccessDemands,
     canAccessFulfillment,
+    canAccessAssignments,
     canAccessSuppliers,
     canAccessLedger,
     canAccessComplaints,
@@ -175,26 +185,69 @@ export default function Sidebar() {
     .toLowerCase()
     .replace(/[-_\s]/g, '')
 
+  /*
+   * Assignment access
+   *
+   * Assignments are intended for management users.
+   * Master / Developer / Admin / Manager can access them.
+   *
+   * If AppContext already provides canAccessAssignments(),
+   * that permission is respected first.
+   */
+  const assignmentRoles = [
+    'master',
+    'developer',
+    'admin',
+    'manager',
+    'owner',
+  ]
+
+  const canUseAssignments =
+    typeof canAccessAssignments === 'boolean'
+      ? canAccessAssignments
+      : typeof canAccessAssignments === 'function'
+        ? (() => {
+            try {
+              return Boolean(canAccessAssignments())
+            } catch (error) {
+              console.error(
+                'Sidebar assignment permission error:',
+                error
+              )
+              return false
+            }
+          })()
+        : assignmentRoles.includes(normalizedRole)
+
   const visible = navItems.filter((item) => {
     let hasPermission = true
 
-    const permission = permChecks[item.perm]
+    /*
+     * Assignments special permission handling.
+     */
+    if (item.key === 'assignments') {
+      hasPermission = canUseAssignments
+    } else {
+      const permission = permChecks[item.perm]
 
-    if (typeof permission === 'function') {
-      try {
-        hasPermission = Boolean(permission())
-      } catch (error) {
-        console.error(
-          `Sidebar permission error for ${item.perm}:`,
-          error
-        )
-        hasPermission = false
+      if (typeof permission === 'function') {
+        try {
+          hasPermission = Boolean(permission())
+        } catch (error) {
+          console.error(
+            `Sidebar permission error for ${item.perm}:`,
+            error
+          )
+          hasPermission = false
+        }
+      } else if (typeof permission === 'boolean') {
+        hasPermission = permission
       }
-    } else if (typeof permission === 'boolean') {
-      hasPermission = permission
     }
 
-    // Store Keeper can access Item Templates.
+    /*
+     * Store Keeper can access Item Templates.
+     */
     if (
       item.key === 'item-templates' &&
       normalizedRole === 'storekeeper'
@@ -206,7 +259,10 @@ export default function Sidebar() {
       return false
     }
 
-    // POS and Customer Ledger are restricted to specific branches.
+    /*
+     * POS and Customer Ledger are restricted
+     * to specific branches.
+     */
     if (BRANCH_LOCKED_PAGES.includes(item.key)) {
       return ALLOWED_BRANCHES.includes(userBranch)
     }
@@ -270,7 +326,8 @@ export default function Sidebar() {
             justifyContent: sidebarOpen
               ? 'flex-start'
               : 'center',
-            borderBottom: `1px solid ${safeTheme.border}`,
+            borderBottom:
+              `1px solid ${safeTheme.border}`,
           }}
         >
           <div
