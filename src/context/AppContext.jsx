@@ -124,6 +124,26 @@ export function AppProvider({ children }) {
     if (!userId) return []
 
     const branchesList = []
+    const profileRole = String(userProfile?.role || userProfile?.role_name || userProfile?.user_role || '').trim().toLowerCase()
+
+    // Developers are global: expose every branch so assignment creation can
+    // target a manager from any branch. Other roles keep their existing
+    // branch-membership behavior.
+    if (profileRole === 'developer') {
+      try {
+        const { data: allBranches, error: allBranchesError } = await supabase
+          .from('branches')
+          .select('id, name, address')
+          .order('name', { ascending: true })
+        if (!allBranchesError && Array.isArray(allBranches) && allBranches.length) {
+          setBranches(allBranches)
+          return allBranches
+        }
+      } catch (err) {
+        console.warn('[AppContext] Could not load all branches for Developer:', err)
+      }
+    }
+
 
     // â”€â”€ Method 1: Try branch_members table (multi-branch) â”€â”€
     try {
@@ -1314,7 +1334,9 @@ export function AppProvider({ children }) {
   }, [currentBranch?.id, getLocalDate])
 
   const fetchAssignments = useCallback(async (branchId = currentBranch?.id, options = {}) => {
-    if (!branchId) {
+    const targetUser = options.assignedTo ? String(options.assignedTo) : null
+
+    if (!branchId && !targetUser) {
       setAssignments([])
       setAssignmentCompletions([])
       return []
@@ -1322,15 +1344,35 @@ export function AppProvider({ children }) {
 
     try {
       const requestedDate = options.forDate || getLocalDate()
-      // Generation is server-side and idempotent. Calling it on login/page load
-      // guarantees today's occurrence exists even when the app was not open at midnight.
-      await ensureTaskOccurrences(branchId, requestedDate)
+
+      // A user can receive an assignment whose home branch is different from
+      // their own branch, so fetch assignment links first for personal views.
+      let crossBranchAssignmentIds = []
+      if (targetUser) {
+        const assignedResult = await supabase
+          .from('assignment_assignees')
+          .select('assignment_id')
+          .eq('user_id', targetUser)
+
+        if (assignedResult.error) throw assignedResult.error
+        crossBranchAssignmentIds = [...new Set((assignedResult.data || []).map(x => String(x.assignment_id)).filter(Boolean))]
+      }
 
       let query = supabase
         .from('assignments')
         .select('*')
-        .eq('branch_id', branchId)
         .order('created_at', { ascending: false })
+
+      if (targetUser) {
+        const clauses = []
+        if (branchId) clauses.push(`branch_id.eq.${branchId}`)
+        if (crossBranchAssignmentIds.length) clauses.push(`id.in.(${crossBranchAssignmentIds.join(',')})`)
+        if (clauses.length === 1) query = query.or(clauses[0])
+        else if (clauses.length > 1) query = query.or(clauses.join(','))
+        else query = query.limit(0)
+      } else {
+        query = query.eq('branch_id', branchId)
+      }
 
       if (options.activeOnly) query = query.eq('active', true)
 
@@ -1339,6 +1381,11 @@ export function AppProvider({ children }) {
 
       const rows = Array.isArray(data) ? data : []
       const ids = rows.map(r => r.id).filter(Boolean)
+
+      // Generate today's occurrence for every assignment home branch, including
+      // cross-branch tasks loaded for a staff member.
+      const occurrenceBranches = [...new Set(rows.map(r => r.branch_id).filter(Boolean).map(String))]
+      await Promise.all(occurrenceBranches.map(id => ensureTaskOccurrences(id, requestedDate)))
 
       let links = []
       let occurrences = []
@@ -1383,7 +1430,6 @@ export function AppProvider({ children }) {
       })
 
       const reportMap = new Map(reports.map(report => [String(report.task_occurrence_id), report]))
-      const targetUser = options.assignedTo ? String(options.assignedTo) : null
 
       const occurrenceToCompletion = (occurrence) => {
         if (!occurrence) return null

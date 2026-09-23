@@ -29,6 +29,12 @@ using (
     select 1 from public.stocko_current_user() me
     where lower(coalesce(me.role, '')) in ('master','developer','admin','owner')
        or me.branch_id = assignments.branch_id
+       or exists (
+         select 1
+         from public.assignment_assignees aa
+         where aa.assignment_id = assignments.id
+           and aa.user_id = me.id
+       )
   )
 );
 
@@ -118,7 +124,6 @@ with check (
     from public.stocko_current_user() me
     where (
       assignment_completions.assigned_to = me.id
-      and me.branch_id = assignment_completions.branch_id
     )
     or (
       lower(coalesce(me.role, '')) in ('master','developer','admin','owner')
