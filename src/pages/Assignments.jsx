@@ -252,7 +252,15 @@ export default function Assignments() {
       setLoading(true)
 
       try {
-        await fetchAssignments()
+        // Managers must see every assignment assigned to them, even when the
+        // assignment's home branch belongs to another branch.
+        if (role === 'manager') {
+          await fetchAssignments(undefined, {
+            assignedTo: user?.id || null,
+          })
+        } else {
+          await fetchAssignments()
+        }
       } catch (error) {
         showToast?.(
           'error',
@@ -266,6 +274,8 @@ export default function Assignments() {
     },
     [
       fetchAssignments,
+      role,
+      user?.id,
       showToast,
     ]
   )
@@ -909,6 +919,7 @@ export default function Assignments() {
               users={managers}
               branches={branches}
               user={user}
+              userRole={userRole}
               loading={saving}
               submitLabel={
                 editing
