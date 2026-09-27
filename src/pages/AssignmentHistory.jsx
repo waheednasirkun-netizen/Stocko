@@ -22,6 +22,36 @@ function dateLabel(value) {
     : d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
+
+function formatClock(value) {
+  if (!value) return ''
+  const raw = String(value)
+  if (/^\d{2}:\d{2}/.test(raw)) {
+    const [h, m] = raw.slice(0, 5).split(':').map(Number)
+    const suffix = h >= 12 ? 'PM' : 'AM'
+    const hour = h % 12 || 12
+    return `${hour}:${String(m).padStart(2, '0')} ${suffix}`
+  }
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? raw : d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+function timeRange(row) {
+  const a = row.assignment || row.assignments || {}
+  const start = a.start_time || a.scheduled_time || row.scheduled_time || row.scheduled_at
+  let end = a.deadline_time
+  if (!end && start && Number(a.time_limit_minutes || 0) > 0) {
+    const match = String(start).match(/^(\d{1,2}):(\d{2})/)
+    if (match) {
+      const total = (Number(match[1]) * 60 + Number(match[2]) + Number(a.time_limit_minutes)) % 1440
+      end = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+    }
+  }
+  const left = formatClock(start)
+  const right = formatClock(end)
+  return right ? `${left} – ${right}` : (left || '—')
+}
+
 function dateTimeLabel(value) {
   if (!value) return 'Not completed'
   const d = new Date(value)
@@ -38,6 +68,7 @@ export default function AssignmentHistory() {
     theme,
     showToast,
     currentBranch,
+    currentShift,
     fetchAssignmentHistory,
   } = useApp()
 
@@ -46,13 +77,21 @@ export default function AssignmentHistory() {
   const [status, setStatus] = useState('all')
   const [manager, setManager] = useState('all')
   const [branch, setBranch] = useState('all')
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
+  const localDateKey = value => {
+    const d = value ? new Date(value) : new Date()
+    if (Number.isNaN(d.getTime())) return ''
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const [selectedDate, setSelectedDate] = useState(() => localDateKey(currentShift?.opened_at || new Date()))
+  const [dateInitializedFromShift, setDateInitializedFromShift] = useState(Boolean(currentShift?.opened_at))
 
-  const managers = useMemo(
-    () => users.filter(user => String(user.role || user.role_name || user.user_role || '').toLowerCase().replace(/[-\s]+/g, '_') === 'manager'),
-    [users]
-  )
+  useEffect(() => {
+    if (!currentShift?.opened_at || dateInitializedFromShift) return
+    setSelectedDate(localDateKey(currentShift.opened_at))
+    setDateInitializedFromShift(true)
+  }, [currentShift?.opened_at, dateInitializedFromShift])
+
+  const staff = useMemo(() => users.filter(user => user?.active !== false), [users])
 
   const userMap = useMemo(() => new Map(users.map(x => [x.id, nameOf(x)])), [users])
   const branchMap = useMemo(() => new Map(branches.map(x => [x.id, x.name || x.id])), [branches])
@@ -62,17 +101,17 @@ export default function AssignmentHistory() {
     setLoading(true)
     try {
       await fetchAssignmentHistory({
-        branchId: branch !== 'all' ? branch : currentBranch?.id,
+        branchId: branch !== 'all' ? branch : null,
         assignedTo: manager !== 'all' ? manager : null,
-        startDate: from || null,
-        endDate: to || null,
+        startDate: selectedDate || null,
+        endDate: selectedDate || null,
       })
     } catch (error) {
       showToast?.('error', 'Assignment history', error?.message || 'Could not load history.')
     } finally {
       setLoading(false)
     }
-  }, [branch, currentBranch?.id, fetchAssignmentHistory, from, manager, showToast, to])
+  }, [branch, currentBranch?.id, fetchAssignmentHistory, manager, selectedDate, showToast])
 
   useEffect(() => {
     load()
@@ -119,14 +158,14 @@ export default function AssignmentHistory() {
   }, [assignmentCompletions, branch, branchMap, search, status, userMap])
 
   const stats = useMemo(() => {
-    const list = assignmentCompletions
+    const list = rows
     return {
       total: list.length,
       completed: list.filter(x => String(x.status || '').toLowerCase() === 'completed').length,
       late: list.filter(x => ['completed_late', 'late'].includes(String(x.status || '').toLowerCase())).length,
       missed: list.filter(x => ['missed', 'overdue'].includes(String(x.status || '').toLowerCase())).length,
     }
-  }, [assignmentCompletions])
+  }, [rows])
 
   const surface = theme?.cardBg || '#fff'
   const text = theme?.text || '#101828'
@@ -144,7 +183,7 @@ export default function AssignmentHistory() {
             <div>
               <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Assignment History</h1>
               <p style={{ margin: '4px 0 0', color: muted, fontSize: 12.5 }}>
-                Review completion, late work and missed assignments.
+                Daily task history. Choose a date to check older records; after-midnight tasks stay with the business date of their shift.
               </p>
             </div>
           </div>
@@ -170,16 +209,16 @@ export default function AssignmentHistory() {
               <option value="missed">Missed</option>
             </select>
             <select value={manager} onChange={e => setManager(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }}>
-              <option value="all">All managers</option>
-              {managers.map(item => <option key={item.id} value={item.id}>{nameOf(item)}</option>)}
+              <option value="all">All staff</option>
+              {staff.map(item => { const b = branchMap.get(item.branch_id); return <option key={item.id} value={item.id}>{nameOf(item)}{b ? ` (${b})` : ''}</option> })}
             </select>
             <select value={branch} onChange={e => setBranch(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }}>
               <option value="all">All branches</option>
               {branches.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
             </select>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }} title="From date" />
-              <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }} title="To date" />
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }} title="History date" />
+              <Btn variant="outline" onClick={() => setSelectedDate(localDateKey(new Date()))}>Today</Btn>
             </div>
           </div>
           {branch !== 'all' && (
@@ -192,35 +231,31 @@ export default function AssignmentHistory() {
         {loading ? (
           <div style={{ height: 300, borderRadius: 14, background: '#f2f4f7' }} />
         ) : rows.length === 0 ? (
-          <EmptyState icon="History" title="No history found" message="Try changing the date, manager or status filters." />
+          <EmptyState icon="History" title="No history found" message="No tasks were found for the selected date and filters." />
         ) : (
           <Card style={{ padding: 0, overflow: 'hidden', background: surface, border: `1px solid ${border}` }}>
+            <div style={{ padding: '13px 16px', background: '#f8fafc', borderBottom: `1px solid ${border}`, display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 850, color: text }}>Tasks · {dateLabel(selectedDate)}</div>
+                <div style={{ marginTop: 3, fontSize: 11.5, color: muted }}>All accessible branches in one daily history table.</div>
+              </div>
+              <span style={{ padding: '5px 9px', borderRadius: 999, fontSize: 10.5, fontWeight: 800, background: '#eef2ff', color: '#4f46e5' }}>{rows.length} tasks</span>
+            </div>
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
-                <thead>
-                  <tr style={{ background: '#f8fafc' }}>
-                    {['Task', 'Manager', 'Branch', 'Scheduled', 'Completed', 'Status', 'Note'].map(head => (
-                      <th key={head} style={th}>{head}</th>
-                    ))}
-                  </tr>
-                </thead>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
+                <thead><tr>{['Task', 'Staff', 'Branch', 'Time', 'Completed', 'Status', 'Note'].map(head => <th key={head} style={th}>{head}</th>)}</tr></thead>
                 <tbody>
                   {rows.map(row => {
                     const meta = statusMeta(row.status)
-                    return (
-                      <tr key={row.id || `${row.assignment_id}-${row.scheduled_date}`} style={{ borderTop: `1px solid ${border}` }}>
-                        <td style={td}>
-                          <div style={{ fontWeight: 750, color: text }}>{row.title}</div>
-                          {row.description && <div style={{ marginTop: 3, fontSize: 11, color: muted }}>{row.description}</div>}
-                        </td>
-                        <td style={td}>{row.managerName}</td>
-                        <td style={td}>{row.branchName}</td>
-                        <td style={td}>{dateLabel(row.scheduled_date)}{row.scheduled_time ? ` · ${row.scheduled_time}` : ''}</td>
-                        <td style={td}>{dateTimeLabel(row.completed_at)}</td>
-                        <td style={td}><span style={{ display: 'inline-flex', padding: '4px 8px', borderRadius: 999, background: meta.bg, color: meta.fg, fontSize: 10.5, fontWeight: 800 }}>{meta.label}</span></td>
-                        <td style={{ ...td, maxWidth: 240, color: muted }}>{row.note || '—'}</td>
-                      </tr>
-                    )
+                    return <tr key={row.id || `${row.assignment_id}-${row.assigned_to}-${row.scheduled_at || row.scheduled_date}`} style={{ borderTop: `1px solid ${border}` }}>
+                      <td style={td}><div style={{ fontWeight: 750, color: text }}>{row.title}</div>{row.description && <div style={{ marginTop: 3, fontSize: 11, color: muted }}>{row.description}</div>}</td>
+                      <td style={td}><div style={{ fontWeight: 700, color: text }}>{row.managerName}</div><div style={{ marginTop: 2, color: muted, fontSize: 11 }}>({row.branchName})</div></td>
+                      <td style={td}>{row.branchName}</td>
+                      <td style={td}><div style={{ fontWeight: 800, color: text }}>{timeRange(row)}</div></td>
+                      <td style={td}>{dateTimeLabel(row.completed_at)}</td>
+                      <td style={td}><span style={{ display: 'inline-flex', padding: '4px 8px', borderRadius: 999, background: meta.bg, color: meta.fg, fontSize: 10.5, fontWeight: 800 }}>{meta.label}</span></td>
+                      <td style={{ ...td, maxWidth: 260, color: muted }}>{row.note || '—'}</td>
+                    </tr>
                   })}
                 </tbody>
               </table>

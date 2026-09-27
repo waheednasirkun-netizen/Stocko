@@ -1888,58 +1888,29 @@ export function AppProvider({ children }) {
   const deleteAssignment = useCallback(async id => {
     if (!id) return { success: false }
     try {
+      const normalizedRole = String(userRole || '').toLowerCase().trim()
+      if (!['admin', 'developer'].includes(normalizedRole)) {
+        throw new Error('Only Admin or Developer can delete assignments.')
+      }
       const { data: existing, error: readError } = await supabase
-        .from('assignments')
-        .select('id,branch_id,title')
-        .eq('id', id)
-        .maybeSingle()
-
+        .from('assignments').select('id,branch_id,title').eq('id', id).maybeSingle()
       if (readError) throw readError
       if (!existing) throw new Error('Assignment not found.')
-
-      const occurrenceCheck = await supabase
-        .from('task_occurrences')
-        .select('id', { count: 'exact', head: true })
-        .eq('assignment_id', id)
-
-      if (occurrenceCheck.error) throw occurrenceCheck.error
-
-      if ((occurrenceCheck.count || 0) > 0) {
-        // Never delete a template that already has execution history.
-        // Deactivate it so historical occurrences/reports remain immutable.
-        const { error } = await supabase
-          .from('assignments')
-          .update({ active: false })
-          .eq('id', id)
-
-        if (error) throw error
-
-        await fetchAssignments(existing.branch_id)
-        await createActivityLog({
-          action: 'Recurring Task Disabled',
-          description: `Disabled assignment with preserved history: ${existing.title}`,
-          metadata: { assignment_id: id, preserved_occurrences: true },
-        })
-        showToast('success', 'Task Disabled', 'History was preserved and future occurrences were stopped.')
-        return { success: true, deactivated: true }
-      }
-
-      const { error } = await supabase.from('assignments').delete().eq('id', id)
+      const { error } = await supabase.rpc('delete_assignment_admin_developer', { p_assignment_id: id })
       if (error) throw error
-
       await fetchAssignments(existing.branch_id)
       await createActivityLog({
         action: 'Assignment Deleted',
-        description: `Deleted assignment: ${existing.title}`,
+        description: `Permanently deleted assignment: ${existing.title}`,
         metadata: { assignment_id: id },
       })
-      showToast('success', 'Task Deleted', 'The task has been removed.')
+      showToast('success', 'Task Deleted', 'The assignment and its execution records were removed.')
       return { success: true }
     } catch (error) {
       showToast('error', 'Delete Failed', error?.message || 'Could not delete assignment.')
       return { success: false, error }
     }
-  }, [fetchAssignments, createActivityLog, showToast])
+  }, [userRole, fetchAssignments, createActivityLog, showToast])
 
   const startAssignment = useCallback(async assignment => {
     if (!assignment?.occurrence?.id) {
@@ -1996,7 +1967,14 @@ export function AppProvider({ children }) {
       }
 
       if (!occurrence?.id) {
-        throw new Error('No task occurrence exists for this date/user.')
+        throw new Error('No task occurrence exists for this shift/user.')
+      }
+
+      if (occurrence.scheduled_at) {
+        const startsAt = new Date(occurrence.scheduled_at)
+        if (!Number.isNaN(startsAt.getTime()) && Date.now() < startsAt.getTime()) {
+          throw new Error(`This task cannot be submitted before ${startsAt.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}.`)
+        }
       }
 
       let proofUrl = payload.proof_url || null
@@ -2096,23 +2074,73 @@ export function AppProvider({ children }) {
 
   const fetchAssignmentHistory = useCallback(async (options = {}) => {
     try {
+      const branchId = Object.prototype.hasOwnProperty.call(options, 'branchId')
+        ? options.branchId
+        : currentBranch?.id
+
+      // History is selected by BUSINESS SHIFT start date, not occurrence/completion
+      // calendar date. This keeps after-midnight work attached to the shift that
+      // actually started the previous day.
+      let shiftQuery = supabase
+        .from('business_shifts')
+        .select('id,branch_id,opened_at,closed_at,status')
+        .order('opened_at', { ascending: false })
+
+      if (branchId) shiftQuery = shiftQuery.eq('branch_id', branchId)
+
+      // Use a deliberately wide UTC window, then apply the user's local calendar
+      // date in JS. This avoids timezone boundaries moving a late-night shift.
+      if (options.startDate) {
+        const d = new Date(`${options.startDate}T00:00:00`)
+        d.setDate(d.getDate() - 1)
+        shiftQuery = shiftQuery.gte('opened_at', d.toISOString())
+      }
+      if (options.endDate) {
+        const d = new Date(`${options.endDate}T23:59:59.999`)
+        d.setDate(d.getDate() + 1)
+        shiftQuery = shiftQuery.lte('opened_at', d.toISOString())
+      }
+
+      const shiftResult = await shiftQuery
+      if (shiftResult.error) throw shiftResult.error
+
+      const localDateKey = value => {
+        const d = new Date(value)
+        if (Number.isNaN(d.getTime())) return ''
+        const y = d.getFullYear()
+        const m = String(d.getMonth() + 1).padStart(2, '0')
+        const day = String(d.getDate()).padStart(2, '0')
+        return `${y}-${m}-${day}`
+      }
+
+      const shifts = (shiftResult.data || []).filter(shift => {
+        const key = localDateKey(shift.opened_at)
+        return (!options.startDate || key >= options.startDate) &&
+          (!options.endDate || key <= options.endDate)
+      })
+      const shiftIds = shifts.map(x => x.id)
+      const shiftMap = new Map(shifts.map(x => [x.id, x]))
+
+      if (shiftIds.length === 0) {
+        setAssignmentCompletions([])
+        return []
+      }
+
       let query = supabase
         .from('task_occurrences')
-        .select('*, assignments(title,description,branch_id), task_reports(*)')
-        .order('scheduled_date', { ascending: false })
-        .order('scheduled_at', { ascending: false })
+        .select('*, assignments(id,title,description,branch_id,start_time,deadline_time,scheduled_time,time_limit_minutes), task_reports(*)')
+        .in('shift_id', shiftIds)
+        .order('scheduled_at', { ascending: true })
 
-      const branchId = options.branchId || currentBranch?.id
       if (branchId) query = query.eq('branch_id', branchId)
       if (options.assignedTo) query = query.eq('assigned_to', options.assignedTo)
-      if (options.startDate) query = query.gte('scheduled_date', options.startDate)
-      if (options.endDate) query = query.lte('scheduled_date', options.endDate)
 
       const { data, error } = await query
       if (error) throw error
 
       const rows = Array.isArray(data) ? data.map(row => {
         const report = Array.isArray(row.task_reports) ? row.task_reports[0] : row.task_reports
+        const shift = shiftMap.get(row.shift_id) || null
         return {
           ...row,
           assignment: row.assignments || {},
@@ -2121,6 +2149,11 @@ export function AppProvider({ children }) {
           completed_at: row.completed_at || report?.completion_time || null,
           note: report?.report_text || null,
           occurrence_id: row.id,
+          business_shift: shift,
+          shift_opened_at: shift?.opened_at || null,
+          shift_closed_at: shift?.closed_at || null,
+          shift_status: shift?.status || null,
+          business_date: shift?.opened_at ? localDateKey(shift.opened_at) : row.scheduled_date,
         }
       }) : []
 

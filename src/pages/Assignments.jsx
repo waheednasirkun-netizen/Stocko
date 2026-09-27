@@ -211,6 +211,9 @@ export default function Assignments() {
     'owner',
   ].includes(role)
 
+  // Destructive assignment deletion is intentionally narrower than edit/create.
+  const canDelete = ['developer', 'admin'].includes(role)
+
   const managers = useMemo(() => Array.isArray(users) ? users.filter(user => user?.active !== false) : [], [users])
 
   const managerMap = useMemo(
@@ -324,12 +327,6 @@ export default function Assignments() {
         title.includes(needle) ||
         description.includes(needle) ||
         managerText.includes(needle)
-
-      const occurrenceTimes = (task?.occurrences || []).map(o => o.scheduled_at || o.created_at).filter(Boolean)
-      const matchesOperationalRange = occurrenceTimes.length
-        ? occurrenceTimes.some(isInOperationalRange)
-        : isInOperationalRange(task?.created_at || task?.updated_at)
-      if (!matchesOperationalRange) return false
 
       if (!matchesSearch) {
         return false
@@ -894,7 +891,7 @@ export default function Assignments() {
                       : null
                   }
                   onDelete={
-                    canManage
+                    canDelete
                       ? remove
                       : null
                   }
