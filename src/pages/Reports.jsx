@@ -148,12 +148,16 @@ const getPresetDates = (preset) => {
 };
 
 export default function Reports() {
-  const { transactions = [], requests = [], inventory = [], theme, showToast } = useApp();
+  const { transactions = [], requests = [], inventory = [], theme, showToast, isInOperationalRange, operationalRange } = useApp();
+
+  // Operational inventory reports must only show currently active items.
+  // Historical stock/request rows remain available in their historical report types.
+  const activeInventory = useMemo(() => (inventory || []).filter((i) => i.active !== false), [inventory]);
 
   /* ── Tabs ── */
   const [reportType, setReportType] = useState("stock");
 
-  /* ── Date range ── */
+  /* ── Legacy local date controls (shared header range is authoritative) ── */
   const [datePreset, setDatePreset] = useState("Last 30 Days");
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
@@ -161,6 +165,11 @@ export default function Reports() {
     return d;
   });
   const [endDate, setEndDate] = useState(new Date());
+
+  useEffect(() => {
+    if (operationalRange?.start) setStartDate(new Date(operationalRange.start));
+    if (operationalRange?.end) setEndDate(new Date(operationalRange.end));
+  }, [operationalRange]);
 
   /* ── Filters ── */
   const [itemFilter, setItemFilter] = useState("All");
@@ -194,12 +203,8 @@ export default function Reports() {
   }, []);
 
   const inDateRange = useCallback(
-    (dateStr) => {
-      if (!dateStr) return true;
-      const d = new Date(dateStr).getTime();
-      return d >= startDate.getTime() && d <= endDate.getTime();
-    },
-    [startDate, endDate]
+    (dateStr) => !dateStr || isInOperationalRange(dateStr),
+    [isInOperationalRange]
   );
 
   /* ── Unique values for dropdowns ── */
@@ -212,10 +217,10 @@ export default function Reports() {
         (r.request_items || []).forEach((ri) => { if (ri.name) set.add(ri.name); });
       });
     } else if (reportType === "inventory") {
-      inventory.forEach((i) => { if (i.name) set.add(i.name); });
+      activeInventory.forEach((i) => { if (i.name) set.add(i.name); });
     }
     return ["All", ...Array.from(set).sort()];
-  }, [reportType, transactions, requests, inventory]);
+  }, [reportType, transactions, requests, activeInventory]);
 
   const uniqueDepts = useMemo(() => {
     const set = new Set();
@@ -315,7 +320,7 @@ export default function Reports() {
     }
 
     else if (reportType === "inventory") {
-      data = (inventory || [])
+      data = activeInventory
         .filter((i) => !search || (i.name || "").toLowerCase().includes(search.toLowerCase()))
         .filter((i) => itemFilter === "All" || i.name === itemFilter)
         .map((i) => ({
@@ -329,7 +334,7 @@ export default function Reports() {
     }
 
     return data;
-  }, [reportType, filteredTransactions, requests, inventory, inDateRange, itemFilter, statusFilter, deptFilter, search]);
+  }, [reportType, filteredTransactions, requests, activeInventory, inDateRange, itemFilter, statusFilter, deptFilter, search]);
 
   /* ── Summary stats ── */
   const summary = useMemo(() => {
@@ -423,7 +428,7 @@ export default function Reports() {
   const categoryData = useMemo(() => {
     if (reportType !== "inventory") return [];
     const map = {};
-    (inventory || []).forEach((i) => {
+    activeInventory.forEach((i) => {
       const cat = i.category || "Uncategorized";
       map[cat] = (map[cat] || 0) + Number(i.quantity || 0);
     });
@@ -431,7 +436,7 @@ export default function Reports() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
       .map(([name, value]) => ({ name, value }));
-  }, [reportType, inventory]);
+  }, [reportType, activeInventory]);
 
   /* ── Recent activity ── */
   const recentActivity = useMemo(() => {
@@ -460,11 +465,11 @@ export default function Reports() {
 
   /* ── Low stock alerts ── */
   const lowStockList = useMemo(() => {
-    return (inventory || [])
+    return activeInventory
       .filter((i) => (i.quantity || 0) <= (i.threshold || i.min_stock || 0))
       .sort((a, b) => (a.quantity || 0) - (b.quantity || 0))
       .slice(0, 6);
-  }, [inventory]);
+  }, [activeInventory]);
 
   /* ═════════════════════════════════════════════════════════════════
      STOCK IN ACTIVITY — Filtered & Sorted
@@ -866,45 +871,12 @@ export default function Reports() {
       ═══════════════════════════════════════ */}
       <Card style={{ marginBottom: 20, padding: "16px 20px", borderRadius: 14 }}>
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "end" }}>
-          {/* Date Preset */}
           <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Date Range</label>
-            <select
-              value={datePreset}
-              onChange={(e) => handleDatePresetChange(e.target.value)}
-              style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, minWidth: 160, fontFamily: "inherit" }}
-            >
-              {DATE_PRESETS.map((p) => <option key={p.label} value={p.label}>{p.label}</option>)}
-            </select>
+            <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Showing</label>
+            <div style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text }}>
+              {operationalRange?.mode === 'custom' ? 'Header date range' : 'Current shift'}
+            </div>
           </div>
-
-          {/* Custom Date Range */}
-          {datePreset === "Custom Range" && (
-            <>
-              <div>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>From</label>
-                <DatePicker
-                  selected={startDate}
-                  onChange={setStartDate}
-                  dateFormat="dd MMM yyyy"
-                  className="rs-datepicker"
-                  maxDate={endDate}
-                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }}
-                />
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>To</label>
-                <DatePicker
-                  selected={endDate}
-                  onChange={setEndDate}
-                  dateFormat="dd MMM yyyy"
-                  className="rs-datepicker"
-                  minDate={startDate}
-                  style={{ padding: "9px 12px", border: `1px solid ${theme.inputBorder}`, borderRadius: 10, fontSize: 13, background: theme.inputBg, color: theme.text, fontFamily: "inherit" }}
-                />
-              </div>
-            </>
-          )}
 
           {/* Item */}
           <div>

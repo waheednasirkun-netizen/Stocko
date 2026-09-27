@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useApp } from '../context/AppContext'
 import { supabase } from '../lib/supabase'
 import { Card, Btn, Ic, StatusPill } from '../components/ui'
+import { getBusinessShift } from '../lib/businessShift'
 
 const STATUSES = ['Open', 'In Progress', 'Resolved', 'Closed', 'Rejected']
 const CATEGORIES = ['Food Quality', 'Food Safety', 'Service', 'Staff', 'Cleanliness', 'Delivery', 'Billing', 'Other']
@@ -16,6 +17,7 @@ export default function Complaints() {
   const isMaster = userRole === 'Master' || user?.role === 'Master'
   const canManage = ['Developer', 'Admin', 'Manager'].includes(userRole || user?.role)
   const isDeveloper = userRole === 'Developer' || user?.role === 'Developer'
+  const isKitchenStaff = (userRole || user?.role) === 'Kitchen Staff'
 
   const [tab, setTab] = useState('complaints')
   const [rows, setRows] = useState([])
@@ -51,6 +53,10 @@ export default function Complaints() {
         .order('created_at', { ascending: false })
         .limit(500)
       if (!isMaster && activeBranchId) query = query.eq('branch_id', activeBranchId)
+      if (isKitchenStaff) {
+        const shift = getBusinessShift()
+        query = query.gte('created_at', shift.start.toISOString()).lt('created_at', shift.end.toISOString())
+      }
       if (status !== 'All') query = query.eq('status', status)
       if (entryType !== 'All') query = query.eq('entry_type', entryType.toLowerCase())
       if (from) query = query.gte('created_at', `${from}T00:00:00`)
@@ -65,7 +71,7 @@ export default function Complaints() {
     } finally {
       setLoading(false)
     }
-  }, [activeBranchId, entryType, from, isMaster, showToast, status, to])
+  }, [activeBranchId, entryType, from, isKitchenStaff, isMaster, showToast, status, to])
 
   const loadQrs = useCallback(async () => {
     setQrLoading(true)
@@ -195,7 +201,7 @@ export default function Complaints() {
     <div className="animate-fade-in responsive-page">
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap',marginBottom:18}}>
         <div><h2 style={{fontSize:20,fontWeight:800,color:theme.text,margin:0}}>Complaints & Feedback</h2><p style={{fontSize:12,color:theme.textMuted,margin:'5px 0 0'}}>Customer issues are routed to their branch automatically.</p></div>
-        <div style={{display:'flex',gap:8}}><Btn variant={tab==='complaints'?'primary':'outline'} onClick={()=>setTab('complaints')}><Ic n="MessageSquare" size={14}/> Complaints</Btn><Btn variant={tab==='qrs'?'primary':'outline'} onClick={()=>setTab('qrs')}><Ic n="QrCode" size={14}/> QR Codes</Btn></div>
+        <div style={{display:'flex',gap:8}}><Btn variant={tab==='complaints'?'primary':'outline'} onClick={()=>setTab('complaints')}><Ic n="MessageSquare" size={14}/> Complaints</Btn>{!isKitchenStaff && <Btn variant={tab==='qrs'?'primary':'outline'} onClick={()=>setTab('qrs')}><Ic n="QrCode" size={14}/> QR Codes</Btn>}</div>
       </div>
 
       {tab === 'complaints' ? (

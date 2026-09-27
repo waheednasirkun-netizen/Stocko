@@ -5,6 +5,7 @@ import { useApp } from '../../context/AppContext'
 import { supabase } from '../../lib/supabase'
 import { posApi } from '../../lib/api'
 import { Ic } from '../ui'
+import { getBusinessShift, isStaffCurrentShiftOnly } from '../../lib/businessShift'
 
 /**
  * STOCKO POS — Store Edition (Light Theme)
@@ -611,22 +612,24 @@ export default function POS() {
     if (!branchId) return
     setOrdersLoading(true)
     try {
-      let response = await supabase
+      const shift = getBusinessShift()
+      const staffShiftOnly = isStaffCurrentShiftOnly(user?.role)
+      let response = supabase
         .from('orders')
         .select('*, order_items(*), order_payments(*)')
         .eq('branch_id', branchId)
-        .order('created_at', { ascending: false })
-        .limit(250)
+      if (staffShiftOnly) response = response.gte('created_at', shift.start.toISOString()).lt('created_at', shift.end.toISOString())
+      response = await response.order('created_at', { ascending: false }).limit(250)
 
       // Some older deployments do not expose the relationship in PostgREST.
       // Fall back to orders + items without breaking the page.
       if (response.error) {
-        response = await supabase
+        let fallback = supabase
           .from('orders')
           .select('*, order_items(*)')
           .eq('branch_id', branchId)
-          .order('created_at', { ascending: false })
-          .limit(250)
+        if (staffShiftOnly) fallback = fallback.gte('created_at', shift.start.toISOString()).lt('created_at', shift.end.toISOString())
+        response = await fallback.order('created_at', { ascending: false }).limit(250)
       }
 
       if (response.error) throw response.error
@@ -643,19 +646,19 @@ export default function POS() {
     } finally {
       setOrdersLoading(false)
     }
-  }, [branchId, showToast])
+  }, [branchId, showToast, user?.role])
 
   // Auto-load today's orders for reports
   const loadTodayOrders = useCallback(async () => {
     if (!branchId || !hasReportAccess) return
-    const today = new Date().toISOString().split('T')[0]
+    const shift = getBusinessShift()
     try {
       let response = await supabase
         .from('orders')
         .select('*, order_items(*), order_payments(*)')
         .eq('branch_id', branchId)
-        .gte('created_at', `${today}T00:00:00`)
-        .lte('created_at', today + 'T23:59:59')
+        .gte('created_at', shift.start.toISOString())
+        .lt('created_at', shift.end.toISOString())
         .order('created_at', { ascending: false })
 
       if (response.error) {
@@ -663,8 +666,8 @@ export default function POS() {
           .from('orders')
           .select('*, order_items(*)')
           .eq('branch_id', branchId)
-          .gte('created_at', `${today}T00:00:00`)
-          .lte('created_at', `${today}T23:59:59`)
+          .gte('created_at', shift.start.toISOString())
+          .lt('created_at', shift.end.toISOString())
           .order('created_at', { ascending: false })
       }
 
@@ -805,10 +808,8 @@ export default function POS() {
     () => orders.filter(order => {
       if (![ORDER_STATUS.PAID, ORDER_STATUS.CREDIT, ORDER_STATUS.COMPLETED].includes(order.status)) return false
       const date = new Date(order.created_at)
-      const today = new Date()
-      return date.getFullYear() === today.getFullYear() &&
-        date.getMonth() === today.getMonth() &&
-        date.getDate() === today.getDate()
+      const shift = getBusinessShift()
+      return date >= shift.start && date < shift.end
     }).reduce((sum, order) => sum + safeNumber(order.total), 0),
     [orders]
   )
@@ -816,10 +817,8 @@ export default function POS() {
   const todayOrderCount = useMemo(
     () => orders.filter(order => {
       const date = new Date(order.created_at)
-      const today = new Date()
-      return date.getFullYear() === today.getFullYear() &&
-        date.getMonth() === today.getMonth() &&
-        date.getDate() === today.getDate()
+      const shift = getBusinessShift()
+      return date >= shift.start && date < shift.end
     }).length,
     [orders]
   )
@@ -1211,6 +1210,11 @@ export default function POS() {
 
   // ── Place Order ──
   const placeOrder = async () => {
+    const shift = getBusinessShift()
+    if (!shift.active) {
+      showToast('error', 'Shift Closed', 'POS shift is closed from 4:00 AM to 10:00 AM. The next shift opens automatically at 10:00 AM.')
+      return
+    }
     if (!branchId) {
       showToast('error', 'No branch', 'Select a branch before placing orders')
       return
@@ -1700,11 +1704,12 @@ export default function POS() {
         .eq('branch_id', branchId)
         .order('created_at', { ascending: false })
 
-      if (reportFilters.startDate) {
-        query = query.gte('created_at', `${reportFilters.startDate}T00:00:00`)
-      }
-      if (reportFilters.endDate) {
-        query = query.lte('created_at', reportFilters.endDate + 'T23:59:59')
+      if (isStaffCurrentShiftOnly(user?.role)) {
+        const shift = getBusinessShift()
+        query = query.gte('created_at', shift.start.toISOString()).lt('created_at', shift.end.toISOString())
+      } else {
+        if (reportFilters.startDate) query = query.gte('created_at', `${reportFilters.startDate}T00:00:00`)
+        if (reportFilters.endDate) query = query.lte('created_at', reportFilters.endDate + 'T23:59:59')
       }
       if (reportFilters.customer) {
         query = query.eq('customer_id', reportFilters.customer)
@@ -1721,8 +1726,13 @@ export default function POS() {
           .select('*, order_items(*)')
           .eq('branch_id', branchId)
           .order('created_at', { ascending: false })
-        if (reportFilters.startDate) fallbackQuery = fallbackQuery.gte('created_at', `${reportFilters.startDate}T00:00:00`)
-        if (reportFilters.endDate) fallbackQuery = fallbackQuery.lte('created_at', `${reportFilters.endDate}T23:59:59`)
+        if (isStaffCurrentShiftOnly(user?.role)) {
+          const shift = getBusinessShift()
+          fallbackQuery = fallbackQuery.gte('created_at', shift.start.toISOString()).lt('created_at', shift.end.toISOString())
+        } else {
+          if (reportFilters.startDate) fallbackQuery = fallbackQuery.gte('created_at', `${reportFilters.startDate}T00:00:00`)
+          if (reportFilters.endDate) fallbackQuery = fallbackQuery.lte('created_at', `${reportFilters.endDate}T23:59:59`)
+        }
         if (reportFilters.customer) fallbackQuery = fallbackQuery.eq('customer_id', reportFilters.customer)
         if (reportFilters.status !== 'all') fallbackQuery = fallbackQuery.eq('status', reportFilters.status)
         const fallback = await fallbackQuery

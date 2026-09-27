@@ -4,7 +4,7 @@ import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum, DEPARTMENTS } from '../lib/constants'
 
 export default function Demands() {
-  const { requests, inventory, theme, user, createRequest, showToast } = useApp()
+  const { requests, inventory, theme, user, createRequest, showToast, isInOperationalRange } = useApp()
 
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -20,15 +20,15 @@ export default function Demands() {
   const getSuggestions = useCallback((query) => {
     if (!query.trim()) return []
     const q = query.toLowerCase()
-    return (inventory || []).filter(i => i.name?.toLowerCase().includes(q)).slice(0, 8)
+    return (inventory || []).filter(i => i.active !== false && i.name?.toLowerCase().includes(q)).slice(0, 8)
   }, [inventory])
 
   const filtered = useMemo(() => {
-    let list = [...(requests || [])].sort((a, b) => new Date(b.created_at || b.createdAt || 0) - new Date(a.created_at || a.createdAt || 0))
+    let list = [...(requests || [])].filter(d => isInOperationalRange(d.created_at || d.createdAt)).sort((a, b) => new Date(b.created_at || b.createdAt || 0) - new Date(a.created_at || a.createdAt || 0))
     if (search) list = list.filter(d => (d.item_name || d.name || '').toLowerCase().includes(search.toLowerCase()))
     if (filterSt !== 'All') list = list.filter(d => d.status === filterSt)
     return list
-  }, [requests, search, filterSt])
+  }, [requests, search, filterSt, isInOperationalRange])
 
   const addItemRow = () => {
     const newId = items.length > 0 ? Math.max(...items.map(i => i.id)) + 1 : 1
@@ -107,6 +107,10 @@ export default function Demands() {
 
   items.forEach(item => {
     if (!item.name.trim()) errs[`item_${item.id}`] = 'Item required'
+    else {
+      const selected = (inventory || []).find(inv => inv.id === item.itemId && inv.active !== false)
+      if (!selected) errs[`item_${item.id}`] = 'Select an active inventory item from the list'
+    }
     if (!item.qty || Number(item.qty) <= 0) errs[`qty_${item.id}`] = 'Quantity must be > 0'
   })
 
@@ -121,6 +125,7 @@ export default function Demands() {
       department: department,
       notes: items[0]?.notes || '',
       items: items.map(item => ({
+        inventory_id: item.itemId,
         name: item.name.trim(),
         category: item.category || 'Other',
         unit: item.unit || 'pcs',

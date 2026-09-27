@@ -6,7 +6,8 @@ import {
   inventoryApi, demandsApi,
 } from '../lib/api'
 import { supabase } from '../lib/supabase'
-import { userCan, lightTheme, darkTheme, DEFAULT_UNITS } from '../lib/constants'
+import { userCan, lightTheme, darkTheme, DEFAULT_UNITS, canAccessComplaints as roleCanAccessComplaints, canAccessSuppliers as roleCanAccessSuppliers } from '../lib/constants'
+import { inDateTimeRange } from '../lib/businessShift'
 
 // Roles recognized by the app (used only for loadUserRole validation).
 // Permission checks go through userCan(action, role) / ROLE_CAN in constants.js.
@@ -91,6 +92,56 @@ export function AppProvider({ children }) {
   const [financialTransactions, setFinancialTransactions] = useState([])
   const [activityLogs,          setActivityLogs]          = useState([])
   const [dataLoaded,            setDataLoaded]            = useState(false)
+
+  // Shift + shared operational date range. Null range means the live/current shift.
+  const [currentShift, setCurrentShift] = useState(null)
+  const [operationalDateRange, setOperationalDateRange] = useState(null)
+
+  const canViewHistoricalData = ['Developer', 'Admin', 'Manager'].includes(userRole)
+  const operationalRange = useMemo(() => {
+    if (canViewHistoricalData && operationalDateRange?.start && operationalDateRange?.end) {
+      const start = new Date(operationalDateRange.start + 'T00:00:00')
+      const end = new Date(operationalDateRange.end + 'T23:59:59.999')
+      return { start, end, mode: 'custom' }
+    }
+    if (currentShift?.opened_at) {
+      return { start: new Date(currentShift.opened_at), end: new Date(), mode: 'shift' }
+    }
+    return { start: new Date(0), end: new Date(), mode: 'shift' }
+  }, [canViewHistoricalData, operationalDateRange, currentShift])
+
+  const isInOperationalRange = useCallback((value) => inDateTimeRange(value, operationalRange), [operationalRange])
+
+  const fetchCurrentShift = useCallback(async (branchId) => {
+    if (!branchId) { setCurrentShift(null); return null }
+    const { data, error } = await supabase.rpc('ensure_current_business_shift', { p_branch_id: branchId })
+    if (error) { console.error('[Shift] load:', error); return null }
+    setCurrentShift(data || null)
+    setOperationalDateRange(null)
+    return data || null
+  }, [])
+
+  const closeCurrentShift = useCallback(async (password) => {
+    const branchId = currentBranch?.id || user?.branch_id || user?.branchId
+    if (!branchId) return { success:false, error:new Error('No branch selected') }
+    if (!['Developer','Admin','Manager'].includes(userRole)) return { success:false, error:new Error('Not allowed to close shift') }
+    if (!password) return { success:false, error:new Error('Password is required to close the shift') }
+
+    // Re-authenticate the currently signed-in Manager/Admin/Developer.
+    // Never persist or log this password.
+    const { data: authData } = await supabase.auth.getUser()
+    const email = authData?.user?.email || user?.email
+    if (!email) return { success:false, error:new Error('Could not identify the signed-in account') }
+
+    const { error: verifyError } = await supabase.auth.signInWithPassword({ email, password })
+    if (verifyError) return { success:false, error:new Error('Incorrect password. Shift was not closed.') }
+
+    const { data, error } = await supabase.rpc('close_business_shift', { p_branch_id: branchId })
+    if (error) return { success:false, error }
+    setCurrentShift(data?.new_shift || null)
+    setOperationalDateRange(null)
+    return { success:true, data }
+  }, [currentBranch?.id, user?.branch_id, user?.branchId, user?.email, userRole])
 
   // â”€â”€ Derived: all units â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const allUnits = useMemo(
@@ -383,6 +434,7 @@ export function AppProvider({ children }) {
     }
 
     console.log('[AppContext] loadBranchData start â€” branch:', branchId)
+    await fetchCurrentShift(branchId)
     setLoading(true)
     try {
       const [
@@ -412,8 +464,8 @@ export function AppProvider({ children }) {
       if (finRes.error)  console.error('[AppContext] financials:', finRes.error.message)
       if (actRes.error)  console.error('[AppContext] activity logs:', actRes.error.message)
 
-      if (txnRes.data)  setTransactions(txnRes.data)
-      if (demandRes.data) setDemands(demandRes.data)
+      if (txnRes.data)  setTransactions(txnRes.data || [])
+      if (demandRes.data) setDemands(demandRes.data || [])
       if (invRes.data)  setInventory(invRes.data)
       if (tmplRes.data) setTemplates(tmplRes.data)
       if (supRes.data)  setSuppliers(supRes.data)
@@ -421,7 +473,7 @@ export function AppProvider({ children }) {
       if (procRes.data) setProcurements(procRes.data)
       if (poRes.data)   setPurchaseOrders(poRes.data)
       if (finRes.data)  setFinancialTransactions(finRes.data)
-      if (actRes.data)  setActivityLogs(actRes.data)
+      if (actRes.data)  setActivityLogs(actRes.data || [])
 
       await fetchRequests(branchId)
       await fetchCategories(branchId)
@@ -435,7 +487,7 @@ export function AppProvider({ children }) {
     } finally {
       setLoading(false)
     }
-  }, [showToast, fetchRequests, fetchCategories])
+  }, [showToast, fetchRequests, fetchCategories, userRole, fetchCurrentShift])
 
   // â”€â”€ Legacy loadAllData (redirects to loadBranchData) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const loadAllData = useCallback(async (loggedInUser) => {
@@ -771,6 +823,27 @@ export function AppProvider({ children }) {
     }
 
     try {
+      // Never allow a stale/deactivated/deleted inventory item to be used in a new request.
+      // This database check protects the flow even if the browser still has stale state.
+      const requestedInventoryIds = [...new Set(
+        (items || []).map(item => item.inventory_id).filter(Boolean)
+      )]
+      if ((items || []).some(item => !item.inventory_id)) {
+        throw new Error('Please select every item from the active inventory list.')
+      }
+      const { data: activeRows, error: activeRowsError } = await supabase
+        .from('inventory')
+        .select('id')
+        .eq('branch_id', branchId)
+        .eq('active', true)
+        .in('id', requestedInventoryIds)
+      if (activeRowsError) throw activeRowsError
+      const activeIds = new Set((activeRows || []).map(row => String(row.id)))
+      const unavailable = (items || []).find(item => !activeIds.has(String(item.inventory_id)))
+      if (unavailable) {
+        throw new Error(`"${unavailable.name}" is deleted or inactive. Select an active inventory item.`)
+      }
+
       const { data: req, error: reqError } = await supabase
         .from('requests')
         .insert({
@@ -1098,9 +1171,16 @@ export function AppProvider({ children }) {
     setTemplates(prev => prev.map(t => t.id === id ? { ...t, ...data } : t))
   }, [showToast])
 
+  const setTemplateEnabled = useCallback(async (id, enabled) => {
+    const { data, error } = await templatesApi.setEnabled(id, enabled)
+    if (error) { showToast('error', 'Failed', error.message); throw error }
+    setTemplates(prev => prev.map(t => t.id === id ? { ...t, ...data } : t))
+    return data
+  }, [showToast])
+
   const deleteTemplate = useCallback(async (id) => {
     const { error } = await templatesApi.remove(id)
-    if (error) { showToast('error', 'Failed', error.message); return }
+    if (error) { showToast('error', 'Failed', error.message); throw error }
     setTemplates(prev => prev.filter(t => t.id !== id))
   }, [showToast])
 
@@ -2104,6 +2184,7 @@ export function AppProvider({ children }) {
     // UI
     tab, setTab, sidebarOpen, setSidebar,
     loading, dataLoaded,
+    currentShift, fetchCurrentShift, closeCurrentShift, operationalDateRange, setOperationalDateRange, operationalRange, isInOperationalRange, canViewHistoricalData,
     toasts, showToast, dismissToast,
     notifications, addNotification, markAllRead,
     systemEnabled, setSystemEnabled, systemMsg, setSystemMsg,
@@ -2141,7 +2222,7 @@ export function AppProvider({ children }) {
     // Notifications & Logs
     createNotification, createActivityLog,
     // CRUD
-    createTemplate, updateTemplate, deleteTemplate,
+    createTemplate, updateTemplate, setTemplateEnabled, deleteTemplate,
     createSupplier, updateSupplier, deleteSupplier,
     createUser, updateUser, deleteUser,
     createProcurement, updateProcurementStatus, deleteProcurement,
@@ -2181,23 +2262,24 @@ export function AppProvider({ children }) {
     canManageProcurement: () => userCan('createProcurement', userRole) || userCan('closeProcurement', userRole),
     canManagePurchaseOrders: () => userCan('createPO', userRole) || userCan('markPOStatus', userRole),
     canManageFinancials: () => userCan('viewFinancials', userRole),
-    canViewReports: () => !!userRole,
-    canAccessSettings: () => userCan('manageSettings', userRole) || !!userRole,
-    canAccessUserManagement: () => userCan('manageUsers', userRole),
-    canAccessSuppliers: () => userCan('manageSuppliers', userRole) || !!userRole,
-    canAccessProcurement: () => userCan('createProcurement', userRole) || userCan('closeProcurement', userRole),
-    canAccessPurchaseOrders: () => userCan('createPO', userRole) || userCan('markPOStatus', userRole),
-    canAccessFinancials: () => userCan('viewFinancials', userRole),
-    canAccessInventory: () => !!userRole,
-    canAccessStockMovement: () => userCan('stockIn', userRole),
-    canAccessFulfillment: () => userCan('fulfillDemand', userRole) || userCan('fulfillRequest', userRole),
-    canAccessDemands: () => userCan('createDemand', userRole),
+    canViewReports: () => ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper'].includes(userRole),
+    canAccessSettings: () => ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff'].includes(userRole),
+    canAccessUserManagement: () => ['Developer', 'Master', 'Admin', 'Manager'].includes(userRole),
+    canAccessSuppliers: () => roleCanAccessSuppliers(userRole),
+    canAccessProcurement: () => ['Developer', 'Master', 'Admin', 'Manager'].includes(userRole),
+    canAccessPurchaseOrders: () => ['Developer', 'Master', 'Admin', 'Manager'].includes(userRole),
+    canAccessFinancials: () => ['Developer', 'Master', 'Admin', 'Manager'].includes(userRole),
+    canAccessInventory: () => ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff'].includes(userRole),
+    canAccessStockMovement: () => ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper'].includes(userRole),
+    canAccessFulfillment: () => ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper'].includes(userRole),
+    canAccessDemands: () => ['Developer', 'Master', 'Admin', 'Manager', 'Kitchen Staff'].includes(userRole),
     canAccessDashboard: () => true,
-    canAccessAssignments: () => ['Master', 'Developer', 'Admin', 'Manager', 'Owner'].includes(userRole),
-    canAccessActivityLog: () => !!userRole,
-    canAccessItemTemplates: () => userCan('createTemplate', userRole) || userCan('deleteTemplate', userRole),
-    canAccessLedger: () => ['Admin', 'Manager', 'Chief', 'Developer'].includes(userRole),
-    canAccessPOS: () => !!userRole,
+    canAccessAssignments: () => ['Master', 'Developer', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff', 'Owner'].includes(userRole),
+    canAccessComplaints: () => roleCanAccessComplaints(userRole),
+    canAccessActivityLog: () => ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper', 'Kitchen Staff'].includes(userRole),
+    canAccessItemTemplates: () => ['Developer', 'Master', 'Admin', 'Manager'].includes(userRole),
+    canAccessLedger: () => ['Admin', 'Manager', 'Developer', 'Master'].includes(userRole),
+    canAccessPOS: () => ['Developer', 'Master', 'Admin', 'Manager', 'Store Keeper'].includes(userRole),
     userCan: (action) => userCan(action, userRole),
   }
 

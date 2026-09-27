@@ -149,8 +149,11 @@ export default function Sidebar() {
   }
 
   const go = (key) => {
+    const destination = key === 'assignments' && ['storekeeper', 'kitchenstaff'].includes(normalizedRole)
+      ? 'my-assignments'
+      : key
     if (typeof setTab === 'function') {
-      setTab(key)
+      setTab(destination)
     }
 
     if (isMobile() && typeof setSidebar === 'function') {
@@ -200,6 +203,8 @@ export default function Sidebar() {
     'admin',
     'manager',
     'owner',
+    'storekeeper',
+    'kitchenstaff',
   ]
 
   const canUseAssignments =
@@ -245,26 +250,8 @@ export default function Sidebar() {
       }
     }
 
-    /*
-     * Store Keeper can access Item Templates.
-     */
-    if (
-      item.key === 'item-templates' &&
-      normalizedRole === 'storekeeper'
-    ) {
-      hasPermission = true
-    }
-
     if (!hasPermission) {
       return false
-    }
-
-    /*
-     * POS and Customer Ledger are restricted
-     * to specific branches.
-     */
-    if (BRANCH_LOCKED_PAGES.includes(item.key)) {
-      return ALLOWED_BRANCHES.includes(userBranch)
     }
 
     return true

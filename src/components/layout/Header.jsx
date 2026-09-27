@@ -23,6 +23,12 @@ const PAGE_TITLES = {
   complaints: 'Complaints & Feedback',
 }
 
+
+const overlayStyle = {position:'fixed',inset:0,zIndex:9999,background:'rgba(15,23,42,.48)',display:'flex',alignItems:'center',justifyContent:'center',padding:16,backdropFilter:'blur(2px)'}
+const menuButtonStyle = (theme) => ({width:'100%',display:'flex',alignItems:'center',gap:9,border:0,borderRadius:8,padding:'9px 10px',background:'transparent',color:theme.text,fontSize:12,fontWeight:650,cursor:'pointer',textAlign:'left'})
+const iconButtonStyle = (theme) => ({border:`1px solid ${theme.border}`,borderRadius:8,width:30,height:30,display:'grid',placeItems:'center',background:theme.cardHover,color:theme.text,cursor:'pointer'})
+const dateInputStyle = (theme) => ({width:'100%',boxSizing:'border-box',marginTop:6,border:`1px solid ${theme.border}`,borderRadius:9,padding:'10px 11px',background:theme.cardBg,color:theme.text,fontSize:13})
+
 export default function Header() {
   const {
     user,
@@ -36,13 +42,27 @@ export default function Header() {
     notifications = [],
     markAllRead,
     logout,
+    currentShift,
+    closeCurrentShift,
+    operationalDateRange,
+    setOperationalDateRange,
+    canViewHistoricalData,
   } = useApp()
 
   const [showNotifs, setShowNotifs] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
+  const [closingShift, setClosingShift] = useState(false)
+  const [showCloseShift, setShowCloseShift] = useState(false)
+  const [shiftPassword, setShiftPassword] = useState('')
+  const [shiftCloseError, setShiftCloseError] = useState('')
+  const [showShiftMenu, setShowShiftMenu] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  const [showShiftDetails, setShowShiftDetails] = useState(false)
+  const [historyDraft, setHistoryDraft] = useState({ start: '', end: '' })
 
   const notifRef = useRef(null)
   const profileRef = useRef(null)
+  const shiftMenuRef = useRef(null)
 
   const safeTheme = theme || {
     cardBg: dark ? '#111827' : '#ffffff',
@@ -91,6 +111,10 @@ export default function Header() {
         !profileRef.current.contains(event.target)
       ) {
         setShowProfile(false)
+      }
+
+      if (shiftMenuRef.current && !shiftMenuRef.current.contains(event.target)) {
+        setShowShiftMenu(false)
       }
     }
 
@@ -247,6 +271,70 @@ export default function Header() {
       >
         {pageTitle}
       </h2>
+
+      {/* Compact shift control */}
+      {['dashboard','pos','stock-movement','demands','fulfillment-center','assignments','reports'].includes(tab) && (
+        <div className="header-shift-control" style={{display:'flex',alignItems:'center',gap:8,minWidth:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:7,padding:'6px 10px',border:`1px solid ${safeTheme.border}`,borderRadius:10,background:safeTheme.cardHover,minWidth:0}}>
+            <span style={{width:8,height:8,borderRadius:'50%',background:'#22c55e',boxShadow:'0 0 0 3px rgba(34,197,94,.12)',flex:'0 0 auto'}} />
+            <span className="shift-current-label" style={{fontSize:12,fontWeight:700,color:safeTheme.text,whiteSpace:'nowrap'}}>Current Shift</span>
+            <span style={{fontSize:10,fontWeight:800,color:'#15803d',background:'#dcfce7',padding:'3px 7px',borderRadius:999,letterSpacing:.3}}>OPEN</span>
+            {currentShift?.opened_at && <span className="shift-start-time" style={{fontSize:11,color:safeTheme.textMuted,whiteSpace:'nowrap'}}>{new Date(currentShift.opened_at).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})} → Now</span>}
+          </div>
+
+          {canViewHistoricalData && (
+            <button type="button" onClick={() => { setHistoryDraft({start:operationalDateRange?.start || '',end:operationalDateRange?.end || ''}); setShowHistory(true) }}
+              style={{display:'flex',alignItems:'center',gap:6,border:`1px solid ${operationalDateRange ? '#2563eb' : safeTheme.border}`,borderRadius:9,padding:'7px 10px',background:operationalDateRange ? '#eff6ff' : safeTheme.cardBg,color:operationalDateRange ? '#1d4ed8' : safeTheme.text,fontWeight:700,fontSize:12,cursor:'pointer',whiteSpace:'nowrap'}}>
+              <Ic n="History" size={15} color={operationalDateRange ? '#2563eb' : safeTheme.textMuted} />
+              <span className="shift-history-label">{operationalDateRange ? 'Historical' : 'History'}</span>
+            </button>
+          )}
+
+          {canViewHistoricalData && (
+            <div ref={shiftMenuRef} style={{position:'relative'}}>
+              <button type="button" aria-label="Shift options" onClick={() => setShowShiftMenu(v => !v)}
+                style={{display:'flex',alignItems:'center',justifyContent:'center',width:34,height:34,border:`1px solid ${safeTheme.border}`,borderRadius:9,background:safeTheme.cardBg,cursor:'pointer'}}>
+                <Ic n="MoreVertical" size={17} color={safeTheme.textMuted} />
+              </button>
+              {showShiftMenu && <div style={{position:'absolute',right:0,top:40,width:210,background:safeTheme.cardBg,border:`1px solid ${safeTheme.border}`,borderRadius:11,boxShadow:safeTheme.shadowLg,padding:6,zIndex:100}}>
+                <button type="button" onClick={() => {setShowShiftDetails(true);setShowShiftMenu(false)}} style={menuButtonStyle(safeTheme)}><Ic n="Eye" size={15} /> Shift Details</button>
+                <button type="button" onClick={() => {setHistoryDraft({start:operationalDateRange?.start || '',end:operationalDateRange?.end || ''});setShowHistory(true);setShowShiftMenu(false)}} style={menuButtonStyle(safeTheme)}><Ic n="History" size={15} /> View Shift History</button>
+                <div style={{height:1,background:safeTheme.border,margin:'5px 4px'}} />
+                <button type="button" disabled={closingShift} onClick={() => {setShiftPassword('');setShiftCloseError('');setShowCloseShift(true);setShowShiftMenu(false)}} style={{...menuButtonStyle(safeTheme),color:'#dc2626',background:'transparent'}}><Ic n="X" size={15} color="#dc2626" /> Close Current Shift</button>
+              </div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showHistory && canViewHistoricalData && (
+        <div role="dialog" aria-modal="true" style={overlayStyle} onMouseDown={e => {if(e.target===e.currentTarget)setShowHistory(false)}}>
+          <div style={{width:'100%',maxWidth:520,background:safeTheme.cardBg,color:safeTheme.text,border:`1px solid ${safeTheme.border}`,borderRadius:16,padding:20,boxShadow:'0 24px 70px rgba(0,0,0,.28)'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12,marginBottom:16}}><div><h3 style={{margin:0,fontSize:18}}>View Historical Data</h3><p style={{margin:'5px 0 0',fontSize:12,color:safeTheme.textMuted}}>Choose a quick period or select a custom date range.</p></div><button type="button" onClick={()=>setShowHistory(false)} style={iconButtonStyle(safeTheme)}><Ic n="X" size={17}/></button></div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:7,marginBottom:14}}>
+              {[['Today',0],['Yesterday',-1],['Last 7 Days',-6],['Last 30 Days',-29]].map(([label,days]) => <button key={label} type="button" onClick={() => {const end=new Date(); if(days===-1) end.setDate(end.getDate()-1); const start=new Date(end); if(days<-1) start.setDate(start.getDate()+days); const f=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; setHistoryDraft({start:f(start),end:f(end)})}} style={{border:`1px solid ${safeTheme.border}`,borderRadius:9,padding:'8px 6px',background:safeTheme.cardHover,color:safeTheme.text,fontSize:11,fontWeight:700,cursor:'pointer'}}>{label}</button>)}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><label style={{fontSize:11,fontWeight:700,color:safeTheme.textMuted}}>FROM<input type="date" value={historyDraft.start} onChange={e=>setHistoryDraft(v=>({...v,start:e.target.value}))} style={dateInputStyle(safeTheme)}/></label><label style={{fontSize:11,fontWeight:700,color:safeTheme.textMuted}}>TO<input type="date" value={historyDraft.end} onChange={e=>setHistoryDraft(v=>({...v,end:e.target.value}))} style={dateInputStyle(safeTheme)}/></label></div>
+            <div style={{display:'flex',justifyContent:'space-between',gap:10,marginTop:20}}><button type="button" onClick={()=>{setOperationalDateRange(null);setShowHistory(false)}} style={{border:`1px solid ${safeTheme.border}`,borderRadius:9,padding:'9px 12px',background:safeTheme.cardHover,color:safeTheme.text,fontWeight:700,cursor:'pointer'}}>Back to Current Shift</button><button type="button" disabled={!historyDraft.start || !historyDraft.end} onClick={()=>{setOperationalDateRange(historyDraft);setShowHistory(false)}} style={{border:0,borderRadius:9,padding:'9px 18px',background:'#2563eb',color:'#fff',fontWeight:800,cursor:'pointer',opacity:(!historyDraft.start||!historyDraft.end)?.55:1}}>Apply</button></div>
+          </div>
+        </div>
+      )}
+
+      {showShiftDetails && (
+        <div role="dialog" aria-modal="true" style={overlayStyle} onMouseDown={e=>{if(e.target===e.currentTarget)setShowShiftDetails(false)}}><div style={{width:'100%',maxWidth:430,background:safeTheme.cardBg,color:safeTheme.text,border:`1px solid ${safeTheme.border}`,borderRadius:16,padding:20,boxShadow:'0 24px 70px rgba(0,0,0,.28)'}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><h3 style={{margin:0,fontSize:18}}>Shift Details</h3><span style={{fontSize:10,fontWeight:800,color:'#15803d',background:'#dcfce7',padding:'4px 9px',borderRadius:999}}>OPEN</span></div>{[['Shift ID',currentShift?.id ? String(currentShift.id).slice(0,8) : '—'],['Started At',currentShift?.opened_at ? new Date(currentShift.opened_at).toLocaleString() : '—'],['Branch',user?.branch_name || user?.branch?.name || 'Current Branch']].map(([a,b])=><div key={a} style={{display:'flex',justifyContent:'space-between',gap:16,padding:'10px 0',borderBottom:`1px solid ${safeTheme.border}`,fontSize:12}}><span style={{color:safeTheme.textMuted}}>{a}</span><strong style={{textAlign:'right'}}>{b}</strong></div>)}<div style={{display:'flex',justifyContent:'flex-end',marginTop:16}}><button type="button" onClick={()=>setShowShiftDetails(false)} style={{border:`1px solid ${safeTheme.border}`,borderRadius:9,padding:'8px 14px',background:safeTheme.cardHover,color:safeTheme.text,cursor:'pointer'}}>Close</button></div></div></div>
+      )}
+
+      {showCloseShift && (
+        <div role="dialog" aria-modal="true" aria-label="Close shift confirmation" style={overlayStyle}>
+          <form onSubmit={async (e) => {e.preventDefault();setShiftCloseError('');if(!shiftPassword){setShiftCloseError('Enter your password to close this shift.');return}setClosingShift(true);const result=await closeCurrentShift?.(shiftPassword);setClosingShift(false);if(!result?.success){setShiftCloseError(result?.error?.message||'Could not close shift');return}setShiftPassword('');setShowCloseShift(false)}} style={{width:'100%',maxWidth:440,background:safeTheme.cardBg,color:safeTheme.text,border:`1px solid ${safeTheme.border}`,borderRadius:16,padding:22,boxShadow:'0 24px 70px rgba(0,0,0,.3)'}}>
+            <div style={{display:'flex',gap:12,alignItems:'flex-start'}}><div style={{width:42,height:42,borderRadius:12,background:'#fee2e2',display:'grid',placeItems:'center',flex:'0 0 auto'}}><Ic n="X" size={19} color="#dc2626"/></div><div><h3 style={{margin:'1px 0 5px',fontSize:19}}>Close Current Shift?</h3><div style={{fontSize:12,color:safeTheme.textMuted}}>{currentShift?.opened_at ? `Started ${new Date(currentShift.opened_at).toLocaleString()}` : 'Current shift'}</div></div></div>
+            <div style={{margin:'16px 0',padding:'11px 12px',borderRadius:10,background:safeTheme.cardHover,fontSize:12,color:safeTheme.textMuted,lineHeight:1.5}}>Closing this shift will immediately start the next shift at the exact same time. This action requires your account password.</div>
+            <label style={{fontSize:11,fontWeight:800,color:safeTheme.textMuted}}>PASSWORD<input autoFocus type="password" autoComplete="current-password" value={shiftPassword} onChange={e=>setShiftPassword(e.target.value)} placeholder="Enter your password" disabled={closingShift} style={{...dateInputStyle(safeTheme),marginTop:6}} /></label>
+            {shiftCloseError && <div style={{marginTop:9,fontSize:12,color:'#dc2626'}}>{shiftCloseError}</div>}
+            <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:20}}><button type="button" disabled={closingShift} onClick={()=>{setShowCloseShift(false);setShiftPassword('');setShiftCloseError('')}} style={{border:`1px solid ${safeTheme.border}`,borderRadius:9,padding:'9px 14px',background:safeTheme.cardHover,color:safeTheme.text,cursor:'pointer'}}>Cancel</button><button type="submit" disabled={closingShift||!shiftPassword} style={{border:0,borderRadius:9,padding:'9px 15px',background:'#dc2626',color:'#fff',fontWeight:800,cursor:closingShift?'wait':'pointer',opacity:(!shiftPassword)?.6:1}}>{closingShift?'Verifying…':'Close Shift'}</button></div>
+          </form>
+        </div>
+      )}
 
       {/* Dark mode toggle */}
       <button

@@ -859,3 +859,18 @@ button:disabled,input:disabled,select:disabled,textarea:disabled { cursor:not-al
 @media (min-width:769px) and (max-width:1180px) { .app-main { padding:16px; } .app-page th,.app-page td { padding:10px 12px; } }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; } }
 @media print { :root,body.dark-mode { color-scheme:light!important; --page-bg:#fff; --surface:#fff; --text:#000; } * { box-shadow:none!important; text-shadow:none!important; } }
+
+/* Compact shift control */
+@media (max-width: 1180px) {
+  .shift-start-time { display: none; }
+}
+@media (max-width: 900px) {
+  .shift-current-label, .shift-history-label { display: none; }
+  .header-shift-control { gap: 5px !important; }
+  .header-shift-control > div:first-child { padding: 6px 8px !important; }
+}
+@media (max-width: 640px) {
+  .header-shift-control { margin-left: auto; }
+  .app-header { padding-left: 10px !important; padding-right: 10px !important; gap: 7px !important; }
+  .header-title { display: none; }
+}

@@ -13,7 +13,7 @@ const CATEGORIES = [
   'Cleaning', 'Meat', 'Dairy', 'Spices', 'Other',
 ]
 
-const STATUS_OPTIONS = ['All', 'In Stock', 'Low Stock', 'Out of Stock']
+const STATUS_OPTIONS = ['All', 'In Stock', 'Low Stock', 'Out of Stock', 'Inactive']
 
 const STOCK_STATUS = {
   ok:       { bg: '#dcfce7', color: '#166534', label: 'In Stock' },
@@ -338,13 +338,17 @@ export default function Inventory() {
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' })
   const [historyItem, setHistoryItem] = useState(null)
   const [exporting, setExporting] = useState(false)
+  const [itemActionBusy, setItemActionBusy] = useState(null)
+
+  const normalizedRole = String(user?.role || '').trim().toLowerCase()
+  const canAdminItems = normalizedRole === 'admin' || normalizedRole === 'developer'
 
   // ── Data Fetching ───────────────────────────────────────────────────────
   const loadItems = useCallback(async () => {
     if (!currentBranch?.id) return
     setLoading(true)
     try {
-      const { data, error } = await inventoryApi.getAll(currentBranch.id)
+      const { data, error } = await inventoryApi.getAll(currentBranch.id, { includeInactive: canAdminItems })
       if (error) {
         showToast('error', 'Load Failed', error.message)
       } else {
@@ -355,7 +359,7 @@ export default function Inventory() {
     } finally {
       setLoading(false)
     }
-  }, [currentBranch?.id, showToast])
+  }, [currentBranch?.id, showToast, canAdminItems])
 
   useEffect(() => {
     loadItems()
@@ -424,8 +428,16 @@ export default function Inventory() {
       list = list.filter(i => i.category === categoryFilter)
     }
 
-    if (statusFilter !== 'All') {
-      list = list.filter(i => getStockStatus(i.quantity, i.min_threshold).label === statusFilter)
+    if (statusFilter === 'Inactive') {
+      list = list.filter(i => i.active === false)
+    } else {
+      // Admin/Developer can see inactive records, but normal stock filters only
+      // describe active stock.
+      if (statusFilter === 'All') {
+        if (!canAdminItems) list = list.filter(i => i.active !== false)
+      } else {
+        list = list.filter(i => i.active !== false && getStockStatus(i.quantity, i.min_threshold).label === statusFilter)
+      }
     }
 
     list.sort((a, b) => {
@@ -457,7 +469,7 @@ export default function Inventory() {
     })
 
     return list
-  }, [items, search, categoryFilter, statusFilter, sortConfig])
+  }, [items, search, categoryFilter, statusFilter, sortConfig, canAdminItems])
 
   // ── Stats ───────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -529,6 +541,44 @@ export default function Inventory() {
   const noBranchSelected = !currentBranch && !isLoadingBranchData
 
   // ── Render ──────────────────────────────────────────────────────────────
+  const handleToggleActive = useCallback(async (item) => {
+    if (!canAdminItems || itemActionBusy) return
+    const nextActive = item.active === false
+    const verb = nextActive ? 'reactivate' : 'deactivate'
+    if (!window.confirm(`Are you sure you want to ${verb} "${item.name}"?`)) return
+    setItemActionBusy(item.id)
+    try {
+      const { error } = await inventoryApi.setActive({
+        id: item.id, active: nextActive, branchId: currentBranch?.id,
+        userId: user?.id, userName: user?.name, itemName: item.name,
+      })
+      if (error) throw error
+      showToast('success', nextActive ? 'Item Reactivated' : 'Item Deactivated', item.name)
+      await loadItems()
+    } catch (err) {
+      showToast('error', 'Action Failed', err.message || 'Unable to update item')
+    } finally { setItemActionBusy(null) }
+  }, [canAdminItems, itemActionBusy, currentBranch?.id, user?.id, user?.name, showToast, loadItems])
+
+  const handleDeleteItem = useCallback(async (item) => {
+    if (!canAdminItems || itemActionBusy) return
+    if (!window.confirm(`Permanently delete "${item.name}" from inventory?
+
+Transaction/activity history is kept, but the inventory row will be removed. This cannot be undone.`)) return
+    setItemActionBusy(item.id)
+    try {
+      const { error } = await inventoryApi.remove({
+        id: item.id, branchId: currentBranch?.id, userId: user?.id,
+        userName: user?.name, itemName: item.name,
+      })
+      if (error) throw error
+      showToast('success', 'Item Deleted', item.name)
+      setItems(prev => prev.filter(x => x.id !== item.id))
+    } catch (err) {
+      showToast('error', 'Delete Failed', err.message || 'Unable to delete item')
+    } finally { setItemActionBusy(null) }
+  }, [canAdminItems, itemActionBusy, currentBranch?.id, user?.id, user?.name, showToast])
+
   return (
     <div className="animate-fade-in responsive-page inventory-page">
       {/* Header */}
@@ -847,7 +897,9 @@ export default function Inventory() {
                               {lastOut ? fmtAgo(lastOut) : '—'}
                             </td>
                             <td style={{ padding: '10px 14px' }}>
-                              <StatusBadge qty={item.quantity} minThreshold={threshold} />
+                              {item.active === false ? (
+                                <span style={{ padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, background: '#f3f4f6', color: '#6b7280' }}>Inactive</span>
+                              ) : <StatusBadge qty={item.quantity} minThreshold={threshold} />}
                             </td>
                             <td style={{
                               padding: '10px 14px',
@@ -860,14 +912,22 @@ export default function Inventory() {
                               </span>
                             </td>
                             <td style={{ padding: '10px 14px' }}>
-                              <Btn
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setHistoryItem(item)}
-                              >
-                                <Ic n="History" size={14} color={theme.textMuted} />
-                                History
-                              </Btn>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <Btn variant="outline" size="sm" onClick={() => setHistoryItem(item)}>
+                                  <Ic n="History" size={14} color={theme.textMuted} /> History
+                                </Btn>
+                                {canAdminItems && (
+                                  <>
+                                    <Btn variant="outline" size="sm" disabled={itemActionBusy === item.id} onClick={() => handleToggleActive(item)}>
+                                      <Ic n={item.active === false ? 'Play' : 'Pause'} size={14} />
+                                      {item.active === false ? 'Activate' : 'Deactivate'}
+                                    </Btn>
+                                    <Btn variant="outline" size="sm" disabled={itemActionBusy === item.id} onClick={() => handleDeleteItem(item)}>
+                                      <Ic n="Trash2" size={14} color="#dc2626" /> Delete
+                                    </Btn>
+                                  </>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         )

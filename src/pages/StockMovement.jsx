@@ -261,6 +261,7 @@ export default function StockMovement() {
     addNotification,
     setTab,
     setInventory,
+    isInOperationalRange,
   } = useApp()
 
   // ── UI State ──────────────────────────────────────────────────────────
@@ -284,7 +285,7 @@ export default function StockMovement() {
 
   // ── Derived Data ────────────────────────────────────────────────────────
   const filteredTransactions = useMemo(() => {
-    let list = [...(transactions || [])].sort(
+    let list = [...(transactions || [])].filter(t => isInOperationalRange(t.created_at || t.date)).sort(
       (a, b) => new Date(b.created_at || b.date || 0) - new Date(a.created_at || a.date || 0)
     )
     if (search.trim()) {
@@ -295,7 +296,7 @@ export default function StockMovement() {
       list = list.filter(t => t.type === filterType)
     }
     return list
-  }, [transactions, search, filterType])
+  }, [transactions, search, filterType, isInOperationalRange])
 
   // ── Helpers ─────────────────────────────────────────────────────────────
   const updateForm = useCallback((key, value) => {
@@ -823,7 +824,7 @@ export default function StockMovement() {
         {isStockIn ? (
           <div style={{ marginBottom: 14 }}>
             <SearchableDropdown
-              items={templates || []}
+              items={(templates || []).filter(t => t.enabled !== false)}
               value={templateSearch}
               onChange={setTemplateSearch}
               onSelect={handleTemplateSelect}

@@ -1076,14 +1076,19 @@ export const templatesApi = {
     return wrap(data, error)
   },
 
-  async remove(id) {
-    const { error } =
-      await supabase
-        .from('item_templates')
-        .delete()
-        .eq('id', id)
+  async setEnabled(id, enabled) {
+    const { data, error } = await supabase.rpc('admin_set_item_template_enabled', {
+      p_template_id: id,
+      p_enabled: !!enabled,
+    })
+    return wrap(data, error)
+  },
 
-    return wrap(null, error)
+  async remove(id) {
+    const { data, error } = await supabase.rpc('admin_delete_item_template', {
+      p_template_id: id,
+    })
+    return wrap(data, error)
   },
 }
 
@@ -1941,18 +1946,20 @@ export const activityApi = {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export const inventoryApi = {
-  async getAll(branchId) {
-    if (!branchId) {
-      return wrap([], null)
-    }
+  async getAll(branchId, { includeInactive = false } = {}) {
+    if (!branchId) return wrap([], null)
 
-    const { data, error } =
-      await supabase
-        .from('inventory')
-        .select('*')
-        .eq('branch_id', branchId)
-        .order('name')
+    let query = supabase
+      .from('inventory')
+      .select('*')
+      .eq('branch_id', branchId)
 
+    // Inactive inventory must disappear everywhere operational (POS, Demand,
+    // Fulfillment, etc.). Admin/Developer Inventory page can explicitly ask
+    // for it so it can be reactivated.
+    if (!includeInactive) query = query.eq('active', true)
+
+    const { data, error } = await query.order('name')
     return wrap(data, error)
   },
 
@@ -2082,32 +2089,29 @@ export const inventoryApi = {
     return wrap(data, error)
   },
 
-  async remove({
-    id,
-    branchId,
-    userId,
-    userName,
-    itemName,
-  }) {
-    const { error } =
-      await supabase
-        .from('inventory')
-        .delete()
-        .eq('id', id)
-
+  async setActive({ id, active, branchId, userId, userName, itemName }) {
+    const { data, error } = await supabase.rpc('admin_set_inventory_active', {
+      p_inventory_id: id,
+      p_active: !!active,
+    })
     if (!error) {
-      await logActivity({
-        branchId,
-        userId,
-        userName,
-        action:
-          ACTIVITY_ACTIONS.INV_DELETED,
-        details:
-          `Deleted ${itemName}`,
-      })
+      await logActivity({ branchId, userId, userName,
+        action: ACTIVITY_ACTIONS.INV_UPDATED,
+        details: `${active ? 'Reactivated' : 'Deactivated'} ${itemName}` })
     }
+    return wrap(data, error)
+  },
 
-    return wrap(null, error)
+  async remove({ id, branchId, userId, userName, itemName }) {
+    const { data, error } = await supabase.rpc('admin_delete_inventory_item', {
+      p_inventory_id: id,
+    })
+    if (!error) {
+      await logActivity({ branchId, userId, userName,
+        action: ACTIVITY_ACTIONS.INV_DELETED,
+        details: `Deleted ${itemName}` })
+    }
+    return wrap(data, error)
   },
 }
 

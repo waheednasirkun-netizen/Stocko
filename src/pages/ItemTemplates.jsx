@@ -327,6 +327,7 @@ export default function ItemTemplates() {
     createTemplate,
     updateTemplate,
     deleteTemplate,
+    setTemplateEnabled,
     theme = {},
     user,
     showToast,
@@ -350,6 +351,8 @@ export default function ItemTemplates() {
   /* ─── CHANGE: allow store keeper to manage templates & categories ─── */
   const normalizedRole = user?.role?.toLowerCase().replace(/[-_\s]/g, '')
   const canManage = userCan('createTemplate', user?.role) || normalizedRole === 'storekeeper'
+  const canAdminItems = normalizedRole === 'admin' || normalizedRole === 'developer'
+  const [itemActionBusy, setItemActionBusy] = useState(null)
   /* ─────────────────────────────────────────────────────────────────── */
 
   const categoryNames = useMemo(() => {
@@ -359,8 +362,8 @@ export default function ItemTemplates() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
-    return templates.filter(t => !q || t.name.toLowerCase().includes(q) || (t.category || '').toLowerCase().includes(q))
-  }, [templates, search])
+    return templates.filter(t => (canAdminItems || t.enabled !== false) && (!q || t.name.toLowerCase().includes(q) || (t.category || '').toLowerCase().includes(q)))
+  }, [templates, search, canAdminItems])
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
@@ -442,6 +445,29 @@ export default function ItemTemplates() {
     setEditingCategory(null)
   }
 
+  const handleToggleTemplate = async (t) => {
+    if (!canAdminItems || itemActionBusy) return
+    const nextEnabled = t.enabled === false
+    if (!window.confirm(`${nextEnabled ? 'Reactivate' : 'Deactivate'} "${t.name}"?`)) return
+    setItemActionBusy(t.id)
+    try {
+      await setTemplateEnabled(t.id, nextEnabled)
+      showToast('success', nextEnabled ? 'Item Reactivated' : 'Item Deactivated', t.name)
+    } catch (_) {} finally { setItemActionBusy(null) }
+  }
+
+  const handleDeleteTemplate = async (t) => {
+    if (!canAdminItems || itemActionBusy) return
+    if (!window.confirm(`Permanently delete item template "${t.name}"?
+
+This does not erase existing stock transaction history.`)) return
+    setItemActionBusy(t.id)
+    try {
+      await deleteTemplate(t.id)
+      showToast('success', 'Item Deleted', t.name)
+    } catch (_) {} finally { setItemActionBusy(null) }
+  }
+
   return (
     <div className="animate-fade-in responsive-page item-templates-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -480,12 +506,21 @@ export default function ItemTemplates() {
             <Card key={t.id}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{t.name}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: theme.text }}>{t.name}</div>
+                    {t.enabled === false && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>INACTIVE</span>}
+                  </div>
                   <div style={{ fontSize: 12, color: theme.textMuted }}>{t.category} · {t.unit}</div>
                 </div>
                 {canManage && (
                   <div style={{ display: 'flex', gap: 4 }}>
-                    <button onClick={() => openEdit(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Ic n="Edit" size={14} /></button>
+                    <button title="Edit" onClick={() => openEdit(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Ic n="Edit" size={14} /></button>
+                    {canAdminItems && (
+                      <>
+                        <button title={t.enabled === false ? 'Activate' : 'Deactivate'} disabled={itemActionBusy === t.id} onClick={() => handleToggleTemplate(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d97706' }}><Ic n={t.enabled === false ? 'Play' : 'Pause'} size={14} /></button>
+                        <button title="Delete" disabled={itemActionBusy === t.id} onClick={() => handleDeleteTemplate(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><Ic n="Trash2" size={14} /></button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

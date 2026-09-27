@@ -34,6 +34,7 @@ export default function FulfillmentCenter() {
     showToast,
     fetchRequests,
     addNotification,
+    isInOperationalRange,
   } = useApp()
 
   const branchId =
@@ -100,7 +101,7 @@ async function sendPrintJob(receiptData) {
   const departments = useMemo(() => {
     const set = new Set(requests.map(r => r.department).filter(Boolean))
     return ['All', ...Array.from(set).sort()]
-  }, [requests])
+  }, [requests, isInOperationalRange])
 
   // Child request_items are the source of truth for item-level lifecycle.
   // The parent request status is only an aggregate/container status.
@@ -124,7 +125,7 @@ async function sendPrintJob(receiptData) {
   // status, id, fulfilled quantity and rejection metadata.
   const flattenedItems = useMemo(() => {
     const items = []
-    for (const req of requests) {
+    for (const req of requests.filter(r => isInOperationalRange(r.created_at || r.createdAt))) {
       const reqItems = Array.isArray(req.request_items) ? req.request_items : []
       if (reqItems.length === 0) {
         const requested = Number(req.quantity || req.qty || 0)

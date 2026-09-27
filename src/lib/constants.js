@@ -302,9 +302,9 @@ export const canViewReports = (r) => isDeveloper(r) || isAdmin(r) || isManager(r
 export const canAccessSettings = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r) || isKitchenStaff(r)
 
 // ─── Page access helpers ───
-export const canAccessComplaints = (r) => ['Developer','Master','Admin','Manager'].includes(r)
+export const canAccessComplaints = (r) => ['Developer','Master','Admin','Manager','Kitchen Staff'].includes(r)
 export const canAccessUserManagement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
-export const canAccessSuppliers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
+export const canAccessSuppliers = (r) => isDeveloper(r) || isAdmin(r) || isManager(r) || isStoreKeeper(r)
 export const canAccessProcurement = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 export const canAccessPurchaseOrders = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)
 export const canAccessFinancials = (r) => isDeveloper(r) || isAdmin(r) || isManager(r)

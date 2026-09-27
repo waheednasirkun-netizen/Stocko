@@ -268,6 +268,7 @@ export default function Dashboard() {
     branches,
     switchBranch,
     isLoadingBranchData,
+    isInOperationalRange,
   } = app || {};
 
   const [timeRange, setTimeRange] = useState("7d");
@@ -282,8 +283,8 @@ export default function Dashboard() {
   /* ── Branch Isolation: Filter data by currentBranch ── */
   const branchRequests = useMemo(() => {
     if (!currentBranch?.id) return []
-    return (requests || []).filter(r => r.branch_id === currentBranch.id)
-  }, [requests, currentBranch])
+    return (requests || []).filter(r => r.branch_id === currentBranch.id && isInOperationalRange(r.created_at || r.createdAt))
+  }, [requests, currentBranch, isInOperationalRange])
 
   const branchInventory = useMemo(() => {
     if (!currentBranch?.id) return []
@@ -292,8 +293,8 @@ export default function Dashboard() {
 
   const branchTransactions = useMemo(() => {
     if (!currentBranch?.id) return []
-    return (transactions || []).filter(t => t.branch_id === currentBranch.id)
-  }, [transactions, currentBranch])
+    return (transactions || []).filter(t => t.branch_id === currentBranch.id && isInOperationalRange(t.created_at || t.date))
+  }, [transactions, currentBranch, isInOperationalRange])
 
   /* ── Time calculations ── */
   const now = new Date();
@@ -304,10 +305,7 @@ export default function Dashboard() {
   const cutoffDate = useMemo(() => { const d = new Date(); d.setDate(d.getDate() - daysBack); return d; }, [daysBack]);
 
   /* ── Filtered data (branch-scoped) ── */
-  const todayTxns = useMemo(() => branchTransactions.filter(t => {
-    const d = new Date(t.created_at || t.date);
-    return d >= todayStart && d <= todayEnd;
-  }), [branchTransactions]);
+  const todayTxns = useMemo(() => branchTransactions, [branchTransactions]);
 
   const recentTxns = useMemo(() => branchTransactions.filter(t => {
     const d = new Date(t.created_at || t.date);

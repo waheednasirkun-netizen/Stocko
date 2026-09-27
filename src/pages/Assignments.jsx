@@ -171,6 +171,7 @@ export default function Assignments() {
     theme,
     showToast,
     fetchAssignments,
+    isInOperationalRange,
     createAssignment,
     updateAssignment,
     deleteAssignment,
@@ -324,6 +325,12 @@ export default function Assignments() {
         description.includes(needle) ||
         managerText.includes(needle)
 
+      const occurrenceTimes = (task?.occurrences || []).map(o => o.scheduled_at || o.created_at).filter(Boolean)
+      const matchesOperationalRange = occurrenceTimes.length
+        ? occurrenceTimes.some(isInOperationalRange)
+        : isInOperationalRange(task?.created_at || task?.updated_at)
+      if (!matchesOperationalRange) return false
+
       if (!matchesSearch) {
         return false
       }
@@ -401,7 +408,7 @@ export default function Assignments() {
           'overdue'
       ).length,
     }
-  }, [assignments])
+  }, [assignments, isInOperationalRange])
 
   const openCreate = () => {
     setEditing(null)

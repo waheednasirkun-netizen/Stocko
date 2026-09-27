@@ -155,7 +155,21 @@ const MOB_TABS = [
 ]
 
 function MobileBottomNav() {
-  const { tab, setTab, theme } = useApp()
+  const app = useApp()
+  const { tab, setTab, theme, userRole } = app
+  const permissionByTab = {
+    pos: 'canAccessPOS', dashboard: 'canAccessDashboard', inventory: 'canAccessInventory',
+    demands: 'canAccessDemands', 'fulfillment-center': 'canAccessFulfillment',
+    assignments: 'canAccessAssignments', 'stock-movement': 'canAccessStockMovement', complaints: 'canAccessComplaints',
+  }
+  const mobileTabs = MOB_TABS.filter(item => {
+    const check = app[permissionByTab[item.key]]
+    return typeof check === 'function' ? Boolean(check()) : true
+  })
+  const goMobile = key => {
+    const normalized = String(userRole || '').toLowerCase().replace(/[-_\s]/g, '')
+    setTab(key === 'assignments' && ['storekeeper','kitchenstaff'].includes(normalized) ? 'my-assignments' : key)
+  }
 
   return (
     <nav
@@ -169,7 +183,7 @@ function MobileBottomNav() {
           '0 -2px 10px rgba(0,0,0,0.05)',
       }}
     >
-      {MOB_TABS.map(t => (
+      {mobileTabs.map(t => (
         <button
           key={t.key}
           className={
@@ -181,7 +195,7 @@ function MobileBottomNav() {
               ? 'page'
               : undefined
           }
-          onClick={() => setTab(t.key)}
+          onClick={() => goMobile(t.key)}
           style={{
             display: 'flex',
             flexDirection: 'column',
