@@ -766,7 +766,7 @@ export default function POS() {
       stock,
       inStock: stock > 0,
       inCart: cart.find(item => item.id === product.id) || null,
-      lowStock: stock > 0 && stock <= Math.max(5, safeNumber(product.threshold)),
+      lowStock: stock > 0 && stock <= safeNumber(product.low_stock_threshold ?? product.min_threshold ?? product.threshold ?? product.min_stock),
     }
   }), [cart, filteredInventory])
 

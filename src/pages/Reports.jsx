@@ -10,6 +10,7 @@ import {
 import { useApp } from "../context/AppContext";
 import { Ic, Btn, Card, EmptyState } from "../components/ui";
 import { fmtNum } from "../lib/constants";
+import { supabase } from "../lib/supabase";
 
 const COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed"];
 
@@ -17,6 +18,7 @@ const REPORT_TYPES = [
   { key: "stock", label: "Stock Movement", icon: "ArrowLeftRight", color: "#2563eb" },
   { key: "requests", label: "Request Fulfillment", icon: "Package", color: "#16a34a" },
   { key: "inventory", label: "Inventory Summary", icon: "Boxes", color: "#7c3aed" },
+  { key: "collections", label: "Collected Cash History", icon: "Wallet", color: "#0e9f6e" },
 ];
 
 const DATE_PRESETS = [
@@ -46,6 +48,9 @@ const EXPORT_TYPES = {
     { key: "all_inventory", label: "All Items" },
     { key: "low_stock", label: "Low Stock Items" },
     { key: "by_category", label: "Inventory by Category" },
+  ],
+  collections: [
+    { key: "collections", label: "Collected Cash History" },
   ],
 };
 
@@ -148,7 +153,10 @@ const getPresetDates = (preset) => {
 };
 
 export default function Reports() {
-  const { transactions = [], requests = [], inventory = [], theme, showToast, isInOperationalRange, operationalRange } = useApp();
+  const { transactions = [], requests = [], inventory = [], theme, showToast, isInOperationalRange, operationalRange, user } = useApp();
+  const [collectionEntries, setCollectionEntries] = useState([]);
+
+
 
   // Operational inventory reports must only show currently active items.
   // Historical stock/request rows remain available in their historical report types.
@@ -156,6 +164,30 @@ export default function Reports() {
 
   /* ── Tabs ── */
   const [reportType, setReportType] = useState("stock");
+
+  useEffect(() => {
+    const role = String(user?.role || '').toLowerCase();
+    if (reportType !== 'collections' || !['admin','developer'].includes(role) || !user?.branch_id) {
+      setCollectionEntries([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      let q = supabase.from('ledger_entries')
+        .select('id,customer_id,branch_id,amount,type,description,created_at,customers(name)')
+        .eq('branch_id', user.branch_id)
+        .lt('amount', 0)
+        .order('created_at', { ascending: false });
+      if (operationalRange?.start) q = q.gte('created_at', operationalRange.start.toISOString());
+      if (operationalRange?.end) q = q.lte('created_at', operationalRange.end.toISOString());
+      const { data, error } = await q;
+      if (!cancelled) {
+        if (error) { console.error('[Reports] collection history:', error); setCollectionEntries([]); }
+        else setCollectionEntries(data || []);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [reportType, user?.role, user?.branch_id, operationalRange?.start?.getTime?.(), operationalRange?.end?.getTime?.()]);
 
   /* ── Legacy local date controls (shared header range is authoritative) ── */
   const [datePreset, setDatePreset] = useState("Last 30 Days");
@@ -328,8 +360,8 @@ export default function Reports() {
           Category: i.category || "—",
           Quantity: fmtNum(Number(i.quantity || 0)),
           Unit: i.unit || "pcs",
-          Threshold: fmtNum(Number(i.threshold || i.min_stock || 0)),
-          Status: (i.quantity || 0) <= (i.threshold || i.min_stock || 0) ? "Low Stock" : "OK",
+          Threshold: fmtNum(Number(i.low_stock_threshold ?? i.min_threshold ?? i.threshold ?? i.min_stock ?? 0)),
+          Status: (i.quantity || 0) <= (i.low_stock_threshold ?? i.min_threshold ?? i.threshold ?? i.min_stock ?? 0) ? "Low Stock" : "OK",
         }));
     }
 
@@ -466,7 +498,7 @@ export default function Reports() {
   /* ── Low stock alerts ── */
   const lowStockList = useMemo(() => {
     return activeInventory
-      .filter((i) => (i.quantity || 0) <= (i.threshold || i.min_stock || 0))
+      .filter((i) => (i.quantity || 0) <= (i.low_stock_threshold ?? i.min_threshold ?? i.threshold ?? i.min_stock ?? 0))
       .sort((a, b) => (a.quantity || 0) - (b.quantity || 0))
       .slice(0, 6);
   }, [activeInventory]);
@@ -811,7 +843,7 @@ export default function Reports() {
             REPORT TYPE TABS
       ═══════════════════════════════════════ */}
       <div style={{ display: "flex", gap: 8, marginBottom: 20, overflowX: "auto" }}>
-        {REPORT_TYPES.map((rt) => (
+        {REPORT_TYPES.filter((rt) => rt.key !== "collections" || ["admin","developer"].includes(String(user?.role || "").toLowerCase())).map((rt) => (
           <button
             key={rt.key}
             onClick={() => setReportType(rt.key)}
@@ -888,7 +920,27 @@ export default function Reports() {
           </div>
 
           {/* Movement Type (stock only) */}
-          {reportType === "stock" && (
+          {reportType === "collections" && (
+        <Card style={{ marginBottom: 20 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:16, alignItems:'center', flexWrap:'wrap' }}>
+            <div>
+              <div style={{ fontSize:13, color:theme.textSecondary }}>Collected in selected period</div>
+              <div style={{ fontSize:28, fontWeight:800, color:theme.text }}>Rs. {collectionEntries.reduce((s,e)=>s+Math.abs(Number(e.amount||0)),0).toFixed(2)}</div>
+            </div>
+            <div style={{ fontSize:13, color:theme.textSecondary }}>Admin / Developer history · uses the report date range</div>
+          </div>
+          <div style={{ overflowX:'auto', marginTop:18 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+              <thead><tr>{['Date','Customer','Type','Description','Collected'].map(h=><th key={h} style={{textAlign:'left',padding:'10px 8px',borderBottom:`1px solid ${theme.border}`}}>{h}</th>)}</tr></thead>
+              <tbody>{collectionEntries.map(e=><tr key={e.id}>
+                <td style={{padding:'10px 8px'}}>{fmtDateTime(e.created_at)}</td><td style={{padding:'10px 8px'}}>{e.customers?.name || '—'}</td><td style={{padding:'10px 8px'}}>{e.type || 'payment'}</td><td style={{padding:'10px 8px'}}>{e.description || '—'}</td><td style={{padding:'10px 8px',fontWeight:700}}>Rs. {Math.abs(Number(e.amount||0)).toFixed(2)}</td>
+              </tr>)}{!collectionEntries.length && <tr><td colSpan={5} style={{padding:24,textAlign:'center',color:theme.textSecondary}}>No collected cash in this period.</td></tr>}</tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {reportType === "stock" && (
             <div>
               <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: theme.textMuted, marginBottom: 5, letterSpacing: 0.5, textTransform: "uppercase" }}>Movement Type</label>
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
@@ -1080,13 +1132,13 @@ export default function Reports() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 {lowStockList.map((item, idx) => {
-                  const pct = Math.min(100, Math.round(((item.quantity || 0) / (item.threshold || item.min_stock || 1)) * 100));
+                  const pct = Math.min(100, Math.round(((item.quantity || 0) / (item.low_stock_threshold ?? item.min_threshold ?? item.threshold ?? item.min_stock ?? 1)) * 100));
                   return (
                     <div key={idx} style={{ padding: "10px 0", borderBottom: idx < lowStockList.length - 1 ? `1px solid ${theme.border}` : "none" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                         <div style={{ fontWeight: 600, color: theme.text, fontSize: 13 }}>{item.name}</div>
                         <div style={{ fontSize: 12, fontWeight: 700, color: pct < 30 ? "#dc2626" : "#f59e0b" }}>
-                          {fmtNum(item.quantity || 0)} / {fmtNum(item.threshold || item.min_stock || 0)}
+                          {fmtNum(item.quantity || 0)} / {fmtNum(item.low_stock_threshold ?? item.min_threshold ?? item.threshold ?? item.min_stock ?? 0)}
                         </div>
                       </div>
                       <div style={{ height: 5, borderRadius: 10, background: "#f1f5f9", overflow: "hidden" }}>
@@ -1114,7 +1166,7 @@ export default function Reports() {
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 12 }}>
             {lowStockList.slice(0, 6).map((item, idx) => {
-              const pct = Math.min(100, Math.round(((item.quantity || 0) / (item.threshold || item.min_stock || 1)) * 100));
+              const pct = Math.min(100, Math.round(((item.quantity || 0) / (item.low_stock_threshold ?? item.min_threshold ?? item.threshold ?? item.min_stock ?? 1)) * 100));
               const isVeryLow = pct < 20;
               return (
                 <div key={idx} style={{
@@ -1129,7 +1181,7 @@ export default function Reports() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, fontSize: 12 }}>
                     <span style={{ color: theme.textMuted }}>Stock Level</span>
                     <span style={{ fontWeight: 700, color: isVeryLow ? "#dc2626" : "#f97316" }}>
-                      {fmtNum(item.quantity || 0)} / {fmtNum(item.threshold || item.min_stock || 0)}
+                      {fmtNum(item.quantity || 0)} / {fmtNum(item.low_stock_threshold ?? item.min_threshold ?? item.threshold ?? item.min_stock ?? 0)}
                     </span>
                   </div>
                   <div style={{ height: 6, borderRadius: 10, background: "#f1f5f9", overflow: "hidden" }}>

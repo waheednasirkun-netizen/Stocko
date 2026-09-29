@@ -532,7 +532,7 @@ This does not erase existing stock transaction history.`)) return
                 )}
                 {t.default_price > 0 && (
                   <span style={{ fontSize: 11, padding: '2px 8px', background: '#dcfce7', color: '#166534', borderRadius: 6, fontWeight: 500 }}>
-                    ${fmtNum(t.default_price)}
+                    Rs. {fmtNum(t.default_price)}
                   </span>
                 )}
               </div>

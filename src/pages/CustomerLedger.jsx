@@ -6,7 +6,7 @@ import { posApi } from "../lib/pos";
 const PAGE_ACCESS_ROLES = ['admin', 'manager', 'developer']
 
 export default function CustomerLedger() {
-  const { user, theme } = useApp()
+  const { user, theme, currentShift } = useApp()
   const [customers, setCustomers] = useState([])
   const [ledgerEntries, setLedgerEntries] = useState([])
   const [loading, setLoading] = useState(false)
@@ -195,10 +195,18 @@ export default function CustomerLedger() {
     Object.values(customerBalances).forEach(b => {
       outstanding += Math.max(0, b.total)
       if (b.total < 0) credit += Math.abs(b.total)
-      collected += b.paid
     })
+    // Collected is a SHIFT CASH figure, not a lifetime customer-balance figure.
+    // Outstanding/credit continue across shift boundaries because they come from
+    // the complete immutable ledger. A newly opened shift therefore starts at 0.
+    const shiftOpenedAt = currentShift?.opened_at ? new Date(currentShift.opened_at).getTime() : null
+    collected = ledgerEntries.reduce((sum, entry) => {
+      if (Number(entry.amount || 0) >= 0) return sum
+      if (shiftOpenedAt && new Date(entry.created_at).getTime() < shiftOpenedAt) return sum
+      return sum + Math.abs(Number(entry.amount || 0))
+    }, 0)
     return { customers: customers.length, outstanding, credit, collected }
-  }, [customerBalances, customers])
+  }, [customerBalances, customers, ledgerEntries, currentShift?.opened_at])
 
   // Supports an optional { from, to } date range — used by the ledger history modal.
   const getCustomerLedger = (customerId, range) => {

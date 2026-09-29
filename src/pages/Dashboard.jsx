@@ -316,7 +316,7 @@ export default function Dashboard() {
   const completedReqs = useMemo(() => branchRequests.filter(r => r.status === "Completed"), [branchRequests]);
   const rejectedReqs = useMemo(() => branchRequests.filter(r => r.status === "Rejected"), [branchRequests]);
 
-  const lowStock = useMemo(() => branchInventory.filter(i => i.status === "Low Stock" || ((i.quantity || 0) <= (i.threshold || i.min_stock || 0) && (i.quantity || 0) > 0)), [branchInventory]);
+  const lowStock = useMemo(() => branchInventory.filter(i => i.status === "Low Stock" || ((i.quantity || 0) <= (i.low_stock_threshold ?? i.min_threshold ?? i.threshold ?? i.min_stock ?? 0) && (i.quantity || 0) > 0)), [branchInventory]);
   const criticalStock = useMemo(() => branchInventory.filter(i => i.status === "Critical" || (i.quantity || 0) === 0), [branchInventory]);
   const outOfStock = useMemo(() => branchInventory.filter(i => (i.quantity || 0) === 0), [branchInventory]);
 
@@ -356,7 +356,7 @@ export default function Dashboard() {
   /* ── Inventory Health ── */
   const healthData = useMemo(() => {
     const total = branchInventory.length || 1;
-    const good = branchInventory.filter(i => (i.quantity || 0) > (i.threshold || i.min_stock || 0)).length;
+    const good = branchInventory.filter(i => (i.quantity || 0) > (i.low_stock_threshold ?? i.min_threshold ?? i.threshold ?? i.min_stock ?? 0)).length;
     const low = lowStock.length;
     const critical = criticalStock.length;
     const out = outOfStock.length;
@@ -1068,7 +1068,7 @@ export default function Dashboard() {
                 ) : (
                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                     {[...criticalStock, ...lowStock].slice(0, 6).map((item, idx) => {
-                      const max = item.threshold || item.min_stock || 1;
+                      const max = item.low_stock_threshold ?? item.min_threshold ?? item.threshold ?? item.min_stock ?? 1;
                       const current = item.quantity || 0;
                       const pct = Math.max(0, Math.min(100, Math.round((current / max) * 100)));
                       const isCritical = current === 0 || (current / max) < 0.3;

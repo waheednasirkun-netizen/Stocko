@@ -381,7 +381,7 @@ async function sendPrintJob(receiptData) {
         }
 
         // Check low stock threshold
-        const threshold = inv.threshold || inv.min_stock || 0
+        const threshold = inv.low_stock_threshold ?? inv.min_threshold ?? inv.threshold ?? inv.min_stock ?? 0
         if (newQty <= threshold && threshold > 0) {
           showToast('warning', 'Low Stock Alert', `${inv.name} reached minimum threshold (${fmtNum(newQty)} ${inv.unit})`)
           addNotification?.({

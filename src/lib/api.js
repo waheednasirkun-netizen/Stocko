@@ -1960,7 +1960,34 @@ export const inventoryApi = {
     if (!includeInactive) query = query.eq('active', true)
 
     const { data, error } = await query.order('name')
-    return wrap(data, error)
+    if (error) return wrap(data, error)
+
+    // Item Templates are the source of truth for low-stock limits and default prices.
+    // Merge them into inventory so Dashboard, Reports, Fulfillment and Inventory all
+    // see the same threshold immediately after a template is edited.
+    const { data: templates, error: templateError } = await supabase
+      .from('item_templates')
+      .select('name,low_stock_threshold,default_price')
+      .eq('branch_id', branchId)
+
+    if (templateError) console.warn('[api] inventoryApi.getAll template merge:', templateError.message)
+    const templateMap = new Map((templates || []).map(t => [String(t.name || '').trim().toLowerCase(), t]))
+    const merged = (data || []).map(item => {
+      const template = templateMap.get(String(item.name || '').trim().toLowerCase())
+      const templateThreshold = Number(template?.low_stock_threshold)
+      const threshold = Number.isFinite(templateThreshold)
+        ? Math.max(0, templateThreshold)
+        : Math.max(0, Number(item.min_threshold ?? item.min_stock ?? item.threshold ?? 0) || 0)
+      return {
+        ...item,
+        min_threshold: threshold,
+        min_stock: threshold,
+        threshold,
+        low_stock_threshold: threshold,
+        selling_price: item.selling_price ?? template?.default_price ?? null,
+      }
+    })
+    return wrap(merged, null)
   },
 
   async create({

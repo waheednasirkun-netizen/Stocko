@@ -68,7 +68,6 @@ export default function AssignmentHistory() {
     theme,
     showToast,
     currentBranch,
-    currentShift,
     fetchAssignmentHistory,
   } = useApp()
 
@@ -82,14 +81,8 @@ export default function AssignmentHistory() {
     if (Number.isNaN(d.getTime())) return ''
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   }
-  const [selectedDate, setSelectedDate] = useState(() => localDateKey(currentShift?.opened_at || new Date()))
-  const [dateInitializedFromShift, setDateInitializedFromShift] = useState(Boolean(currentShift?.opened_at))
-
-  useEffect(() => {
-    if (!currentShift?.opened_at || dateInitializedFromShift) return
-    setSelectedDate(localDateKey(currentShift.opened_at))
-    setDateInitializedFromShift(true)
-  }, [currentShift?.opened_at, dateInitializedFromShift])
+  const [startDate, setStartDate] = useState(() => localDateKey(new Date()))
+  const [endDate, setEndDate] = useState(() => localDateKey(new Date()))
 
   const staff = useMemo(() => users.filter(user => user?.active !== false), [users])
 
@@ -103,15 +96,15 @@ export default function AssignmentHistory() {
       await fetchAssignmentHistory({
         branchId: branch !== 'all' ? branch : null,
         assignedTo: manager !== 'all' ? manager : null,
-        startDate: selectedDate || null,
-        endDate: selectedDate || null,
+        startDate: startDate || null,
+        endDate: endDate || null,
       })
     } catch (error) {
       showToast?.('error', 'Assignment history', error?.message || 'Could not load history.')
     } finally {
       setLoading(false)
     }
-  }, [branch, currentBranch?.id, fetchAssignmentHistory, manager, selectedDate, showToast])
+  }, [branch, currentBranch?.id, endDate, fetchAssignmentHistory, manager, showToast, startDate])
 
   useEffect(() => {
     load()
@@ -183,7 +176,7 @@ export default function AssignmentHistory() {
             <div>
               <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Assignment History</h1>
               <p style={{ margin: '4px 0 0', color: muted, fontSize: 12.5 }}>
-                Daily task history. Choose a date to check older records; after-midnight tasks stay with the business date of their shift.
+                Daily task history. Today is shown by default; use the date range to review older task records. Assignments are independent of stock shifts.
               </p>
             </div>
           </div>
@@ -200,7 +193,7 @@ export default function AssignmentHistory() {
         </div>
 
         <Card style={{ padding: 12, marginBottom: 14, background: surface, border: `1px solid ${border}` }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1fr) repeat(4,minmax(120px,auto))', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,1fr) repeat(5,minmax(120px,auto))', gap: 8, alignItems: 'center' }}>
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search task, manager or note…" style={{ ...input, background: surface, color: text, borderColor: border }} />
             <select value={status} onChange={e => setStatus(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }}>
               <option value="all">All statuses</option>
@@ -216,9 +209,10 @@ export default function AssignmentHistory() {
               <option value="all">All branches</option>
               {branches.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
             </select>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }} title="From date" />
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }} title="History date" />
-              <Btn variant="outline" onClick={() => setSelectedDate(localDateKey(new Date()))}>Today</Btn>
+              <input type="date" value={endDate} min={startDate || undefined} onChange={e => setEndDate(e.target.value)} style={{ ...input, background: surface, color: text, borderColor: border }} title="To date" />
+              <Btn variant="outline" onClick={() => { const today = localDateKey(new Date()); setStartDate(today); setEndDate(today) }}>Today</Btn>
             </div>
           </div>
           {branch !== 'all' && (
@@ -236,7 +230,7 @@ export default function AssignmentHistory() {
           <Card style={{ padding: 0, overflow: 'hidden', background: surface, border: `1px solid ${border}` }}>
             <div style={{ padding: '13px 16px', background: '#f8fafc', borderBottom: `1px solid ${border}`, display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 850, color: text }}>Tasks · {dateLabel(selectedDate)}</div>
+                <div style={{ fontSize: 15, fontWeight: 850, color: text }}>Tasks · {startDate === endDate ? dateLabel(startDate) : `${dateLabel(startDate)} – ${dateLabel(endDate)}`}</div>
                 <div style={{ marginTop: 3, fontSize: 11.5, color: muted }}>All accessible branches in one daily history table.</div>
               </div>
               <span style={{ padding: '5px 9px', borderRadius: 999, fontSize: 10.5, fontWeight: 800, background: '#eef2ff', color: '#4f46e5' }}>{rows.length} tasks</span>
