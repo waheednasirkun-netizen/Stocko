@@ -509,6 +509,7 @@ export default function POS() {
   const [authPassword, setAuthPassword] = useState('')
   const [authProcessing, setAuthProcessing] = useState(false)
   const [orders, setOrders] = useState([])
+  const canReverseTransactions = ['admin', 'developer'].includes(normalizeRole(user?.role))
   const [pendingOrders, setPendingOrders] = useState([])
   const [cancelledOrders, setCancelledOrders] = useState([])
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', address: '' })
@@ -547,7 +548,7 @@ export default function POS() {
     const paymentsLoaded = Array.isArray(order.order_payments)
     const paymentsPaid = paymentsLoaded
       ? order.order_payments.reduce(
-          (sum, payment) => sum + Math.max(0, safeNumber(payment?.amount)),
+          (sum, payment) => payment?.reversed_at ? sum : sum + Math.max(0, safeNumber(payment?.amount)),
           0
         )
       : 0
@@ -1373,6 +1374,23 @@ export default function POS() {
       // check/insert race. A concurrent caller winning is a successful no-op.
       if (error && error.code !== '23505') throw error
     }
+  }
+
+  const markOrderUnpaid = async (order) => {
+    if (!canReverseTransactions) return
+    const status = String(order?.status || '').toLowerCase()
+    if (['unpaid','pending','cancelled','reversed'].includes(status) && getRecordedPaidAmount(order) <= 0) {
+      showToast('info', 'No payment to reverse', 'This order is already unpaid or has no reversible payment.')
+      return
+    }
+    const reason = window.prompt(`Reason for reversing payment on order #${orderReference(order)}:`)
+    if (!reason?.trim()) return
+    if (!window.confirm(`Mark order #${orderReference(order)} as UNPAID? The payment will be reversed and customer outstanding restored.`)) return
+    const { error } = await supabase.rpc('stocko_mark_order_unpaid', { p_order_id: order.id, p_reason: reason.trim() })
+    if (error) { showToast('error', 'Reversal failed', error.message); return }
+    await logPosActivity('POS Payment Reversed', `Order #${orderReference(order)}; reason: ${reason.trim()}`)
+    showToast('success', 'Order marked unpaid', 'Payment reversal was recorded in the audit trail.')
+    await Promise.all([loadOrders(), loadTodayOrders()])
   }
 
   // ── Process Payment ──
@@ -4138,6 +4156,15 @@ export default function POS() {
                               >
                                 <Ic n="Printer" size={12} />
                               </button>
+                              {canReverseTransactions && !['unpaid','pending','cancelled','reversed'].includes(String(order.status || '').toLowerCase()) && (
+                                <button
+                                  onClick={() => markOrderUnpaid(order)}
+                                  title="Reverse payment / mark unpaid"
+                                  style={{ padding: '5px 10px', background: colors.dangerLight, border: `1px solid ${colors.danger}`, borderRadius: '4px', color: colors.danger, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
+                                >
+                                  Reverse Payment
+                                </button>
+                              )}
                               <button
                                 onClick={() => viewOrderDetail(order)}
                                 style={{

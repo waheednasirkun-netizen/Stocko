@@ -1165,6 +1165,11 @@ export const suppliersApi = {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 export const transactionsApi = {
+  async reverse({ id, reason }) {
+    const { data, error } = await supabase.rpc('stocko_reverse_stock_transaction', { p_transaction_id: id, p_reason: reason })
+    return wrap(data, error)
+  },
+
   async getAll(branchId) {
     if (!branchId) {
       return wrap([], null)

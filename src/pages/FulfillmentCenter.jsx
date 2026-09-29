@@ -53,6 +53,8 @@ export default function FulfillmentCenter() {
   const [dispatchQty, setDispatchQty] = useState('')
   const [dispatchNotes, setDispatchNotes] = useState('')
   const [rejectReason, setRejectReason] = useState('')
+  const [reverseModal, setReverseModal] = useState(null)
+  const [reverseReason, setReverseReason] = useState('')
   const [loading, setLoading] = useState(false)
   const processingRef = useRef(false)
 
@@ -461,6 +463,29 @@ setTimeout(() => {
     }
   }
 
+  const openReverseFulfillment = (item) => {
+    if (!canReverseTransactions || !item?._itemId) return
+    setReverseReason('')
+    setReverseModal(item)
+  }
+
+  const reverseLatestFulfillment = async () => {
+    const item = reverseModal
+    if (!canReverseTransactions || !item?._itemId || !reverseReason.trim()) return
+    setReversingItemId(item._itemId)
+    try {
+      const { data: tx, error: lookupError } = await supabase.from('transactions').select('id,reversed_at,reverses_transaction_id').eq('request_item_id', item._itemId).is('reversed_at', null).is('reverses_transaction_id', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
+      if (lookupError) throw lookupError
+      if (!tx?.id) throw new Error('No reversible fulfillment stock transaction was found')
+      const { error } = await supabase.rpc('stocko_reverse_stock_transaction', { p_transaction_id: tx.id, p_reason: reverseReason.trim() })
+      if (error) throw error
+      showToast('success','Fulfillment reversed','Stock was restored and fulfilled quantity was reduced.')
+      setReverseModal(null); setReverseReason('')
+      await fetchRequests(branchId)
+    } catch (err) { showToast('error','Reversal failed',err.message || 'Unable to reverse fulfillment') }
+    finally { setReversingItemId(null) }
+  }
+
   // ── Reject ONE request item ───────────────────────────
   const handleReject = async () => {
     if (!rejectModal || processingRef.current) return
@@ -620,6 +645,8 @@ setTimeout(() => {
   }
 
   const canFulfill = user?.role !== undefined
+  const canReverseTransactions = ['admin', 'developer'].includes(String(user?.role || '').trim().toLowerCase())
+  const [reversingItemId, setReversingItemId] = useState(null)
 
   return (
     <div className="animate-fade-in responsive-page fulfillment-page">
@@ -830,6 +857,11 @@ setTimeout(() => {
                       </Btn>
                     </div>
                   )}
+                  {canReverseTransactions && Number(item._fulfilledQty || 0) > 0 && (
+                    <div style={{marginTop:8}}>
+                      <Btn variant="outline" disabled={reversingItemId===item._itemId} onClick={() => openReverseFulfillment(item)} style={{fontSize:12,color:'#dc2626'}}>Reverse Last Fulfillment</Btn>
+                    </div>
+                  )}
                 </div>
               </Card>
             )
@@ -973,6 +1005,21 @@ setTimeout(() => {
               </>
             )
           })()}
+        </Modal>
+      )}
+
+      {reverseModal && (
+        <Modal open onClose={() => { if (!reversingItemId) { setReverseModal(null); setReverseReason('') } }} title="Reverse Fulfillment">
+          <div style={{padding:'14px 16px',background:theme.bg,border:`1px solid ${theme.border}`,borderRadius:10,marginBottom:16}}>
+            <div style={{fontSize:14,fontWeight:800,color:theme.text}}>{reverseModal._displayName}</div>
+            <div style={{fontSize:12,color:theme.textMuted,marginTop:5}}>This will restore stock and reduce the fulfilled quantity. The original transaction stays in the audit history.</div>
+          </div>
+          <label style={{display:'block',fontSize:12,fontWeight:700,color:theme.text,marginBottom:6}}>Reversal reason <span style={{color:'#dc2626'}}>*</span></label>
+          <textarea autoFocus rows={4} value={reverseReason} onChange={e=>setReverseReason(e.target.value)} placeholder="Example: Wrong quantity dispatched / fulfillment entered by mistake" style={{width:'100%',boxSizing:'border-box',padding:'11px 12px',border:`1px solid ${theme.inputBorder}`,borderRadius:8,background:theme.inputBg,color:theme.text,resize:'vertical'}} />
+          <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:16}}>
+            <Btn variant="outline" disabled={!!reversingItemId} onClick={()=>{setReverseModal(null);setReverseReason('')}}>Cancel</Btn>
+            <Btn variant="danger" disabled={!!reversingItemId || !reverseReason.trim()} onClick={reverseLatestFulfillment}>{reversingItemId ? 'Reversing…' : 'Confirm Reversal'}</Btn>
+          </div>
         </Modal>
       )}
 

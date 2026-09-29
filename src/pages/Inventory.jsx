@@ -342,13 +342,14 @@ export default function Inventory() {
 
   const normalizedRole = String(user?.role || '').trim().toLowerCase()
   const canAdminItems = normalizedRole === 'admin' || normalizedRole === 'developer'
+  const canDeactivateItems = canAdminItems || normalizedRole === 'manager'
 
   // ── Data Fetching ───────────────────────────────────────────────────────
   const loadItems = useCallback(async () => {
     if (!currentBranch?.id) return
     setLoading(true)
     try {
-      const { data, error } = await inventoryApi.getAll(currentBranch.id, { includeInactive: canAdminItems })
+      const { data, error } = await inventoryApi.getAll(currentBranch.id, { includeInactive: canDeactivateItems })
       if (error) {
         showToast('error', 'Load Failed', error.message)
       } else {
@@ -359,7 +360,7 @@ export default function Inventory() {
     } finally {
       setLoading(false)
     }
-  }, [currentBranch?.id, showToast, canAdminItems])
+  }, [currentBranch?.id, showToast, canDeactivateItems])
 
   useEffect(() => {
     loadItems()
@@ -434,7 +435,7 @@ export default function Inventory() {
       // Admin/Developer can see inactive records, but normal stock filters only
       // describe active stock.
       if (statusFilter === 'All') {
-        if (!canAdminItems) list = list.filter(i => i.active !== false)
+        if (!canDeactivateItems) list = list.filter(i => i.active !== false)
       } else {
         list = list.filter(i => i.active !== false && getStockStatus(i.quantity, i.min_threshold).label === statusFilter)
       }
@@ -469,7 +470,7 @@ export default function Inventory() {
     })
 
     return list
-  }, [items, search, categoryFilter, statusFilter, sortConfig, canAdminItems])
+  }, [items, search, categoryFilter, statusFilter, sortConfig, canDeactivateItems])
 
   // ── Stats ───────────────────────────────────────────────────────────────
   const stats = useMemo(() => {
@@ -542,7 +543,7 @@ export default function Inventory() {
 
   // ── Render ──────────────────────────────────────────────────────────────
   const handleToggleActive = useCallback(async (item) => {
-    if (!canAdminItems || itemActionBusy) return
+    if (!canDeactivateItems || itemActionBusy) return
     const nextActive = item.active === false
     const verb = nextActive ? 'reactivate' : 'deactivate'
     if (!window.confirm(`Are you sure you want to ${verb} "${item.name}"?`)) return
@@ -558,7 +559,7 @@ export default function Inventory() {
     } catch (err) {
       showToast('error', 'Action Failed', err.message || 'Unable to update item')
     } finally { setItemActionBusy(null) }
-  }, [canAdminItems, itemActionBusy, currentBranch?.id, user?.id, user?.name, showToast, loadItems])
+  }, [canDeactivateItems, itemActionBusy, currentBranch?.id, user?.id, user?.name, showToast, loadItems])
 
   const handleDeleteItem = useCallback(async (item) => {
     if (!canAdminItems || itemActionBusy) return
@@ -916,16 +917,16 @@ Transaction/activity history is kept, but the inventory row will be removed. Thi
                                 <Btn variant="outline" size="sm" onClick={() => setHistoryItem(item)}>
                                   <Ic n="History" size={14} color={theme.textMuted} /> History
                                 </Btn>
+                                {canDeactivateItems && (
+                                  <Btn variant="outline" size="sm" disabled={itemActionBusy === item.id} onClick={() => handleToggleActive(item)}>
+                                    <Ic n={item.active === false ? 'Play' : 'Pause'} size={14} />
+                                    {item.active === false ? 'Activate' : 'Deactivate'}
+                                  </Btn>
+                                )}
                                 {canAdminItems && (
-                                  <>
-                                    <Btn variant="outline" size="sm" disabled={itemActionBusy === item.id} onClick={() => handleToggleActive(item)}>
-                                      <Ic n={item.active === false ? 'Play' : 'Pause'} size={14} />
-                                      {item.active === false ? 'Activate' : 'Deactivate'}
-                                    </Btn>
-                                    <Btn variant="outline" size="sm" disabled={itemActionBusy === item.id} onClick={() => handleDeleteItem(item)}>
-                                      <Ic n="Trash2" size={14} color="#dc2626" /> Delete
-                                    </Btn>
-                                  </>
+                                  <Btn variant="outline" size="sm" disabled={itemActionBusy === item.id} onClick={() => handleDeleteItem(item)}>
+                                    <Ic n="Trash2" size={14} color="#dc2626" /> Delete
+                                  </Btn>
                                 )}
                               </div>
                             </td>

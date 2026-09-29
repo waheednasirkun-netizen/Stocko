@@ -335,6 +335,8 @@ export default function ItemTemplates() {
     categories,
     createCategory,
     updateCategory,
+    fetchCategories,
+    currentBranch,
   } = app || {}
 
   const { confirm } = useConfirm()
@@ -352,8 +354,13 @@ export default function ItemTemplates() {
   const normalizedRole = user?.role?.toLowerCase().replace(/[-_\s]/g, '')
   const canManage = userCan('createTemplate', user?.role) || normalizedRole === 'storekeeper'
   const canAdminItems = normalizedRole === 'admin' || normalizedRole === 'developer'
+  const canDeactivateItems = canAdminItems || normalizedRole === 'manager'
   const [itemActionBusy, setItemActionBusy] = useState(null)
   /* ─────────────────────────────────────────────────────────────────── */
+
+  useEffect(() => {
+    if (currentBranch?.id && fetchCategories) fetchCategories(currentBranch.id)
+  }, [currentBranch?.id, fetchCategories])
 
   const categoryNames = useMemo(() => {
     if (!categories) return []
@@ -427,7 +434,9 @@ export default function ItemTemplates() {
 
   const handleUpdateCategory = async (oldName, newName) => {
     if (!updateCategory) throw new Error('updateCategory not available')
-    await updateCategory(oldName, newName)
+    const row = (categories || []).find(c => (typeof c === 'string' ? c : c.name) === oldName)
+    if (!row?.id) throw new Error('Category record not found')
+    await updateCategory(row.id, { name: newName })
     showToast('success', 'Category Updated', newName)
     // Update selected category in form if it matches
     if (form.category === oldName) {
@@ -446,7 +455,7 @@ export default function ItemTemplates() {
   }
 
   const handleToggleTemplate = async (t) => {
-    if (!canAdminItems || itemActionBusy) return
+    if (!canDeactivateItems || itemActionBusy) return
     const nextEnabled = t.enabled === false
     if (!window.confirm(`${nextEnabled ? 'Reactivate' : 'Deactivate'} "${t.name}"?`)) return
     setItemActionBusy(t.id)
@@ -515,10 +524,10 @@ This does not erase existing stock transaction history.`)) return
                 {canManage && (
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button title="Edit" onClick={() => openEdit(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Ic n="Edit" size={14} /></button>
-                    {canAdminItems && (
+                    {canDeactivateItems && (
                       <>
                         <button title={t.enabled === false ? 'Activate' : 'Deactivate'} disabled={itemActionBusy === t.id} onClick={() => handleToggleTemplate(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#d97706' }}><Ic n={t.enabled === false ? 'Play' : 'Pause'} size={14} /></button>
-                        <button title="Delete" disabled={itemActionBusy === t.id} onClick={() => handleDeleteTemplate(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><Ic n="Trash2" size={14} /></button>
+                        {canAdminItems && <button title="Delete" disabled={itemActionBusy === t.id} onClick={() => handleDeleteTemplate(t)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626' }}><Ic n="Trash2" size={14} /></button>}
                       </>
                     )}
                   </div>

@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
 import { Ic, Btn, Modal, Card, EmptyState } from '../components/ui'
 import { fmtNum, DEPARTMENTS } from '../lib/constants'
+import { supabase } from '../lib/supabase'
 
 export default function Demands() {
   const { requests, inventory, theme, user, createRequest, showToast, isInOperationalRange } = useApp()
@@ -10,6 +11,8 @@ export default function Demands() {
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
   const [filterSt, setFilterSt] = useState('All')
+  const canReverseTransactions = ['admin', 'developer'].includes(String(user?.role || '').trim().toLowerCase())
+  const [reversingId, setReversingId] = useState(null)
 
   const [items, setItems] = useState([{ id: 1, itemId: null, name: '', category: '', unit: '', qty: '', notes: '', search: '', showDrop: false, activeIndex: -1 }])
   const [errors, setErrors] = useState({})
@@ -153,6 +156,20 @@ export default function Demands() {
   }
 }
 
+  const reverseDemand = async (demand) => {
+    if (!canReverseTransactions) return
+    const reason = window.prompt(`Reason for reversing this demand (${demand.department || demand.id}):`)
+    if (!reason?.trim()) return
+    setReversingId(demand.id)
+    try {
+      const { error } = await supabase.rpc('stocko_reverse_demand', { p_request_id: demand.id, p_reason: reason.trim() })
+      if (error) throw error
+      showToast('success', 'Demand reversed', 'The demand remains in history as cancelled/reversed.')
+      window.location.reload()
+    } catch (err) { showToast('error', 'Reversal failed', err.message || 'Unable to reverse demand') }
+    finally { setReversingId(null) }
+  }
+
   const canCreate = user?.role !== undefined
 
   const statusColors = {
@@ -210,7 +227,7 @@ export default function Demands() {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: theme.bg }}>
-                    {['Item', 'Category', 'Qty', 'Department', 'Status', 'Created By', 'Date'].map(h => (
+                    {['Item', 'Category', 'Qty', 'Department', 'Status', 'Created By', 'Date', ...(canReverseTransactions ? ['Action'] : [])].map(h => (
                       <th key={h} style={{
                         padding: '10px 14px', textAlign: 'left', fontSize: 12,
                         fontWeight: 600, color: theme.textMuted, borderBottom: `1px solid ${theme.border}`,
@@ -244,6 +261,7 @@ export default function Demands() {
                         <td style={{ padding: '10px 14px', fontSize: 12, color: theme.textMuted, whiteSpace: 'nowrap' }}>
                           {dateStr ? new Date(dateStr).toLocaleDateString() : '—'}
                         </td>
+                        {canReverseTransactions && <td style={{padding:'10px 14px'}}>{!['Rejected','Cancelled'].includes(d.status) && <Btn variant="outline" size="sm" disabled={reversingId===d.id} onClick={() => reverseDemand(d)}>Reverse</Btn>}</td>}
                       </tr>
                     )
                   })}

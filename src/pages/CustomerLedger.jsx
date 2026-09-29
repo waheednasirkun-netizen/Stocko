@@ -29,6 +29,8 @@ export default function CustomerLedger() {
   const [orderLoading, setOrderLoading] = useState(false)
 
   const userRole = (user?.role || '').toLowerCase()
+  const canReverseTransactions = ['admin', 'developer'].includes(userRole)
+  const [reversingEntryId, setReversingEntryId] = useState(null)
   const hasPageAccess = PAGE_ACCESS_ROLES.includes(userRole)
   const isAdmin = ['admin', 'manager', 'developer', 'superadmin', 'owner'].includes(userRole)
   const branchId = user?.branch_id
@@ -329,6 +331,20 @@ export default function CustomerLedger() {
         </p>
       </div>
     )
+  }
+
+  const reverseLedgerEntry = async (entry) => {
+    if (!canReverseTransactions || !entry?.id || entry.reversed_at || entry.reverses_entry_id) return
+    const reason = window.prompt(`Reason for reversing this ${entry.type} transaction:`)
+    if (!reason?.trim()) return
+    if (!window.confirm('Reverse this ledger transaction? The original entry will remain and an opposite audit entry will be created.')) return
+    setReversingEntryId(entry.id)
+    try {
+      const { error } = await posApi.supabase.rpc('stocko_reverse_ledger_entry', { p_entry_id: entry.id, p_reason: reason.trim() })
+      if (error) throw error
+      await loadData()
+    } catch (err) { window.alert(err.message || 'Unable to reverse transaction') }
+    finally { setReversingEntryId(null) }
   }
 
   const modalLedger = selectedCustomer ? getCustomerLedger(selectedCustomer.id, { from: ledgerDateFrom, to: ledgerDateTo }) : []
@@ -821,7 +837,7 @@ export default function CustomerLedger() {
                     <th style={{ textAlign: 'left', padding: '11px 12px', color: colors.subtle, fontSize: '10.5px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>Description</th>
                     <th style={{ textAlign: 'left', padding: '11px 12px', color: colors.subtle, fontSize: '10.5px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>Type</th>
                     <th style={{ textAlign: 'right', padding: '11px 12px', color: colors.subtle, fontSize: '10.5px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>Amount</th>
-                    <th style={{ textAlign: 'center', padding: '11px 12px', color: colors.subtle, fontSize: '10.5px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>Order</th>
+                    <th style={{ textAlign: 'center', padding: '11px 12px', color: colors.subtle, fontSize: '10.5px', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}>Order</th>{canReverseTransactions && <th style={{ textAlign:'center', padding:'11px 12px', color:colors.subtle, fontSize:'10.5px' }}>Action</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -875,11 +891,18 @@ export default function CustomerLedger() {
                           View
                         </button>
                       </td>
+                      {canReverseTransactions && (
+                        <td style={{padding:'11px 12px',textAlign:'center'}}>
+                          {entry.reversed_at ? <span style={{fontSize:11,color:colors.subtle}}>Reversed</span> : entry.reverses_entry_id ? <span style={{fontSize:11,color:colors.subtle}}>Reversal</span> : (
+                            <button disabled={reversingEntryId===entry.id} onClick={() => reverseLedgerEntry(entry)} style={{padding:'5px 10px',border:`1px solid ${colors.danger}`,background:colors.dangerSoft,color:colors.danger,borderRadius:7,cursor:'pointer',fontWeight:700,fontSize:11}}>Reverse</button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   ))}
                   {modalLedger.length === 0 && (
                     <tr>
-                      <td colSpan="5" style={{ textAlign: 'center', padding: '36px', color: colors.subtle }}>
+                      <td colSpan={canReverseTransactions ? 6 : 5} style={{ textAlign: 'center', padding: '36px', color: colors.subtle }}>
                         No transactions found{(ledgerDateFrom || ledgerDateTo) ? ' for the selected date range' : ''}
                       </td>
                     </tr>

@@ -77,6 +77,8 @@ export function AppProvider({ children }) {
   const [requestAlerts, setRequestAlerts] = useState(() => localStorage.getItem('rs_request_alerts') !== 'false')
   const [fulfillmentAlerts, setFulfillmentAlerts] = useState(() => localStorage.getItem('rs_fulfillment_alerts') !== 'false')
   const [browserNotifs, setBrowserNotifs] = useState(() => localStorage.getItem('rs_browser_notifs') === 'true')
+  const [notificationSound, setNotificationSound] = useState(() => localStorage.getItem('rs_notification_sound') !== 'false')
+  const [feedbackAlerts, setFeedbackAlerts] = useState(() => localStorage.getItem('rs_feedback_alerts') !== 'false')
   const [autoRefresh, setAutoRefresh] = useState(() => localStorage.getItem('rs_auto_refresh') !== 'false')
   const [lowThreshold, setLowThreshold] = useState(() => Number(localStorage.getItem('rs_low_threshold')) || 10)
   const [restaurantName, setRestaurantName] = useState(() => localStorage.getItem('rs_restaurant_name') || 'RestoStock')
@@ -156,6 +158,8 @@ export function AppProvider({ children }) {
       rs_request_alerts: requestAlerts,
       rs_fulfillment_alerts: fulfillmentAlerts,
       rs_browser_notifs: browserNotifs,
+      rs_notification_sound: notificationSound,
+      rs_feedback_alerts: feedbackAlerts,
       rs_auto_refresh: autoRefresh,
       rs_low_threshold: lowThreshold,
       rs_restaurant_name: restaurantName,
@@ -164,7 +168,7 @@ export function AppProvider({ children }) {
       rs_timezone: timezone,
     }
     Object.entries(values).forEach(([key, value]) => localStorage.setItem(key, String(value)))
-  }, [notificationsEnabled, lowStockAlerts, requestAlerts, fulfillmentAlerts, browserNotifs, autoRefresh, lowThreshold, restaurantName, branchName, language, timezone])
+  }, [notificationsEnabled, lowStockAlerts, requestAlerts, fulfillmentAlerts, browserNotifs, notificationSound, feedbackAlerts, autoRefresh, lowThreshold, restaurantName, branchName, language, timezone])
 
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // BRANCH MANAGEMENT (NEW)
@@ -335,9 +339,55 @@ export function AppProvider({ children }) {
     ])
   }, [])
 
+  const playNotificationSound = useCallback(() => {
+    if (!notificationsEnabled || !notificationSound) return
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      if (!AudioCtx) return
+      const ctx = new AudioCtx()
+      const start = ctx.currentTime
+      ;[0, 0.22, 0.44].forEach((delay, idx) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.value = idx % 2 ? 880 : 1046
+        gain.gain.setValueAtTime(0.0001, start + delay)
+        gain.gain.exponentialRampToValueAtTime(0.75, start + delay + 0.015)
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + delay + 0.16)
+        osc.connect(gain); gain.connect(ctx.destination)
+        osc.start(start + delay); osc.stop(start + delay + 0.18)
+      })
+      setTimeout(() => ctx.close().catch(() => {}), 1000)
+    } catch (err) { console.warn('Notification sound unavailable:', err) }
+  }, [notificationsEnabled, notificationSound])
+
+  useEffect(() => {
+    if (!user?.id || !notificationsEnabled) return undefined
+    let active = true
+    const acceptNotification = (row, ring = false) => {
+      if (!row || row.user_id !== user.id) return
+      const isFeedback = ['customer_low_rating','customer_feedback','customer_complaint'].includes(row.type)
+      const isDemand = ['demand_created','request_created'].includes(row.type)
+      if ((isFeedback && !feedbackAlerts) || (isDemand && !requestAlerts)) return
+      setNotifications(prev => [{ id: row.id, title: row.title, msg: row.message, type: row.type, time: 'Just now', read: !!row.read }, ...prev.filter(n => n.id !== row.id)].slice(0,30))
+      if (ring) playNotificationSound()
+      if (ring && browserNotifs && 'Notification' in window) {
+        const show = () => new Notification(row.title || 'Stocko', { body: row.message || 'New notification' })
+        if (Notification.permission === 'granted') show()
+        else if (Notification.permission === 'default') Notification.requestPermission().then(p => { if (p === 'granted') show() })
+      }
+    }
+    supabase.from('notifications').select('*').eq('user_id', user.id).order('created_at',{ascending:false}).limit(30).then(({data}) => {
+      if (active) setNotifications((data || []).map(row => ({ id:row.id,title:row.title,msg:row.message,type:row.type,time:new Date(row.created_at).toLocaleString(),read:!!row.read })))
+    })
+    const channel = supabase.channel(`stocko-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`}, payload => acceptNotification(payload.new, true)).subscribe()
+    return () => { active = false; supabase.removeChannel(channel) }
+  }, [user?.id, notificationsEnabled, notificationSound, browserNotifs, feedbackAlerts, requestAlerts, playNotificationSound])
+
   const markAllRead = useCallback(() => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })))
-  }, [])
+    if (user?.id) supabase.from('notifications').update({ read:true }).eq('user_id',user.id).eq('read',false).then(() => {})
+  }, [user?.id])
 
   // â”€â”€ Clear data on logout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const clearData = useCallback(() => {
@@ -2167,6 +2217,7 @@ export function AppProvider({ children }) {
     notifications, addNotification, markAllRead,
     systemEnabled, setSystemEnabled, systemMsg, setSystemMsg,
     notificationsEnabled, setNotificationsEnabled, lowStockAlerts, setLowStockAlerts,
+    notificationSound, setNotificationSound, feedbackAlerts, setFeedbackAlerts,
     requestAlerts, setRequestAlerts, fulfillmentAlerts, setFulfillmentAlerts,
     browserNotifs, setBrowserNotifs, autoRefresh, setAutoRefresh, lowThreshold, setLowThreshold,
     restaurantName, setRestaurantName, branchName, setBranchName, language, setLanguage, timezone, setTimezone,

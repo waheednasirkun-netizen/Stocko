@@ -280,8 +280,27 @@ export default function StockMovement() {
   const [invSearch, setInvSearch] = useState('')
   const [supplierSearch, setSupplierSearch] = useState('')
 
+  const canReverseTransactions = ['admin', 'developer'].includes(String(user?.role || '').trim().toLowerCase())
+  const [reversingId, setReversingId] = useState(null)
+
   const isStockIn = txnType === 'Stock IN'
   const isStockOut = txnType === 'Stock OUT' || txnType === 'Wastage' || txnType === 'Fulfillment'
+
+  const reverseTransaction = useCallback(async (txn) => {
+    if (!canReverseTransactions || !txn?.id || txn._optimistic) return
+    if (txn.reversed_at || txn.reverses_transaction_id) { showToast('info', 'Already reversed', 'This transaction cannot be reversed again.'); return }
+    const reason = window.prompt(`Reason for reversing ${txn.type} — ${txn.item_name || txn.item}:`)
+    if (!reason?.trim()) return
+    if (!window.confirm('Reverse this transaction? Stock will be adjusted with a compensating transaction and the original history will remain.')) return
+    setReversingId(txn.id)
+    try {
+      const { error } = await transactionsApi.reverse({ id: txn.id, reason: reason.trim() })
+      if (error) throw error
+      showToast('success', 'Transaction reversed', 'A compensating stock transaction was created.')
+      window.location.reload()
+    } catch (err) { showToast('error', 'Reversal failed', err.message || 'Unable to reverse transaction') }
+    finally { setReversingId(null) }
+  }, [canReverseTransactions, showToast])
 
   // ── Derived Data ────────────────────────────────────────────────────────
   const filteredTransactions = useMemo(() => {
@@ -646,7 +665,7 @@ export default function StockMovement() {
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ background: theme.bg }}>
-                  {['Type', 'Item', 'Qty', 'Unit', 'Source', 'Notes', 'Recorded By', 'Date'].map(h => (
+                  {['Type', 'Item', 'Qty', 'Unit', 'Source', 'Notes', 'Recorded By', 'Date', ...(canReverseTransactions ? ['Action'] : [])].map(h => (
                     <th
                       key={h}
                       style={{
@@ -756,6 +775,13 @@ export default function StockMovement() {
                           </span>
                         )}
                       </td>
+                      {canReverseTransactions && (
+                        <td style={{ padding: '10px 14px' }}>
+                          {t.reversed_at ? <span style={{fontSize:11,color:'#9ca3af'}}>Reversed</span> : t.reverses_transaction_id ? <span style={{fontSize:11,color:'#9ca3af'}}>Reversal</span> : (
+                            <Btn variant="outline" size="sm" disabled={reversingId === t.id || isOptimistic} onClick={() => reverseTransaction(t)}>Reverse</Btn>
+                          )}
+                        </td>
+                      )}
                     </tr>
                   )
                 })}

@@ -87,6 +87,8 @@ export default function SettingsPage() {
     requestAlerts, setRequestAlerts,
     fulfillmentAlerts, setFulfillmentAlerts,
     browserNotifs, setBrowserNotifs,
+    notificationSound, setNotificationSound,
+    feedbackAlerts, setFeedbackAlerts,
     autoRefresh, setAutoRefresh,
     lowThreshold, setLowThreshold,
     restaurantName, setRestaurantName,
@@ -97,6 +99,8 @@ export default function SettingsPage() {
   } = useApp()
 
   const [newUnit, setNewUnit] = useState('')
+  const [savedAt, setSavedAt] = useState('')
+  const markSaved = () => { setSavedAt(new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})); showToast('success','Settings Saved','Your preferences are saved on this device.') }
 
   const addUnit = () => {
     const u = newUnit.trim()
@@ -115,7 +119,7 @@ export default function SettingsPage() {
 
   return (
     <div className="animate-fade-in responsive-page settings-page">
-      <h2 style={{ fontSize:18, fontWeight:700, color:theme.text, marginBottom:20 }}>Settings</h2>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:20,flexWrap:'wrap'}}><div><h2 style={{fontSize:20,fontWeight:800,color:theme.text,margin:0}}>Settings</h2><div style={{fontSize:12,color:theme.textMuted,marginTop:4}}>Manage Stocko preferences for this device and branch.</div></div><div style={{display:'flex',alignItems:'center',gap:10}}>{savedAt && <span style={{fontSize:11,color:theme.textMuted}}>Saved {savedAt}</span>}<Btn variant="primary" onClick={markSaved}>Save Settings</Btn></div></div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }} className="grid-mobile-1">
 
@@ -147,6 +151,7 @@ export default function SettingsPage() {
                 style={{ width:'100%', padding:'8px 12px', border:`1px solid ${theme.inputBorder}`,
                   borderRadius:7, fontSize:13, background:theme.inputBg, color:theme.text, cursor:'pointer',
                   boxSizing:'border-box' }}>
+                <option value="Asia/Karachi">Pakistan (PKT)</option>
                 <option value="UTC">UTC</option>
                 <option value="America/New_York">Eastern (ET)</option>
                 <option value="America/Chicago">Central (CT)</option>
@@ -181,6 +186,11 @@ export default function SettingsPage() {
             label="Enable Notifications"
             desc="Receive in-app alerts for important events"
             theme={theme}/>
+          <Toggle checked={notificationSound}
+            onChange={() => setNotificationSound(p => !p)}
+            label="Notification Sound / Ring"
+            desc="Play a loud three-tone alert when a new enabled notification arrives"
+            theme={theme}/>
           <Toggle checked={lowStockAlerts}
             onChange={() => setLowStockAlerts(p => !p)}
             label="Low Stock Alerts"
@@ -188,13 +198,18 @@ export default function SettingsPage() {
             theme={theme}/>
           <Toggle checked={requestAlerts}
             onChange={() => setRequestAlerts(p => !p)}
-            label="Request Alerts"
-            desc="Notify on new procurement or demand requests"
+            label="Demand Alerts — Store Keeper"
+            desc="Ring Store Keepers when a new demand is submitted for their branch"
             theme={theme}/>
           <Toggle checked={fulfillmentAlerts}
             onChange={() => setFulfillmentAlerts(p => !p)}
             label="Fulfillment Alerts"
             desc="Alert when orders are ready or dispatched"
+            theme={theme}/>
+          <Toggle checked={feedbackAlerts}
+            onChange={() => setFeedbackAlerts(p => !p)}
+            label="Customer Feedback Alerts"
+            desc="Ring Manager/Admin immediately for customer feedback below 3 stars"
             theme={theme}/>
           <Toggle checked={browserNotifs}
             onChange={() => setBrowserNotifs(p => !p)}
