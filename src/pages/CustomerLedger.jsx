@@ -100,12 +100,12 @@ export default function CustomerLedger() {
 
       const { data: rawLedger } = await posApi.supabase
         ?.from('ledger_entries')
-        .select('*, customers(name)')
+        .select('*, customers(name), orders(status)')
         .eq('branch_id', branchId)
         .order('created_at', { ascending: false })
         || { data: [] }
 
-      const safeLedger = (rawLedger || []).filter(e => e.branch_id === branchId)
+      const safeLedger = (rawLedger || []).filter(e => e.branch_id === branchId && String(e.orders?.status || '').toLowerCase() !== 'reversed')
       setLedgerEntries(safeLedger)
     } catch (err) {
       console.error('[Ledger] Load error:', err)
@@ -335,7 +335,7 @@ export default function CustomerLedger() {
 
   const reverseLedgerEntry = async (entry) => {
     if (!canReverseTransactions || !entry?.id || entry.reversed_at || entry.reverses_entry_id) return
-    const reason = window.prompt(`Reason for reversing this ${entry.type} transaction:`)
+    const reason = window.prompt(`Reason for reversing this ${entry.type === 'adjustment' ? 'balance adjustment' : entry.type} transaction:`)
     if (!reason?.trim()) return
     if (!window.confirm('Reverse this ledger transaction? The original entry will remain and an opposite audit entry will be created.')) return
     setReversingEntryId(entry.id)

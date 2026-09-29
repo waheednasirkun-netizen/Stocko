@@ -213,10 +213,10 @@ export default function ComplaintPublic({ token }) {
     }
 
     /*
-     * For ratings below 3 we strongly encourage feedback text.
+     * For ratings of 3 stars or below we strongly encourage feedback text.
      * This gives the manager useful information about what went wrong.
      */
-    if (Number(form.rating) < 3 && !form.description.trim()) {
+    if (Number(form.rating) <= 3 && !form.description.trim()) {
       setError(
         'Please tell us what went wrong so we can improve your experience.'
       )
@@ -501,7 +501,7 @@ export default function ComplaintPublic({ token }) {
   }
 
   const isTable = qr?.qr_kind === 'table'
-  const isLowRating = Number(form.rating) < 3
+  const isLowRating = Number(form.rating) <= 3
 
   return (
     <div style={styles.page}>
@@ -630,7 +630,7 @@ export default function ComplaintPublic({ token }) {
                     fontSize: 13,
                     fontWeight: 800,
                     color:
-                      form.rating < 3
+                      form.rating <= 3
                         ? '#dc2626'
                         : form.rating === 3
                         ? '#d97706'

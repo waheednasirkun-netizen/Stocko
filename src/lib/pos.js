@@ -57,6 +57,8 @@ async function insertLedgerEntry(ledgerEntry) {
       .eq('branch_id', ledgerEntry.branch_id)
       .eq('order_id', ledgerEntry.order_id)
       .eq('type', 'sale')
+      .is('reversed_at', null)
+      .is('reverses_entry_id', null)
       .limit(1)
 
     if (lookupError) return lookupError

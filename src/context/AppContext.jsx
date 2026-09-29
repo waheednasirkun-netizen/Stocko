@@ -345,6 +345,7 @@ export function AppProvider({ children }) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext
       if (!AudioCtx) return
       const ctx = new AudioCtx()
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {})
       const start = ctx.currentTime
       ;[0, 0.22, 0.44].forEach((delay, idx) => {
         const osc = ctx.createOscillator()
@@ -370,8 +371,9 @@ export function AppProvider({ children }) {
       const isDemand = ['demand_created','request_created'].includes(row.type)
       if ((isFeedback && !feedbackAlerts) || (isDemand && !requestAlerts)) return
       setNotifications(prev => [{ id: row.id, title: row.title, msg: row.message, type: row.type, time: 'Just now', read: !!row.read }, ...prev.filter(n => n.id !== row.id)].slice(0,30))
-      if (ring) playNotificationSound()
-      if (ring && browserNotifs && 'Notification' in window) {
+      const shouldRing = ring && (row.type === 'customer_low_rating' || isDemand)
+      if (shouldRing) playNotificationSound()
+      if (shouldRing && browserNotifs && 'Notification' in window) {
         const show = () => new Notification(row.title || 'Stocko', { body: row.message || 'New notification' })
         if (Notification.permission === 'granted') show()
         else if (Notification.permission === 'default') Notification.requestPermission().then(p => { if (p === 'granted') show() })

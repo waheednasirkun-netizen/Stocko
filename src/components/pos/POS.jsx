@@ -1352,6 +1352,8 @@ export default function POS() {
       .eq('order_id', order.id)
       .eq('branch_id', branchId)
       .eq('type', 'sale')
+      .is('reversed_at', null)
+      .is('reverses_entry_id', null)
       .limit(1)
 
     if (lookupError) {
@@ -1376,21 +1378,20 @@ export default function POS() {
     }
   }
 
-  const markOrderUnpaid = async (order) => {
-    if (!canReverseTransactions) return
-    const status = String(order?.status || '').toLowerCase()
-    if (['unpaid','pending','cancelled','reversed'].includes(status) && getRecordedPaidAmount(order) <= 0) {
-      showToast('info', 'No payment to reverse', 'This order is already unpaid or has no reversible payment.')
+  const reverseCompletedOrder = async (order) => {
+    if (!canReverseTransactions || !order?.id) return
+    if (String(order.status || '').toLowerCase() === 'reversed' || order.reversed_at) {
+      showToast('info', 'Already reversed', 'This order has already been reversed.')
       return
     }
-    const reason = window.prompt(`Reason for reversing payment on order #${orderReference(order)}:`)
+    const reason = window.prompt(`Reason for reversing the complete order #${orderReference(order)}:`)
     if (!reason?.trim()) return
-    if (!window.confirm(`Mark order #${orderReference(order)} as UNPAID? The payment will be reversed and customer outstanding restored.`)) return
-    const { error } = await supabase.rpc('stocko_mark_order_unpaid', { p_order_id: order.id, p_reason: reason.trim() })
-    if (error) { showToast('error', 'Reversal failed', error.message); return }
-    await logPosActivity('POS Payment Reversed', `Order #${orderReference(order)}; reason: ${reason.trim()}`)
-    showToast('success', 'Order marked unpaid', 'Payment reversal was recorded in the audit trail.')
-    await Promise.all([loadOrders(), loadTodayOrders()])
+    if (!window.confirm(`Reverse COMPLETE order #${orderReference(order)}?\n\nThis will reverse its payments and customer ledger effects, then return the SAME order to Pending so it can be paid again. Its reserved stock will remain deducted.`)) return
+    const { error } = await supabase.rpc('stocko_reverse_pos_order', { p_order_id: order.id, p_reason: reason.trim() })
+    if (error) { showToast('error', 'Order reversal failed', error.message); return }
+    await logPosActivity('POS Order Reversed', `Order #${orderReference(order)}; reason: ${reason.trim()}`)
+    showToast('success', 'Order returned to Pending', 'Payments and customer ledger effects were reversed. The same order is now Pending and can be paid again.')
+    await Promise.all([loadOrders(), loadTodayOrders(), loadInventory()])
   }
 
   // ── Process Payment ──
@@ -1609,7 +1610,7 @@ export default function POS() {
               branch_id: branchId,
               order_id: order.id,
               amount: -netAmount,
-              type: 'cancellation',
+              type: 'adjustment',
               description: `Cancellation adjustment for order #${orderReference(order)}: ${cancelReason.trim()}`,
               created_by: user?.id,
               created_by_name: user?.name,
@@ -4158,11 +4159,11 @@ export default function POS() {
                               </button>
                               {canReverseTransactions && !['unpaid','pending','cancelled','reversed'].includes(String(order.status || '').toLowerCase()) && (
                                 <button
-                                  onClick={() => markOrderUnpaid(order)}
-                                  title="Reverse payment / mark unpaid"
+                                  onClick={() => reverseCompletedOrder(order)}
+                                  title="Reverse complete order"
                                   style={{ padding: '5px 10px', background: colors.dangerLight, border: `1px solid ${colors.danger}`, borderRadius: '4px', color: colors.danger, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}
                                 >
-                                  Reverse Payment
+                                  Reverse Order
                                 </button>
                               )}
                               <button

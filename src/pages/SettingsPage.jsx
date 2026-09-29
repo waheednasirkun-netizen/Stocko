@@ -209,7 +209,7 @@ export default function SettingsPage() {
           <Toggle checked={feedbackAlerts}
             onChange={() => setFeedbackAlerts(p => !p)}
             label="Customer Feedback Alerts"
-            desc="Ring Manager/Admin immediately for customer feedback below 3 stars"
+            desc="Ring Manager/Admin immediately for customer feedback of 1, 2 or 3 stars"
             theme={theme}/>
           <Toggle checked={browserNotifs}
             onChange={() => setBrowserNotifs(p => !p)}
