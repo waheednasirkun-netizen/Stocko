@@ -362,6 +362,42 @@ export function AppProvider({ children }) {
     } catch (err) { console.warn('Notification sound unavailable:', err) }
   }, [notificationsEnabled, notificationSound])
 
+
+  // Loud emergency-style alarm used ONLY for customer feedback rated 1-3 stars.
+  // The database sends customer_low_rating only to Admin / Manager / Chief users.
+  const playLowRatingEmergencyAlarm = useCallback(() => {
+    if (!notificationsEnabled || !notificationSound) return
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      if (!AudioCtx) return
+      const ctx = new AudioCtx()
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+      const master = ctx.createGain()
+      master.gain.value = 1
+      master.connect(ctx.destination)
+      const start = ctx.currentTime + 0.03
+
+      // Four loud alternating bell bursts. Keeping the signal below clipping
+      // makes it clearer on inexpensive kitchen speakers at high PC volume.
+      for (let burst = 0; burst < 4; burst += 1) {
+        const base = start + (burst * 0.72)
+        ;[0, 0.18, 0.36].forEach((offset, idx) => {
+          const osc = ctx.createOscillator()
+          const gain = ctx.createGain()
+          osc.type = idx === 1 ? 'square' : 'sawtooth'
+          osc.frequency.setValueAtTime(idx === 1 ? 1180 : 880, base + offset)
+          gain.gain.setValueAtTime(0.0001, base + offset)
+          gain.gain.linearRampToValueAtTime(0.95, base + offset + 0.012)
+          gain.gain.setValueAtTime(0.95, base + offset + 0.12)
+          gain.gain.exponentialRampToValueAtTime(0.0001, base + offset + 0.28)
+          osc.connect(gain); gain.connect(master)
+          osc.start(base + offset); osc.stop(base + offset + 0.30)
+        })
+      }
+      setTimeout(() => ctx.close().catch(() => {}), 3800)
+    } catch (err) { console.warn('Emergency feedback alarm unavailable:', err) }
+  }, [notificationsEnabled, notificationSound])
+
   useEffect(() => {
     if (!user?.id || !notificationsEnabled) return undefined
     let active = true
@@ -371,8 +407,10 @@ export function AppProvider({ children }) {
       const isDemand = ['demand_created','request_created'].includes(row.type)
       if ((isFeedback && !feedbackAlerts) || (isDemand && !requestAlerts)) return
       setNotifications(prev => [{ id: row.id, title: row.title, msg: row.message, type: row.type, time: 'Just now', read: !!row.read }, ...prev.filter(n => n.id !== row.id)].slice(0,30))
-      const shouldRing = ring && (row.type === 'customer_low_rating' || isDemand)
-      if (shouldRing) playNotificationSound()
+      const isLowRatingEmergency = ring && row.type === 'customer_low_rating'
+      const shouldRing = ring && (isLowRatingEmergency || isDemand)
+      if (isLowRatingEmergency) playLowRatingEmergencyAlarm()
+      else if (shouldRing) playNotificationSound()
       if (shouldRing && browserNotifs && 'Notification' in window) {
         const show = () => new Notification(row.title || 'Stocko', { body: row.message || 'New notification' })
         if (Notification.permission === 'granted') show()
@@ -384,7 +422,7 @@ export function AppProvider({ children }) {
     })
     const channel = supabase.channel(`stocko-notifications-${user.id}`).on('postgres_changes',{event:'INSERT',schema:'public',table:'notifications',filter:`user_id=eq.${user.id}`}, payload => acceptNotification(payload.new, true)).subscribe()
     return () => { active = false; supabase.removeChannel(channel) }
-  }, [user?.id, notificationsEnabled, notificationSound, browserNotifs, feedbackAlerts, requestAlerts, playNotificationSound])
+  }, [user?.id, notificationsEnabled, notificationSound, browserNotifs, feedbackAlerts, requestAlerts, playNotificationSound, playLowRatingEmergencyAlarm])
 
   const markAllRead = useCallback(() => {
     setNotifications(prev => prev.map(n => ({ ...n, read: true })))
