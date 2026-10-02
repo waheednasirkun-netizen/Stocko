@@ -395,9 +395,10 @@ async function sendPrintJob(receiptData) {
 
         // Create transaction log
         const { error: txnError } = await supabase.from('transactions').insert({
+          branch_id: branchId,
           item_id: inv.id,
           item_name: inv.name,
-          type: 'OUT',
+          type: 'Fulfillment',
           quantity: safeQty,
           unit: inv.unit,
           reference_type: 'fulfillment',

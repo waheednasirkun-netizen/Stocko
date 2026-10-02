@@ -15,13 +15,35 @@ const TRANSACTION_TYPES = [
   { key: 'Fulfillment', label: 'Fulfillment', variant: 'purple',   icon: 'CheckCircle', perm: 'recordFulfillmentTxn' },
 ]
 
-const TYPE_FILTERS = ['All', 'Stock IN', 'Stock OUT', 'Wastage', 'Fulfillment']
+const TYPE_FILTERS = ['All', 'Stock IN', 'Stock OUT', 'Fulfillment', 'Wastage', 'Reverse Stock']
 
 const TYPE_STYLES = {
   'Stock IN':    { bg: '#dcfce7', color: '#166534', sign: '+' },
   'Stock OUT':   { bg: '#fee2e2', color: '#991b1b', sign: '-' },
   'Wastage':     { bg: '#fef9c3', color: '#854d0e', sign: '-' },
   'Fulfillment': { bg: '#f3e8ff', color: '#7c3aed', sign: '-' },
+  'Reverse Stock': { bg: '#e0f2fe', color: '#0369a1', sign: '↺ ' },
+}
+
+// Normalize legacy/current DB values and make reversal rows explicit in history.
+const getMovementType = (txn) => {
+  if (txn?.reverses_transaction_id || String(txn?.source || '').trim().toLowerCase() === 'reversal') {
+    return 'Reverse Stock'
+  }
+
+  const raw = String(txn?.type || '').trim().toLowerCase()
+  if (['stock in', 'stock_in', 'in'].includes(raw)) return 'Stock IN'
+  if (['stock out', 'stock_out', 'out'].includes(raw)) return 'Stock OUT'
+  if (['wastage', 'waste', 'wasted'].includes(raw)) return 'Wastage'
+  if (['fulfillment', 'fulfilment', 'fulfilled'].includes(raw)) return 'Fulfillment'
+  return txn?.type || 'Unknown'
+}
+
+const getMovementSign = (txn, displayType) => {
+  if (displayType !== 'Reverse Stock') return TYPE_STYLES[displayType]?.sign || ''
+  // Reversing an OUT/Wastage/Fulfillment adds stock; reversing an IN removes it.
+  const raw = String(txn?.type || '').trim().toLowerCase()
+  return ['stock in', 'stock_in', 'in'].includes(raw) ? '+' : '-'
 }
 
 const DEFAULT_FORM = {
@@ -312,7 +334,7 @@ export default function StockMovement() {
       list = list.filter(t => (t.item_name || t.item || '').toLowerCase().includes(q))
     }
     if (filterType !== 'All') {
-      list = list.filter(t => t.type === filterType)
+      list = list.filter(t => getMovementType(t) === filterType)
     }
     return list
   }, [transactions, search, filterType, isInOperationalRange])
@@ -657,7 +679,7 @@ export default function StockMovement() {
             message={
               search || filterType !== 'All'
                 ? 'Try adjusting your search or filters'
-                : 'Record a Stock IN to get started'
+                : 'No stock movements found for the selected date range'
             }
           />
         ) : (
@@ -685,7 +707,9 @@ export default function StockMovement() {
               </thead>
               <tbody>
                 {filteredTransactions.map(t => {
-                  const style = getTypeStyle(t.type)
+                  const displayType = getMovementType(t)
+                  const style = getTypeStyle(displayType)
+                  const sign = getMovementSign(t, displayType)
                   const itemName = t.item_name || t.item || '—'
                   const qty = t.quantity ?? t.qty ?? 0
                   const recordedBy = t.recorded_by_name || t.user || '—'
@@ -710,7 +734,7 @@ export default function StockMovement() {
                           color: style.color,
                           whiteSpace: 'nowrap',
                         }}>
-                          {t.type}
+                          {displayType}
                         </span>
                       </td>
                       <td style={{
@@ -728,7 +752,7 @@ export default function StockMovement() {
                         color: style.color,
                         whiteSpace: 'nowrap',
                       }}>
-                        {style.sign}{fmtNum(qty)}
+                        {sign}{fmtNum(qty)}
                       </td>
                       <td style={{
                         padding: '10px 14px',
