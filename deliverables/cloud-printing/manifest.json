@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-07-28T14:14:23.441Z",
+  "pos_source_lines": 5654,
+  "parts_recombine_exactly": true,
+  "pos_sha256": "4b1e4e4990aa22726f10c3108b96b0332e3c422752c581ee4de5984e9bb44fb2",
+  "recombined_parts_sha256": "4b1e4e4990aa22726f10c3108b96b0332e3c422752c581ee4de5984e9bb44fb2",
+  "parts": [
+    {
+      "file": "POS_Part_1.jsx",
+      "sha256": "0c51d63659f002a8106f4225f222f7460d8ecc57b9c6acfa7eaace6dbc8b4b5f"
+    },
+    {
+      "file": "POS_Part_2.jsx",
+      "sha256": "be7cc8d9e85828f1cde36db212e8e3bab0baa35697580feea17d24af5e8cd2c5"
+    },
+    {
+      "file": "POS_Part_3.jsx",
+      "sha256": "5d99cd5b901992217896841a22b2b9edb7613acfc9e104644a109e4282b323a6"
+    },
+    {
+      "file": "POS_Part_4.jsx",
+      "sha256": "af7123e8bdc92634008e02750490d79760c65bfd22f29b59e9abe2ab00e2b195"
+    },
+    {
+      "file": "POS_Part_5.jsx",
+      "sha256": "c83afd7d0a925a5a4933bc75f6813cff27ede32704b3010e5fd1eb4dab24bef8"
+    },
+    {
+      "file": "POS_Part_6.jsx",
+      "sha256": "fffe9c568ee8c57d81b47ec81234ead5aeaaf37272dbd052be1065e6af57afdd"
+    }
+  ]
+}

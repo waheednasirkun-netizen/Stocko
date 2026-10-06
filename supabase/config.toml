@@ -1,0 +1,23 @@
+[functions.create-user]
+enabled = true
+verify_jwt = true
+import_map = "./functions/create-user/deno.json"
+entrypoint = "./functions/create-user/index.ts"
+
+[functions.update-user]
+enabled = true
+verify_jwt = true
+import_map = "./functions/update-user/deno.json"
+entrypoint = "./functions/update-user/index.ts"
+
+[functions.create-user-v2]
+enabled = true
+verify_jwt = false
+import_map = "./functions/create-user-v2/deno.json"
+entrypoint = "./functions/create-user-v2/index.ts"
+
+[functions.delete-user]
+enabled = true
+verify_jwt = false
+import_map = "./functions/delete-user/deno.json"
+entrypoint = "./functions/delete-user/index.ts"

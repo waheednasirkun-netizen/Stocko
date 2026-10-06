@@ -1,0 +1,11 @@
+---
+name: Config
+description: Issue template configuration
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/YOUR_USERNAME/restaurant-inventory-management#readme
+    about: Read the project README for setup and usage
+  - name: Discussions
+    url: https://github.com/YOUR_USERNAME/restaurant-inventory-management/discussions
+    about: Ask questions and share ideas
